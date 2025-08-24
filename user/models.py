@@ -85,13 +85,12 @@ class Connection(models.Model):
 
     CONNECTION_TYPE_CHOICES = [
         ("single", "Single"),
-        ("group", "Group"),
     ]
 
     id = models.CharField(
         max_length=150, default=uuid.uuid4, unique=True, primary_key=True
     )
-    connection_id = models.CharField(max_length=150, default=uuid.uuid4)
+    connection_id = models.CharField(max_length=150, default=generate_random_digit(10))
     action_by = models.ForeignKey(
         Account,
         null=False,
