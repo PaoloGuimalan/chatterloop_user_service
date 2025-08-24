@@ -86,7 +86,6 @@ class Connection(models.Model):
     CONNECTION_TYPE_CHOICES = [
         ("single", "Single"),
         ("group", "Group"),
-        ("server", "Server"),
     ]
 
     id = models.CharField(
@@ -99,6 +98,7 @@ class Connection(models.Model):
         on_delete=models.DO_NOTHING,
         related_name="connections_as_action_by",
     )
+    nickname = models.CharField(max_length=150, null=True, blank=True)
     status = models.BooleanField(default=True)
     involved_user = models.ForeignKey(
         Account,
