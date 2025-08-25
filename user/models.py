@@ -39,6 +39,9 @@ class Account(models.Model):
     is_default_user = models.BooleanField(default=False)
     is_superuser = models.BooleanField(default=False)
 
+    def is_authenticated(self):
+        return True
+
     USERNAME_FIELD = "username"  # Use the username field for login
     REQUIRED_FIELDS = ["email"]  # Email is required but not for login
 
