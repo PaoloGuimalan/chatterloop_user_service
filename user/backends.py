@@ -1,14 +1,11 @@
 from django.contrib.auth.backends import BaseBackend
 from .models import Account
-from dotenv import load_dotenv
-import os
-import jwt
+from .utils.jwt_tools import JWTTools
 
-load_dotenv()
+jwt = JWTTools
 
 
 class AutheticationBackend(BaseBackend):
-    JWT_TOKEN = os.getenv("JWT_TOKEN")
 
     def authenticate(self, request):
         try:
@@ -17,10 +14,10 @@ class AutheticationBackend(BaseBackend):
             if not token:
                 return None
 
-            decoded_header = jwt.decode(token, self.JWT_TOKEN, algorithms=["HS256"])
-            decoded_id = decoded_header["id"]
+            decoded_header = jwt.decoder(token)
+            decoded_id = decoded_header["userID"]
 
-            user = Account.objects.get(id=decoded_id)
+            user = Account.objects.get(username=decoded_id)
             return (user, True)
         except Account.DoesNotExist:
             return None
