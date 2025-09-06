@@ -10,7 +10,9 @@ https://docs.djangoproject.com/en/5.2/howto/deployment/wsgi/
 import os
 
 from django.core.wsgi import get_wsgi_application
+from .middleware import ChatterloopMiddleware
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'user_service.settings')
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "user_service.settings")
 
 application = get_wsgi_application()
+application = ChatterloopMiddleware(application)

@@ -3,7 +3,9 @@ bcrypt==4.3.0
 Django==5.2.5
 django-filter==25.1
 djangorestframework==3.16.1
+gunicorn==23.0.0
 Markdown==3.8.2
+packaging==25.0
 psycopg2-binary==2.9.10
 PyJWT==2.10.1
 python-dotenv==1.1.1
