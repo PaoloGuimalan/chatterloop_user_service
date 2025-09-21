@@ -135,3 +135,10 @@ class Comment(models.Model):
         Account, on_delete=models.DO_NOTHING, related_name="deleted_by_account"
     )
     deleted_at = models.DateTimeField(blank=True, null=True)
+
+
+class PreviewCount(models.Model):
+    preview_id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="preview")
+    emoji = models.ForeignKey(Emoji, on_delete=models.CASCADE, null=True)
+    count = models.IntegerField(null=False)
