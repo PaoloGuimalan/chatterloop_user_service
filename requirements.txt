@@ -1,6 +1,7 @@
 asgiref==3.9.1
 bcrypt==4.3.0
 Django==5.2.5
+django-cors-headers==4.9.0
 django-filter==25.1
 djangorestframework==3.16.1
 gunicorn==23.0.0
