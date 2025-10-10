@@ -51,7 +51,7 @@ class PostTag(models.Model):
     post_tag_id = models.CharField(
         max_length=150, default=uuid.uuid4, unique=True, primary_key=True
     )
-    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="tags")
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="tagging")
     user = models.ForeignKey(
         Account,
         null=False,
