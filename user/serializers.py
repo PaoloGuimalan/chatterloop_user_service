@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Account
+from .models import Account, Connection
 
 
 class AccountSerializer(serializers.ModelSerializer):
@@ -37,3 +37,26 @@ class AccountSerializer(serializers.ModelSerializer):
             instance.set_password(password)
         instance.save()
         return instance
+
+
+class AccountPreviewSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Account
+        fields = [
+            "id",
+            "username",
+            "first_name",
+            "middle_name",
+            "last_name",
+            "profile",
+            "gender",
+        ]
+
+
+class ConnectionSerializer(serializers.ModelSerializer):
+    action_by = AccountPreviewSerializer(read_only=True)
+    involved_user = AccountPreviewSerializer(read_only=True)
+
+    class Meta:
+        model = Connection
+        fields = "__all__"

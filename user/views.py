@@ -3,13 +3,19 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from django.db.models import Q
-from .models import Account
-from .serializers import AccountSerializer
+from django.db.models import Q, F
+from .models import Account, Connection
+from .serializers import AccountSerializer, ConnectionSerializer
 from .utils.jwt_tools import JWTTools
+from rest_framework.pagination import PageNumberPagination
 import bcrypt
 
 jwt = JWTTools
+
+
+class Pagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = "page_size"
 
 
 class UserAuthentication(APIView):
@@ -87,3 +93,34 @@ class UserAuthentication(APIView):
                 {"status": False, "message": f"{e}"},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
+
+
+class UserContacts(APIView):
+    permission_classes = [IsAuthenticated]
+    pagination_class = Pagination
+
+    def get(self, request):
+        user = self.request.user
+        try:
+            queryset = (
+                Connection.objects.filter(
+                    Q(Q(action_by=user) | Q(involved_user=user)),
+                    ~Q(action_by=F("involved_user")),
+                    Q(action_by__is_active=True),
+                    Q(action_by__is_verified=True),
+                )
+                .distinct("connection_id")
+                .order_by("connection_id", "-action_date")
+            )
+
+            paginator = self.pagination_class()
+            paginated_queryset = paginator.paginate_queryset(
+                queryset, request, view=self
+            )
+
+            serialized_result = ConnectionSerializer(paginated_queryset, many=True)
+            data = paginator.get_paginated_response(serialized_result.data)
+
+            return data
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)

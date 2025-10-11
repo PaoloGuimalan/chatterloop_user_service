@@ -11,4 +11,9 @@ app_name = "newsfeed"
 urlpatterns = [
     re_path("", include((router.urls, "newsfeed-routes"))),
     re_path("default", views.NewsfeedView.as_view(), name="newsfeed-default"),
+    path(
+        "profile/<str:username>/",
+        views.NewsfeedProfileView.as_view(),
+        name="newsfeed-default",
+    ),
 ]
