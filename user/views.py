@@ -102,6 +102,8 @@ class UserContacts(APIView):
     def get(self, request):
         user = self.request.user
         try:
+            paginated_header = request.headers.get("paginated", "true")
+
             queryset = (
                 Connection.objects.filter(
                     Q(Q(action_by=user) | Q(involved_user=user)),
@@ -113,14 +115,18 @@ class UserContacts(APIView):
                 .order_by("connection_id", "-action_date")
             )
 
-            paginator = self.pagination_class()
-            paginated_queryset = paginator.paginate_queryset(
-                queryset, request, view=self
-            )
+            if paginated_header == "true":
+                paginator = self.pagination_class()
+                paginated_queryset = paginator.paginate_queryset(
+                    queryset, request, view=self
+                )
 
-            serialized_result = ConnectionSerializer(paginated_queryset, many=True)
-            data = paginator.get_paginated_response(serialized_result.data)
+                serialized_result = ConnectionSerializer(paginated_queryset, many=True)
+                data = paginator.get_paginated_response(serialized_result.data)
 
-            return data
+                return data
+            else:
+                serialized_result = ConnectionSerializer(queryset, many=True)
+                return Response(serialized_result.data, status=status.HTTP_200_OK)
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
