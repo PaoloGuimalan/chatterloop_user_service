@@ -60,17 +60,12 @@ class NewsfeedProfileView(APIView):
     def get(self, request, username):
         user = self.request.user
         try:
-            user_request = Account.objects.get(username=username)
-            connections = ConnectionHelpers(user_request)
-            connections_list = connections.get_connections()
-
             queryset = (
                 Post.objects.prefetch_related(
                     "tagging", "privacy_users", "references", "map_info"
                 )
                 .filter(
-                    Q(user__username=username)
-                    | Q(tagging__user_id__in=connections_list)
+                    Q(user__username=username) | Q(tagging__user__username=username)
                 )
                 .order_by("-date_posted")
             )
