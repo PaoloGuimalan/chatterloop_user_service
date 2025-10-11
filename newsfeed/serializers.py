@@ -1,8 +1,11 @@
 from rest_framework import serializers
 from .models import Post, PostTag, PostPrivacy, PostReference, MapView
+from user.serializers import AccountPreviewSerializer
 
 
 class PostTagSerializer(serializers.ModelSerializer):
+    user = AccountPreviewSerializer(read_only=True)
+
     class Meta:
         model = PostTag
         fields = "__all__"
@@ -31,6 +34,7 @@ class PostSerializer(serializers.ModelSerializer):
     privacy_users = PostPrivacySerializer(many=True, read_only=True)
     references = PostReferenceSerializer(many=True, read_only=True)
     map_info = MapInfoSerializer(read_only=True)
+    user = AccountPreviewSerializer(read_only=True)
 
     class Meta:
         model = Post
