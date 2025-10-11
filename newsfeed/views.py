@@ -86,3 +86,20 @@ class NewsfeedProfileView(APIView):
             return data
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class NewsfeedPostPreviewView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, post_id):
+        user = self.request.user
+        try:
+            queryset = Post.objects.prefetch_related(
+                "tagging", "privacy_users", "references", "map_info"
+            ).get(post_id=post_id)
+
+            serialized_result = PostSerializer(queryset)
+
+            return Response(serialized_result.data, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)

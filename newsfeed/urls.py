@@ -16,4 +16,9 @@ urlpatterns = [
         views.NewsfeedProfileView.as_view(),
         name="newsfeed-default",
     ),
+    path(
+        "preview/<str:post_id>/",
+        views.NewsfeedPostPreviewView.as_view(),
+        name="newsfeed-preview",
+    ),
 ]
