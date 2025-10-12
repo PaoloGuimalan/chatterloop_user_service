@@ -167,8 +167,8 @@ class UserSearch(APIView):
                 # status=True,
             ).distinct("connection_id")
 
+            connection_action_by = connection_exists.filter(action_by=OuterRef("pk"))
             connection_active = connection_exists.filter(status=True)
-
             connection_id_subquery = connection_exists.values("id")[:1]
 
             if query.startswith("@"):
@@ -185,6 +185,14 @@ class UserSearch(APIView):
                         output_field=BooleanField(),
                     ),
                     connection_id=Subquery(connection_id_subquery),
+                    is_action_by_user=Case(
+                        When(
+                            Exists(connection_action_by),
+                            then=Value(True),
+                        ),
+                        default=Value(False),
+                        output_field=BooleanField(),
+                    ),
                 )
             else:
                 users_qs = (
@@ -204,6 +212,14 @@ class UserSearch(APIView):
                             output_field=BooleanField(),
                         ),
                         connection_id=Subquery(connection_id_subquery),
+                        is_action_by_user=Case(
+                            When(
+                                Exists(connection_action_by),
+                                then=Value(True),
+                            ),
+                            default=Value(False),
+                            output_field=BooleanField(),
+                        ),
                     )
                 )
 

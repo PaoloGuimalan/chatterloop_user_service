@@ -66,6 +66,7 @@ class AccountSearchSerializer(serializers.ModelSerializer):
     has_connection = serializers.BooleanField()
     connection_accomplished = serializers.BooleanField()
     connection_id = serializers.CharField()
+    is_action_by_user = serializers.BooleanField()
 
     class Meta:
         model = Account
@@ -85,5 +86,6 @@ class AccountSearchSerializer(serializers.ModelSerializer):
             "has_connection",
             "connection_accomplished",
             "connection_id",
+            "is_action_by_user",
         ]
         read_only_fields = ["id", "date_created"]
