@@ -174,6 +174,7 @@ class UserSearch(APIView):
             if query.startswith("@"):
                 domain = query.split("@")[1]
                 users_qs = Account.objects.filter(
+                    ~Q(id=user.id),
                     is_active=True,
                     is_verified=True,
                     username__icontains=domain,  # case-insensitive contains
