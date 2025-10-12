@@ -15,6 +15,9 @@ class ConnectionHelpers:
                 ~Q(action_by=F("involved_user")),
                 Q(action_by__is_active=True),
                 Q(action_by__is_verified=True),
+                Q(involved_user__is_active=True),
+                Q(involved_user__is_verified=True),
+                status=True,
             )
             .distinct("connection_id")
             .order_by("connection_id", "-action_date")

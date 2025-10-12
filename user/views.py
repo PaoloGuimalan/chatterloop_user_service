@@ -3,9 +3,23 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from django.db.models import Q, F
+from django.db.models import (
+    Q,
+    F,
+    Exists,
+    OuterRef,
+    BooleanField,
+    Case,
+    When,
+    Value,
+    Subquery,
+)
 from .models import Account, Connection
-from .serializers import AccountSerializer, ConnectionSerializer
+from .serializers import (
+    AccountSerializer,
+    ConnectionSerializer,
+    AccountSearchSerializer,
+)
 from .utils.jwt_tools import JWTTools
 from rest_framework.pagination import PageNumberPagination
 import bcrypt
@@ -110,6 +124,8 @@ class UserContacts(APIView):
                     ~Q(action_by=F("involved_user")),
                     Q(action_by__is_active=True),
                     Q(action_by__is_verified=True),
+                    Q(involved_user__is_active=True),
+                    Q(involved_user__is_verified=True),
                     status=True,
                 )
                 .distinct("connection_id")
@@ -129,5 +145,76 @@ class UserContacts(APIView):
             else:
                 serialized_result = ConnectionSerializer(queryset, many=True)
                 return Response(serialized_result.data, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class UserSearch(APIView):
+    permission_classes = [IsAuthenticated]
+    pagination_class = Pagination
+
+    def get(self, request, query):
+        user = self.request.user
+        try:
+            connection_exists = Connection.objects.filter(
+                Q(action_by=user, involved_user=OuterRef("pk"))
+                | Q(action_by=OuterRef("pk"), involved_user=user),
+                ~Q(action_by=F("involved_user")),
+                Q(action_by__is_active=True),
+                Q(action_by__is_verified=True),
+                Q(involved_user__is_active=True),
+                Q(involved_user__is_verified=True),
+                # status=True,
+            ).distinct("connection_id")
+
+            connection_active = connection_exists.filter(status=True)
+
+            connection_id_subquery = connection_exists.values("id")[:1]
+
+            if query.startswith("@"):
+                domain = query.split("@")[1]
+                users_qs = Account.objects.filter(
+                    is_active=True,
+                    is_verified=True,
+                    username__icontains=domain,  # case-insensitive contains
+                ).annotate(
+                    has_connection=Exists(connection_exists),
+                    connection_accomplished=Case(
+                        When(Exists(connection_active), then=Value(True)),
+                        default=Value(False),
+                        output_field=BooleanField(),
+                    ),
+                    connection_id=Subquery(connection_id_subquery),
+                )
+            else:
+                users_qs = (
+                    Account.objects.filter(
+                        ~Q(id=user.id), is_active=True, is_verified=True
+                    )
+                    .filter(
+                        Q(first_name__icontains=query)
+                        | Q(middle_name__icontains=query)
+                        | Q(last_name__icontains=query)
+                    )
+                    .annotate(
+                        has_connection=Exists(connection_exists),
+                        connection_accomplished=Case(
+                            When(Exists(connection_active), then=Value(True)),
+                            default=Value(False),
+                            output_field=BooleanField(),
+                        ),
+                        connection_id=Subquery(connection_id_subquery),
+                    )
+                )
+
+            paginator = self.pagination_class()
+            paginated_queryset = paginator.paginate_queryset(
+                users_qs, request, view=self
+            )
+
+            serialized_result = AccountSearchSerializer(paginated_queryset, many=True)
+            data = paginator.get_paginated_response(serialized_result.data)
+
+            return data
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
