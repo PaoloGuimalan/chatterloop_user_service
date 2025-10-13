@@ -320,7 +320,7 @@ class UserSearch(APIView):
 
             connection_action_by = connection_exists.filter(action_by=OuterRef("pk"))
             connection_active = connection_exists.filter(status=True)
-            connection_id_subquery = connection_exists.values("id")[:1]
+            connection_id_subquery = connection_exists.values("connection_id")[:1]
 
             if query.startswith("@"):
                 domain = query.split("@")[1]
