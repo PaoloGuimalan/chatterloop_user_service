@@ -34,6 +34,11 @@ REDIS_PORT = os.getenv("REDIS_PORT")
 REDIS_USERNAME = os.getenv("REDIS_USERNAME")
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
 
+MONGODB_CLUSTER_USER = os.getenv("MONGODB_CLUSTER_USER")
+MONGODB_CLUSTER_PASS = os.getenv("MONGODB_CLUSTER_PASS")
+MONGODB_CLUSTER_HOST = os.getenv("MONGODB_CLUSTER_HOST")
+MONGODB_DB = os.getenv("MONGODB_DB")
+
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",

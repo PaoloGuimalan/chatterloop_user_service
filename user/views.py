@@ -26,6 +26,7 @@ from rest_framework.pagination import PageNumberPagination
 from django.db import transaction
 from user_service.services.redis import RedisPubSubClient
 from datetime import datetime
+from .ext_models.mongomodels import Message
 import bcrypt
 
 jwt = JWTTools
@@ -156,7 +157,24 @@ class UserContacts(APIView):
         user = self.request.user
         try:
             addUsername = request.data.get("addUsername")
-            new_connection_id = generate_random_digit(20)
+
+            users = [addUsername, user.username]
+            pipeline = [
+                {"$match": {"conversationType": "single"}},
+                {"$match": {"$expr": {"$setEquals": ["$receivers", users]}}},
+                {"$group": {"_id": "$conversationID"}},
+                {"$project": {"_id": 0, "conversationID": "$_id"}},
+            ]
+            existing_connection_id = Message._get_collection().aggregate(pipeline)
+            conversation_id_list = list(
+                set(doc["conversationID"] for doc in existing_connection_id)
+            )
+
+            new_connection_id = (
+                conversation_id_list[0]
+                if len(conversation_id_list) == 1
+                else generate_random_digit(20)
+            )
 
             pending_involved_user = Account.objects.get(username=addUsername)
 
