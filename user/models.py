@@ -94,7 +94,7 @@ class Connection(models.Model):
     id = models.CharField(
         max_length=150, default=uuid.uuid4, unique=True, primary_key=True
     )
-    connection_id = models.CharField(max_length=150, default=generate_random_digit(10))
+    connection_id = models.CharField(max_length=150, default=generate_random_digit(20))
     action_by = models.ForeignKey(
         Account,
         null=False,
@@ -137,16 +137,26 @@ class Connection(models.Model):
                     "This involved user is already part of the single connection."
                 )
 
-            user_initiated = Connection.objects.filter(
-                type="single",
-                involved_user=self.action_by,
-                action_by=self.involved_user,  # checking if involved_user is action_by
-            ).exclude(pk=self.pk)
+            if self.action_by != self.involved_user:
+                connection_triggered = Connection.objects.filter(
+                    type="single",
+                    involved_user=self.involved_user,
+                    action_by=self.action_by,  # checking if action already existing
+                ).exclude(pk=self.pk)
 
-            if user_initiated.exists():
-                raise ValidationError(
-                    "This involved user has already initiated a single connection."
-                )
+                if connection_triggered.exists():
+                    raise ValidationError("Connection is already existing.")
+
+                user_initiated = Connection.objects.filter(
+                    type="single",
+                    involved_user=self.action_by,
+                    action_by=self.involved_user,  # checking if involved_user is action_by
+                ).exclude(pk=self.pk)
+
+                if user_initiated.exists():
+                    raise ValidationError(
+                        "This involved user has already initiated a single connection."
+                    )
 
     def save(self, *args, **kwargs):
         self.full_clean()  # Calls clean() and validates

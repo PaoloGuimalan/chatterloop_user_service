@@ -21,7 +21,9 @@ from .serializers import (
     AccountSearchSerializer,
 )
 from .utils.jwt_tools import JWTTools
+from .utils.generators import generate_random_digit
 from rest_framework.pagination import PageNumberPagination
+from django.db import transaction
 import bcrypt
 
 jwt = JWTTools
@@ -145,6 +147,41 @@ class UserContacts(APIView):
             else:
                 serialized_result = ConnectionSerializer(queryset, many=True)
                 return Response(serialized_result.data, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def post(self, request):
+        user = self.request.user
+        try:
+            addUsername = request.data.get("addUsername")
+            new_connection_id = generate_random_digit(20)
+
+            pending_involved_user = Account.objects.get(username=addUsername)
+
+            with transaction.atomic():
+                # Create first connection row
+                conn1 = Connection(
+                    connection_id=new_connection_id,
+                    action_by=user,
+                    involved_user=user,
+                    nickname=None,
+                    type="single",
+                    status=False,
+                )
+                conn1.save()  # will call clean() and validate
+
+                # Create reciprocal connection row
+                conn2 = Connection(
+                    connection_id=new_connection_id,
+                    action_by=user,
+                    involved_user=pending_involved_user,
+                    nickname=None,
+                    type="single",
+                    status=False,
+                )
+                conn2.save()
+
+            return Response("OK", status=status.HTTP_200_OK)
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
