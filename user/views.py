@@ -287,9 +287,13 @@ class UserContacts(APIView):
                     if conn.involved_user != user:
                         other_users.append(conn.involved_user)
 
-                    conn.delete()
                 # Remove duplicates if needed
                 other_users = list(set(other_users))
+                delete_query = Connection.objects.filter(
+                    type="single",
+                    connection_id=connection_id,
+                )
+                delete_query.delete()
             else:
                 return Response(
                     {"message": "You are not allowed to remove this connection"},
