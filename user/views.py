@@ -185,6 +185,62 @@ class UserContacts(APIView):
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    def put(self, request):
+        user = self.request.user
+        try:
+            connection_id = request.data.get("connection_id")
+
+            existing_connection_query = Connection.objects.filter(
+                Q(~Q(action_by=user), involved_user=user),
+                connection_id=connection_id,
+            )
+
+            if existing_connection_query.exists():
+                to_update_query = Connection.objects.filter(
+                    connection_id=connection_id,
+                )
+
+                to_update_query.update(status=True)
+            else:
+                return Response(
+                    {"message": "You are not allowed to approve connection"},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+
+            return Response("OK", status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def delete(self, request):
+        user = self.request.user
+        try:
+            connection_id = request.data.get("connection_id")
+            action = request.headers.get("action")
+
+            existing_connection_query = Connection.objects.filter(
+                Q(Q(action_by=user) | Q(involved_user=user)),
+                type="single",
+                connection_id=connection_id,
+            )
+
+            if existing_connection_query.exists():
+                existing_connection_query.delete()
+            else:
+                return Response(
+                    {"message": "You are not allowed to remove this connection"},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+
+            message_response = (
+                "You have successfully removed connection"
+                if action == "remove"
+                else "You declined a connection request"
+            )
+
+            return Response({"message": message_response}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 class UserSearch(APIView):
     permission_classes = [IsAuthenticated]
