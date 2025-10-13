@@ -184,7 +184,11 @@ class UserContacts(APIView):
                 conn2.save()
 
             return Response(
-                {"message": "OK", "connection_id": new_connection_id},
+                {
+                    "status": True,
+                    "message": f"You have sent a contact request to @{addUsername}",
+                    "connection_id": new_connection_id,
+                },
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
