@@ -24,6 +24,8 @@ from .utils.jwt_tools import JWTTools
 from .utils.generators import generate_random_digit
 from rest_framework.pagination import PageNumberPagination
 from django.db import transaction
+from user_service.services.redis import RedisPubSubClient
+from datetime import datetime
 import bcrypt
 
 jwt = JWTTools
@@ -181,7 +183,10 @@ class UserContacts(APIView):
                 )
                 conn2.save()
 
-            return Response("OK", status=status.HTTP_200_OK)
+            return Response(
+                {"message": "OK", "connection_id": new_connection_id},
+                status=status.HTTP_200_OK,
+            )
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -195,10 +200,21 @@ class UserContacts(APIView):
                 connection_id=connection_id,
             )
 
+            other_users = []
+
             if existing_connection_query.exists():
                 to_update_query = Connection.objects.filter(
                     connection_id=connection_id,
                 )
+
+                for conn in existing_connection_query:
+                    if conn.action_by != user:
+                        other_users.append(conn.action_by)
+                    if conn.involved_user != user:
+                        other_users.append(conn.involved_user)
+
+                # Remove duplicates if needed
+                other_users = list(set(other_users))
 
                 to_update_query.update(status=True)
             else:
@@ -206,6 +222,20 @@ class UserContacts(APIView):
                     {"message": "You are not allowed to approve connection"},
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
+
+            now = datetime.now()
+            data = {
+                "logType": None,
+                "pod": "podless",
+                "event": "contactslist",
+                "message": {"status": True, "auth": True, "result": ""},
+                "dateTime": now.isoformat(),
+            }
+
+            RedisPubSubClient.publish_json(f"events_{user.username}", data)
+
+            for other in other_users:
+                RedisPubSubClient.publish_json(f"events_{other.username}", data)
 
             return Response("OK", status=status.HTTP_200_OK)
         except Exception as e:
@@ -223,13 +253,37 @@ class UserContacts(APIView):
                 connection_id=connection_id,
             )
 
+            other_users = []
+
             if existing_connection_query.exists():
+                for conn in existing_connection_query:
+                    if conn.action_by != user:
+                        other_users.append(conn.action_by)
+                    if conn.involved_user != user:
+                        other_users.append(conn.involved_user)
+
+                # Remove duplicates if needed
+                other_users = list(set(other_users))
                 existing_connection_query.delete()
             else:
                 return Response(
                     {"message": "You are not allowed to remove this connection"},
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
+
+            now = datetime.now()
+            data = {
+                "logType": None,
+                "pod": "podless",
+                "event": "contactslist",
+                "message": {"status": True, "auth": True, "result": ""},
+                "dateTime": now.isoformat(),
+            }
+
+            RedisPubSubClient.publish_json(f"events_{user.username}", data)
+
+            for other in other_users:
+                RedisPubSubClient.publish_json(f"events_{other.username}", data)
 
             message_response = (
                 "You have successfully removed connection"
