@@ -241,7 +241,10 @@ class UserContacts(APIView):
             for other in other_users:
                 RedisPubSubClient.publish_json(f"events_{other.username}", data)
 
-            return Response("OK", status=status.HTTP_200_OK)
+            return Response(
+                {"status": True, "message": "Contact has been accepted"},
+                status=status.HTTP_200_OK,
+            )
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
