@@ -279,7 +279,7 @@ class UserContacts(APIView):
                 to_update_query.update(status=True)
 
                 service = NotificationService()
-                updated = service.update_reference_status(connection_id, True)
+                updated = service.update_reference_status(connection_id, False)
 
                 if updated:
                     notifHeadline = "Accepted Request"
@@ -375,7 +375,7 @@ class UserContacts(APIView):
                 delete_query.delete()
 
                 service = NotificationService()
-                updated = service.update_reference_status(connection_id, True)
+                updated = service.update_reference_status(connection_id, False)
 
                 if updated and action == "decline":
                     notifHeadline = "Declined Request"
