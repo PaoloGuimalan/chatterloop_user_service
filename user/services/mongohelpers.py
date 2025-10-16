@@ -52,7 +52,7 @@ class NotificationService:
         return notif
 
     def update_reference_status(self, connection_id, new_status):
-        result = Notification.objects(referenceID=connection_id).update_one(
-            set__referenceStatus=new_status
+        result = Notification.objects(referenceID=connection_id).update(
+            set__referenceStatus=new_status, multi=True
         )
         return result > 0
