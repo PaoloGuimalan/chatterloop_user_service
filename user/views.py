@@ -27,6 +27,7 @@ from django.db import transaction
 from user_service.services.redis import RedisPubSubClient
 from datetime import datetime
 from .ext_models.mongomodels import Message
+from .services.mongohelpers import NotificationService
 import bcrypt
 
 jwt = JWTTools
@@ -201,6 +202,41 @@ class UserContacts(APIView):
                 )
                 conn2.save()
 
+                # Notification Saving and relay
+
+                service = NotificationService()
+                service.add_notification(
+                    referenceID=new_connection_id,
+                    referenceStatus=False,
+                    toUserID=addUsername,
+                    fromUserID=user.username,
+                    content_headline="Contact Request",
+                    content_details=f"@{user.username} have sent a contact request for you.",
+                    type="contact_request",
+                    isRead=False,
+                )
+
+                sse_sendToUser = addUsername
+                sse_sendToDetails = (
+                    f"@{user.username} have sent a contact request for you."
+                )
+
+                now = datetime.now()
+                data = {
+                    "logType": None,
+                    "pod": "podless",
+                    "event": "notifications",
+                    "message": {
+                        "status": True,
+                        "auth": True,
+                        "message": sse_sendToDetails,
+                        "result": "",
+                    },
+                    "dateTime": now.isoformat(),
+                }
+
+                RedisPubSubClient.publish_json(f"events_{sse_sendToUser}", data)
+
             return Response(
                 {
                     "status": True,
@@ -216,6 +252,8 @@ class UserContacts(APIView):
         user = self.request.user
         try:
             connection_id = request.data.get("connection_id")
+            to_user_id = request.data.get("to_user_id")
+            now = datetime.now()
 
             existing_connection_query = Connection.objects.filter(
                 Q(~Q(action_by=user), involved_user=user),
@@ -239,13 +277,51 @@ class UserContacts(APIView):
                 other_users = list(set(other_users))
 
                 to_update_query.update(status=True)
+
+                service = NotificationService()
+                updated = service.update_reference_status(connection_id, True)
+
+                if updated:
+                    notifHeadline = "Accepted Request"
+                    notifContent = f"@{user.username} accepted your request"
+
+                    service = NotificationService()
+                    service.add_notification(
+                        referenceID=connection_id,
+                        referenceStatus=False,
+                        toUserID=to_user_id,
+                        fromUserID=user.username,
+                        content_headline=notifHeadline,
+                        content_details=notifContent,
+                        type="info_contact_accept",
+                        isRead=False,
+                    )
+
+                    data = {
+                        "logType": None,
+                        "pod": "podless",
+                        "event": "notifications",
+                        "message": {
+                            "status": True,
+                            "auth": True,
+                            "message": notifContent,
+                            "result": "",
+                        },
+                        "dateTime": now.isoformat(),
+                    }
+
+                    RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
+                else:
+                    return Response(
+                        {"message": "Notification Error has occured"},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
             else:
                 return Response(
                     {"message": "You are not allowed to approve connection"},
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
 
-            now = datetime.now()
             data = {
                 "logType": None,
                 "pod": "podless",
@@ -254,6 +330,7 @@ class UserContacts(APIView):
                 "dateTime": now.isoformat(),
             }
 
+            RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
             RedisPubSubClient.publish_json(f"events_{user.username}", data)
 
             for other in other_users:
@@ -270,7 +347,9 @@ class UserContacts(APIView):
         user = self.request.user
         try:
             connection_id = request.data.get("connection_id")
+            to_user_id = request.data.get("to_user_id")
             action = request.headers.get("action")
+            now = datetime.now()
 
             existing_connection_query = Connection.objects.filter(
                 Q(Q(action_by=user) | Q(involved_user=user)),
@@ -294,13 +373,51 @@ class UserContacts(APIView):
                     connection_id=connection_id,
                 )
                 delete_query.delete()
+
+                service = NotificationService()
+                updated = service.update_reference_status(connection_id, True)
+
+                if updated and action == "decline":
+                    notifHeadline = "Declined Request"
+                    notifContent = f"@{user.username} declined your request"
+
+                    service = NotificationService()
+                    service.add_notification(
+                        referenceID=connection_id,
+                        referenceStatus=False,
+                        toUserID=to_user_id,
+                        fromUserID=user.username,
+                        content_headline=notifHeadline,
+                        content_details=notifContent,
+                        type="info_contact_decline",
+                        isRead=False,
+                    )
+
+                    data = {
+                        "logType": None,
+                        "pod": "podless",
+                        "event": "notifications",
+                        "message": {
+                            "status": True,
+                            "auth": True,
+                            "message": notifContent,
+                            "result": "",
+                        },
+                        "dateTime": now.isoformat(),
+                    }
+
+                    RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
+                else:
+                    return Response(
+                        {"message": "Notification Error has occured"},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
             else:
                 return Response(
                     {"message": "You are not allowed to remove this connection"},
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
 
-            now = datetime.now()
             data = {
                 "logType": None,
                 "pod": "podless",
