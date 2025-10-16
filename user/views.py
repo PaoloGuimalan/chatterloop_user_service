@@ -408,10 +408,11 @@ class UserContacts(APIView):
 
                     RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
                 else:
-                    return Response(
-                        {"message": "Notification Error has occured"},
-                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    )
+                    if action == "decline":
+                        return Response(
+                            {"message": "Notification Error has occured"},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        )
             else:
                 return Response(
                     {"message": "You are not allowed to remove this connection"},
