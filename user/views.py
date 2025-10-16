@@ -310,6 +310,22 @@ class UserContacts(APIView):
                         "dateTime": now.isoformat(),
                     }
 
+                    data_reload = {
+                        "logType": None,
+                        "pod": "podless",
+                        "event": "notifications_reload",
+                        "message": {
+                            "status": True,
+                            "auth": True,
+                            "message": "",
+                            "result": "",
+                        },
+                        "dateTime": now.isoformat(),
+                    }
+
+                    RedisPubSubClient.publish_json(
+                        f"events_{user.username}", data_reload
+                    )
                     RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
                 else:
                     return Response(
@@ -406,6 +422,22 @@ class UserContacts(APIView):
                         "dateTime": now.isoformat(),
                     }
 
+                    data_reload = {
+                        "logType": None,
+                        "pod": "podless",
+                        "event": "notifications_reload",
+                        "message": {
+                            "status": True,
+                            "auth": True,
+                            "message": "",
+                            "result": "",
+                        },
+                        "dateTime": now.isoformat(),
+                    }
+
+                    RedisPubSubClient.publish_json(
+                        f"events_{user.username}", data_reload
+                    )
                     RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
                 else:
                     if action == "decline":
