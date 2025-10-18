@@ -39,6 +39,8 @@ MONGODB_CLUSTER_PASS = os.getenv("MONGODB_CLUSTER_PASS")
 MONGODB_CLUSTER_HOST = os.getenv("MONGODB_CLUSTER_HOST")
 MONGODB_DB = os.getenv("MONGODB_DB")
 
+MAILINGSERVICE = os.getenv("MAILINGSERVICE")
+
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",

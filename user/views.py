@@ -14,7 +14,7 @@ from django.db.models import (
     Value,
     Subquery,
 )
-from .models import Account, Connection
+from .models import Account, Connection, Verification
 from .serializers import (
     AccountSerializer,
     ConnectionSerializer,
@@ -26,8 +26,13 @@ from rest_framework.pagination import PageNumberPagination
 from django.db import transaction
 from user_service.services.redis import RedisPubSubClient
 from datetime import datetime
+from django.utils.timezone import make_aware
+from django.utils.timezone import now
 from .ext_models.mongomodels import Message
 from .services.mongohelpers import NotificationService
+from .utils.bcrypt_tools import hash_password
+from .utils.generators import generate_unique_username
+from .utils.external_requests import send_email_verification_code
 import bcrypt
 
 jwt = JWTTools
@@ -561,3 +566,118 @@ class UserSearch(APIView):
             return data
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class UserAccountManagement(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        try:
+            data = request.data
+            first_name = data.get("firstName")
+            last_name = data.get("lastName")
+            email = data.get("email")
+            raw_password = data.get("password")
+            birthday = int(data.get("birthday"))  # int day
+            birthmonth = int(data.get("birthmonth"))  # int month
+            birthyear = int(data.get("birthyear"))  # int year
+            gender = data.get("gender")
+
+            middle_name = request.data.get("middleName")
+            if not middle_name or middle_name.strip() == "":
+                middle_name = "N/A"
+            else:
+                middle_name = middle_name.strip()
+
+            if Account.objects.filter(email=email).exists():
+                return Response(
+                    {"status": False, "message": "Email already in use"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            username = generate_unique_username(first_name)
+
+            birthdate_naive = datetime(birthyear, birthmonth, birthday)
+            birthdate = make_aware(birthdate_naive)
+
+            hashed_password = hash_password(raw_password)
+
+            new_user = Account(
+                username=username,
+                first_name=first_name,
+                middle_name=middle_name,
+                last_name=last_name,
+                email=email,
+                password=hashed_password,
+                birthdate=birthdate,
+                gender=gender,
+                profile="N/A",
+                date_created=now(),
+                is_active=True,
+                is_verified=False,
+                is_default_user=False,
+                is_superuser=False,
+            )
+            new_user.save()
+
+            send_email_verification_code(
+                from_email="ChatterLoop <no-reply>",
+                to_email=email,
+                subject="Verification Code",
+                user_id=username,
+            )
+
+            return Response(
+                {"status": True, "message": "Account created", "username": username},
+                status=status.HTTP_201_CREATED,
+            )
+
+        except Exception as e:
+            return Response(
+                {"status": False, "message": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class CodeVerification(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = self.request.user
+        verification_code = request.data.get("code")  # directly take code from request
+
+        if not verification_code:
+            return Response(
+                {"status": False, "message": "Verification code is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            ver = Verification.objects.filter(
+                user=user, ver_code=verification_code, is_used=False
+            ).first()
+            if ver:
+                ver.is_used = True
+                ver.save()
+
+                user = ver.user
+                user.is_verified = True
+                user.save()
+
+                return Response(
+                    {"status": True, "message": "Account has been verified"},
+                    status=status.HTTP_200_OK,
+                )
+            else:
+                return Response(
+                    {
+                        "status": False,
+                        "message": "Invalid or already used verification code",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        except Exception as e:
+            return Response(
+                {"status": False, "message": f"Error verifying code: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
