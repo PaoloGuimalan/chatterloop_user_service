@@ -33,6 +33,8 @@ from .services.mongohelpers import NotificationService
 from .utils.bcrypt_tools import hash_password
 from .utils.generators import generate_unique_username
 from .utils.external_requests import send_email_verification_code
+from django.shortcuts import get_object_or_404
+from django.utils.timezone import localtime
 import bcrypt
 
 jwt = JWTTools
@@ -52,11 +54,48 @@ class UserAuthentication(APIView):
             return [AllowAny()]
         return super().get_permissions()
 
-    def get(self, request):
-        return Response(
-            {"status": True, "message": "OK"},
-            status=status.HTTP_200_OK,
-        )
+    def get(self, request, username=None):
+        user = get_object_or_404(Account, username=username)
+
+        # Format birthdate parts
+        birthdate = user.birthdate
+        birth_month = birthdate.strftime("%B")  # Full month name
+        birth_day = str(birthdate.day)
+        birth_year = str(birthdate.year)
+
+        # Format dateCreated parts (local timestamp)
+        date_created = localtime(user.date_created)
+        date_str = date_created.strftime("%m/%d/%Y")
+        time_str = date_created.strftime("%I:%M:%S %p").lower()
+
+        # Build response JSON matching your example
+        data = {
+            "data": {
+                "fullname": {
+                    "firstName": user.first_name,
+                    "middleName": user.middle_name,
+                    "lastName": user.last_name,
+                },
+                "birthdate": {
+                    "month": birth_month,
+                    "day": birth_day,
+                    "year": birth_year,
+                },
+                "dateCreated": {
+                    "date": date_str,
+                    "time": time_str,
+                },
+                "id": str(user.id),
+                "userID": user.username,
+                "profile": user.profile,
+                "gender": user.gender.title(),  # Capitalize first letter, e.g. "Male"
+                "email": user.email,
+                "isActivated": user.is_active,
+                "isVerified": user.is_verified,
+            }
+        }
+
+        return Response(data, status=status.HTTP_200_OK)
 
     def post(self, request):
         try:
