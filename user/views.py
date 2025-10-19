@@ -650,7 +650,7 @@ class UserAccountManagement(APIView):
                 password=hashed_password,
                 birthdate=birthdate,
                 gender=gender,
-                profile="N/A",
+                profile="none",
                 date_created=now(),
                 is_active=True,
                 is_verified=False,
