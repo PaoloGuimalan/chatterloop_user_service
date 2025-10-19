@@ -667,7 +667,14 @@ class UserAccountManagement(APIView):
             )
 
             return Response(
-                {"status": True, "message": "Account created", "username": username},
+                {
+                    "status": True,
+                    "message": "Account created",
+                    "username": username,
+                    "authtoken": jwt.encoder(
+                        {"userID": username, "username": username}
+                    ),
+                },
                 status=status.HTTP_201_CREATED,
             )
 
