@@ -103,6 +103,7 @@ class Emoji(models.Model):
     emoji_content = models.CharField(max_length=20, null=False)
     emoji_tags = models.CharField(max_length=1000, null=False)
     emoji_theme = models.CharField(null=False, default="#7d7d7d")
+    priority = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(Account, on_delete=models.DO_NOTHING)
