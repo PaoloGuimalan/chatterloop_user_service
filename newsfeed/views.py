@@ -4,9 +4,9 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.db.models import Q
-from .models import Post
+from .models import Post, Emoji
 from user.models import Account
-from .serializers import PostSerializer
+from .serializers import PostSerializer, EmojiSerializer
 from user.serializers import ConnectionSerializer
 from rest_framework.pagination import PageNumberPagination
 from user.services.connections import ConnectionHelpers
@@ -94,6 +94,21 @@ class NewsfeedPostPreviewView(APIView):
             ).get(post_id=post_id)
 
             serialized_result = PostSerializer(queryset)
+
+            return Response(serialized_result.data, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class EmojisView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, post_id):
+        user = self.request.user
+        try:
+            queryset = Emoji.objects.all()
+
+            serialized_result = EmojiSerializer(queryset, many=True)
 
             return Response(serialized_result.data, status=status.HTTP_200_OK)
         except Exception as e:

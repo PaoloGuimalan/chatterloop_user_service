@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Post, PostTag, PostPrivacy, PostReference, MapView
+from .models import Post, PostTag, PostPrivacy, PostReference, MapView, Emoji
 from user.serializers import AccountPreviewSerializer
 
 
@@ -38,4 +38,10 @@ class PostSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Post
+        fields = "__all__"
+
+
+class EmojiSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Emoji
         fields = "__all__"
