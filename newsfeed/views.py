@@ -103,7 +103,7 @@ class NewsfeedPostPreviewView(APIView):
 class EmojisView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, post_id):
+    def get(self, request):
         user = self.request.user
         try:
             queryset = Emoji.objects.all()
