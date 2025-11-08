@@ -8,7 +8,7 @@ from django.db.models.functions import Coalesce
 from django.db import transaction
 from .models import Post, Emoji, Reaction, PreviewCount
 from user.models import Account
-from .serializers import PostSerializer, EmojiSerializer
+from .serializers import PostSerializer, EmojiSerializer, PreviewCountSerializer
 from user.serializers import ConnectionSerializer
 from rest_framework.pagination import PageNumberPagination
 from user.services.connections import ConnectionHelpers
@@ -225,5 +225,19 @@ class PostReactionsView(APIView):
                 return Response(
                     {"message": "Reaction has been deleted"}, status=status.HTTP_200_OK
                 )
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+
+class ReactionsCountView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, post_id):
+        try:
+            user = self.request.user
+            query_set = PreviewCount.objects.filter(post_id=post_id)
+
+            serialized_result = PreviewCountSerializer(query_set, many=True)
+            return Response(serialized_result.data, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": str(e)}, status=500)
