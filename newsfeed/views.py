@@ -3,7 +3,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from django.db.models import Q
+from django.db.models import Q, Exists, OuterRef, Subquery, Value
+from django.db.models.functions import Coalesce
 from django.db import transaction
 from .models import Post, Emoji, Reaction, PreviewCount
 from user.models import Account
@@ -29,15 +30,24 @@ class NewsfeedView(APIView):
             connections = ConnectionHelpers(user)
             connections_list = connections.get_connections()
 
+            user_reaction_subquery = Reaction.objects.filter(
+                post=OuterRef("pk"), user=user
+            ).values("emoji_id")[:1]
+
             queryset = (
                 Post.objects.prefetch_related(
-                    "tagging", "privacy_users", "references", "map_info"
+                    "tagging", "privacy_users", "references", "map_info", "preview"
                 )
                 .filter(
                     Q(user_id__in=connections_list)
                     | Q(tagging__user_id__in=connections_list)
                     | Q(privacy_status="public"),
                     ~Q(user=user),
+                )
+                .annotate(
+                    user_reaction=Coalesce(
+                        Subquery(user_reaction_subquery), Value(None)
+                    )
                 )
                 .order_by("-date_posted")
             )
@@ -62,12 +72,21 @@ class NewsfeedProfileView(APIView):
     def get(self, request, username):
         user = self.request.user
         try:
+            user_reaction_subquery = Reaction.objects.filter(
+                post=OuterRef("pk"), user=user
+            ).values("emoji_id")[:1]
+
             queryset = (
                 Post.objects.prefetch_related(
-                    "tagging", "privacy_users", "references", "map_info"
+                    "tagging", "privacy_users", "references", "map_info", "preview"
                 )
                 .filter(
                     Q(user__username=username) | Q(tagging__user__username=username)
+                )
+                .annotate(
+                    user_reaction=Coalesce(
+                        Subquery(user_reaction_subquery), Value(None)
+                    )
                 )
                 .order_by("-date_posted")
             )
@@ -91,9 +110,21 @@ class NewsfeedPostPreviewView(APIView):
     def get(self, request, post_id):
         user = self.request.user
         try:
-            queryset = Post.objects.prefetch_related(
-                "tagging", "privacy_users", "references", "map_info"
-            ).get(post_id=post_id)
+            user_reaction_subquery = Reaction.objects.filter(
+                post=OuterRef("pk"), user=user
+            ).values("emoji_id")[:1]
+
+            queryset = (
+                Post.objects.prefetch_related(
+                    "tagging", "privacy_users", "references", "map_info", "preview"
+                )
+                .annotate(
+                    user_reaction=Coalesce(
+                        Subquery(user_reaction_subquery), Value(None)
+                    )
+                )
+                .get(post_id=post_id)
+            )
 
             serialized_result = PostSerializer(queryset)
 

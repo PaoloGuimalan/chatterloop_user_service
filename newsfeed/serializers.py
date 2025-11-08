@@ -1,5 +1,13 @@
 from rest_framework import serializers
-from .models import Post, PostTag, PostPrivacy, PostReference, MapView, Emoji
+from .models import (
+    Post,
+    PostTag,
+    PostPrivacy,
+    PostReference,
+    MapView,
+    Emoji,
+    PreviewCount,
+)
 from user.serializers import AccountPreviewSerializer
 
 
@@ -29,11 +37,19 @@ class MapInfoSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class PreviewCountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PreviewCount
+        fields = ["count", "emoji"]
+
+
 class PostSerializer(serializers.ModelSerializer):
     tagging = PostTagSerializer(many=True, read_only=True)
     privacy_users = PostPrivacySerializer(many=True, read_only=True)
     references = PostReferenceSerializer(many=True, read_only=True)
     map_info = MapInfoSerializer(read_only=True)
+    preview = PreviewCountSerializer(read_only=True, many=True)
+    user_reaction = serializers.CharField()
     user = AccountPreviewSerializer(read_only=True)
 
     class Meta:
