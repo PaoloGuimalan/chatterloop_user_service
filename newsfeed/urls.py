@@ -26,4 +26,9 @@ urlpatterns = [
         views.EmojisView.as_view(),
         name="newsfeed-emojis",
     ),
+    path(
+        "reaction",
+        views.PostReactionsView.as_view(),
+        name="newsfeed-reactions",
+    ),
 ]
