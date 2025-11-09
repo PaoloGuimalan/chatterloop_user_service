@@ -185,14 +185,14 @@ class PostReactionsView(APIView):
                         toUserID=post.user.username,
                         fromUserID=user.username,
                         content_headline="Post Reaction",
-                        content_details=f"@{user.username} {emoji.emoji_content} reacted to your post.",
+                        content_details=f"@{user.username} reacted {emoji.emoji_content} to your post.",
                         type="post_reaction",
                         isRead=False,
                     )
 
                     sse_sendToUser = post.user.username
                     sse_sendToDetails = (
-                        f"@{user.username} {emoji.emoji_content} reacted to your post."
+                        f"@{user.username} reacted {emoji.emoji_content} to your post."
                     )
 
                     now = datetime.now()
@@ -244,11 +244,11 @@ class PostReactionsView(APIView):
                     service = NotificationService()
                     service.update_content(
                         reaction_id=reaction.reaction_id,
-                        new_content=f"@{user.username} {new_emoji.emoji_content} reacted to your post.",
+                        new_content=f"@{user.username} reacted {new_emoji.emoji_content} to your post.",
                     )
 
                     sse_sendToUser = post.user.username
-                    sse_sendToDetails = f"@{user.username} {new_emoji.emoji_content} reacted to your post."
+                    sse_sendToDetails = f"@{user.username} reacted {new_emoji.emoji_content} to your post."
 
                     now = datetime.now()
                     data = {
