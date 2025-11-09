@@ -12,6 +12,9 @@ from .serializers import PostSerializer, EmojiSerializer, PreviewCountSerializer
 from user.serializers import ConnectionSerializer
 from rest_framework.pagination import PageNumberPagination
 from user.services.connections import ConnectionHelpers
+from user.services.mongohelpers import NotificationService
+from user_service.services.redis import RedisPubSubClient
+from datetime import datetime
 import uuid
 
 
@@ -160,9 +163,11 @@ class PostReactionsView(APIView):
             post = Post.objects.get(post_id=post_id)
             emoji = Emoji.objects.get(emoji_id=emoji_id)
 
+            new_reaction_id = str(uuid.uuid4())
+
             with transaction.atomic():
                 Reaction.objects.create(
-                    reaction_id=str(uuid.uuid4()),
+                    reaction_id=new_reaction_id,
                     post=post,
                     user=user,
                     emoji=emoji,
@@ -172,9 +177,43 @@ class PostReactionsView(APIView):
                 preview_count_obj.count += 1
                 preview_count_obj.save()
 
-            return Response(
-                {"message": "Reaction has been added"}, status=status.HTTP_200_OK
-            )
+                if post.user.username != user.username:
+                    service = NotificationService()
+                    service.add_notification(
+                        referenceID=new_reaction_id,
+                        referenceStatus=True,
+                        toUserID=post.user.username,
+                        fromUserID=user.username,
+                        content_headline="Post Reaction",
+                        content_details=f"@{user.username} {emoji.emoji_content} reacted to your post.",
+                        type="post_reaction",
+                        isRead=False,
+                    )
+
+                    sse_sendToUser = post.user.username
+                    sse_sendToDetails = (
+                        f"@{user.username} {emoji.emoji_content} reacted to your post."
+                    )
+
+                    now = datetime.now()
+                    data = {
+                        "logType": None,
+                        "pod": "podless",
+                        "event": "notifications",
+                        "message": {
+                            "status": True,
+                            "auth": True,
+                            "message": sse_sendToDetails,
+                            "result": "",
+                        },
+                        "dateTime": now.isoformat(),
+                    }
+
+                    RedisPubSubClient.publish_json(f"events_{sse_sendToUser}", data)
+
+                return Response(
+                    {"message": "Reaction has been added"}, status=status.HTTP_200_OK
+                )
         except Exception as e:
             return Response({"error": str(e)}, status=500)
 
@@ -193,17 +232,43 @@ class PostReactionsView(APIView):
                 reaction.emoji = new_emoji
                 reaction.save()
 
-            old_preview = PreviewCount.objects.get(post_id=post, emoji_id=old_emoji)
-            old_preview.count = max(old_preview.count - 1, 0)
-            old_preview.save()
+                old_preview = PreviewCount.objects.get(post_id=post, emoji_id=old_emoji)
+                old_preview.count = max(old_preview.count - 1, 0)
+                old_preview.save()
 
-            new_preview = PreviewCount.objects.get(post_id=post, emoji_id=new_emoji)
-            new_preview.count += 1
-            new_preview.save()
+                new_preview = PreviewCount.objects.get(post_id=post, emoji_id=new_emoji)
+                new_preview.count += 1
+                new_preview.save()
 
-            return Response(
-                {"message": "Reaction has been updated"}, status=status.HTTP_200_OK
-            )
+                if post.user.username != user.username:
+                    service = NotificationService()
+                    service.update_content(
+                        reaction_id=reaction.reaction_id,
+                        new_content=f"@{user.username} {new_emoji.emoji_content} reacted to your post.",
+                    )
+
+                    sse_sendToUser = post.user.username
+                    sse_sendToDetails = f"@{user.username} {new_emoji.emoji_content} reacted to your post."
+
+                    now = datetime.now()
+                    data = {
+                        "logType": None,
+                        "pod": "podless",
+                        "event": "notifications",
+                        "message": {
+                            "status": True,
+                            "auth": True,
+                            "message": sse_sendToDetails,
+                            "result": "",
+                        },
+                        "dateTime": now.isoformat(),
+                    }
+
+                    RedisPubSubClient.publish_json(f"events_{sse_sendToUser}", data)
+
+                return Response(
+                    {"message": "Reaction has been updated"}, status=status.HTTP_200_OK
+                )
         except Exception as e:
             return Response({"error": str(e)}, status=500)
 
@@ -215,6 +280,12 @@ class PostReactionsView(APIView):
 
             with transaction.atomic():
                 reaction = Reaction.objects.get(post=post, user=user)
+
+                service = NotificationService()
+                service.delete_notification_by_reference_id(
+                    reaction_id=reaction.reaction_id,
+                )
+
                 emoji = reaction.emoji
                 reaction.delete()
 

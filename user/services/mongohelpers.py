@@ -56,3 +56,13 @@ class NotificationService:
             set__referenceStatus=new_status, multi=True
         )
         return result > 0
+
+    def update_content(self, reaction_id, new_content):
+        result = Notification.objects(referenceID=reaction_id).update(
+            set__content__details=new_content, multi=True
+        )
+        return result > 0
+
+    def delete_notification_by_reference_id(self, reaction_id):
+        result = Notification.objects(referenceID=reaction_id).delete()
+        return result > 0
