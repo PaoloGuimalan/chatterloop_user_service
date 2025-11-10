@@ -132,7 +132,7 @@ class Comment(models.Model):
     attachment = models.TextField(null=True, blank=True)
     user = models.ForeignKey(Account, on_delete=models.DO_NOTHING)
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    updated_at = models.DateTimeField(blank=True, null=True)
     deleted_by = models.ForeignKey(
         Account, on_delete=models.DO_NOTHING, related_name="deleted_by_account"
     )
