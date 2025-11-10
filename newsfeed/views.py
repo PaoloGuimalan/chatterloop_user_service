@@ -312,7 +312,8 @@ class ReactionsCountView(APIView):
         try:
             user = self.request.user
             post_id = request.data.get("post_id")
-            query_set = PreviewCount.objects.filter(post_id=post_id)
+            post = Post.objects.get(post_id=post_id)
+            query_set = PreviewCount.objects.filter(post=post)
 
             serialized_result = PreviewCountSerializer(query_set, many=True)
             return Response(serialized_result.data, status=status.HTTP_200_OK)
