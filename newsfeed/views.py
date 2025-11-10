@@ -327,8 +327,8 @@ class CommentsView(APIView):
     def get(self, request):
         try:
             user = self.request.user
-            post_id = request.data.get("post_id")
-            parent_id = request.data.get("parent_id")
+            post_id = request.GET.get("post_id")
+            parent_id = request.GET.get("parent_id")
 
             post = Post.objects.get(post_id=post_id)
 
