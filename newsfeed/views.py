@@ -334,7 +334,9 @@ class CommentsView(APIView):
 
             if parent_id:
                 comment = Comment.objects.get(comment_id=parent_id)
-                queryset = Comment.objects.filter(post_id=post, parent_comment=comment)
+                queryset = Comment.objects.filter(
+                    post=post, parent_comment=comment
+                ).order_by("created_at")
 
                 paginator = self.pagination_class()
                 paginated_queryset = paginator.paginate_queryset(
@@ -346,7 +348,9 @@ class CommentsView(APIView):
 
                 return data
             else:
-                queryset = Comment.objects.filter(post_id=post, parent_comment=None)
+                queryset = Comment.objects.filter(
+                    post=post, parent_comment=None
+                ).order_by("created_at")
                 paginator = self.pagination_class()
                 paginated_queryset = paginator.paginate_queryset(
                     queryset, request, view=self
