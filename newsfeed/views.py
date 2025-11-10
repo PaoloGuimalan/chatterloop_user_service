@@ -311,7 +311,6 @@ class ReactionsCountView(APIView):
     def get(self, request, post_id):
         try:
             user = self.request.user
-            post_id = request.data.get("post_id")
             post = Post.objects.get(post_id=post_id)
             query_set = PreviewCount.objects.filter(post=post)
 
