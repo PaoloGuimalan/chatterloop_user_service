@@ -6,9 +6,14 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.db.models import Q, Exists, OuterRef, Subquery, Value
 from django.db.models.functions import Coalesce
 from django.db import transaction
-from .models import Post, Emoji, Reaction, PreviewCount
+from .models import Post, Emoji, Reaction, PreviewCount, Comment
 from user.models import Account
-from .serializers import PostSerializer, EmojiSerializer, PreviewCountSerializer
+from .serializers import (
+    PostSerializer,
+    EmojiSerializer,
+    PreviewCountSerializer,
+    CommentSerializer,
+)
 from user.serializers import ConnectionSerializer
 from rest_framework.pagination import PageNumberPagination
 from user.services.connections import ConnectionHelpers
@@ -306,9 +311,50 @@ class ReactionsCountView(APIView):
     def get(self, request, post_id):
         try:
             user = self.request.user
+            post_id = request.data.get("post_id")
             query_set = PreviewCount.objects.filter(post_id=post_id)
 
             serialized_result = PreviewCountSerializer(query_set, many=True)
             return Response(serialized_result.data, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+
+class CommentsView(APIView):
+    permission_classes = [IsAuthenticated]
+    pagination_class = Pagination
+
+    def get(self, request):
+        try:
+            user = self.request.user
+            post_id = request.data.get("post_id")
+            parent_id = request.data.get("parent_id")
+
+            post = Post.objects.get(post_id=post_id)
+
+            if parent_id:
+                comment = Comment.objects.get(comment_id=parent_id)
+                queryset = Comment.objects.filter(post_id=post, parent_comment=comment)
+
+                paginator = self.pagination_class()
+                paginated_queryset = paginator.paginate_queryset(
+                    queryset, request, view=self
+                )
+
+                serialized_result = CommentSerializer(paginated_queryset, many=True)
+                data = paginator.get_paginated_response(serialized_result.data)
+
+                return data
+            else:
+                queryset = Comment.objects.filter(post_id=post, parent_comment=None)
+                paginator = self.pagination_class()
+                paginated_queryset = paginator.paginate_queryset(
+                    queryset, request, view=self
+                )
+
+                serialized_result = CommentSerializer(paginated_queryset, many=True)
+                data = paginator.get_paginated_response(serialized_result.data)
+
+                return data
         except Exception as e:
             return Response({"error": str(e)}, status=500)

@@ -7,6 +7,7 @@ from .models import (
     MapView,
     Emoji,
     PreviewCount,
+    Comment,
 )
 from user.serializers import AccountPreviewSerializer
 
@@ -60,4 +61,10 @@ class PostSerializer(serializers.ModelSerializer):
 class EmojiSerializer(serializers.ModelSerializer):
     class Meta:
         model = Emoji
+        fields = "__all__"
+
+
+class CommentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Comment
         fields = "__all__"

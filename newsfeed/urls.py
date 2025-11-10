@@ -34,6 +34,11 @@ urlpatterns = [
     path(
         "total_reactions/<str:post_id>/",
         views.ReactionsCountView.as_view(),
-        name="newsfeed-reactions",
+        name="newsfeed-total-reactions",
+    ),
+    path(
+        "comments",
+        views.CommentsView.as_view(),
+        name="newsfeed-comments",
     ),
 ]
