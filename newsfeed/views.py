@@ -379,7 +379,7 @@ class CommentsView(APIView):
             
             with transaction.atomic():
                 if parent_id:
-                    new_comment_id = uuid.uuid4()
+                    new_comment_id = str(uuid.uuid4())
                     parent_comment = Comment.objects.get(comment_id=parent_id)
                     
                     Comment.objects.create(
@@ -423,7 +423,7 @@ class CommentsView(APIView):
                         RedisPubSubClient.publish_json(f"events_{parent_comment.user.username}", data)
 
                 else:
-                    new_comment_id = uuid.uuid4()
+                    new_comment_id = str(uuid.uuid4())
                     Comment.objects.create(
                         comment_id=new_comment_id,
                         parent_comment=None,
