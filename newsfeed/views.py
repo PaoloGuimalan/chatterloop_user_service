@@ -387,7 +387,7 @@ class CommentsView(APIView):
                     )
                 else:
                     Comment.objects.create(
-                        reaction_id=uuid.uuid4,
+                        comment_id=uuid.uuid4,
                         parent_comment=None,
                         post=post,
                         text=new_comment,
