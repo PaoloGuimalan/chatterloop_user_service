@@ -379,25 +379,87 @@ class CommentsView(APIView):
             
             with transaction.atomic():
                 if parent_id:
+                    new_comment_id = uuid.uuid4()
                     parent_comment = Comment.objects.get(comment_id=parent_id)
                     
                     Comment.objects.create(
-                        comment_id=uuid.uuid4(),
+                        comment_id=new_comment_id,
                         parent_comment=parent_comment,
                         post=post,
                         text=new_comment,
                         attachment=new_attachment,
                         user=user
                     )
+
+                    truncated_comment = (parent_comment.text[:30] + '...') if len(parent_comment.text) > 30 else parent_comment.text
+
+                    if parent_comment.user != user:
+                        service = NotificationService()
+                        service.add_notification(
+                            referenceID=new_comment_id,
+                            referenceStatus=True,
+                            toUserID=parent_comment.user.username,
+                            fromUserID=user.username,
+                            content_headline="Replied Comment",
+                            content_details=f"@{user.username} replied to your comment {truncated_comment}",
+                            type="post_comment",
+                            isRead=False,
+                        )
+
+                        now = datetime.now()
+                        data = {
+                            "logType": None,
+                            "pod": "podless",
+                            "event": "notifications",
+                            "message": {
+                                "status": True,
+                                "auth": True,
+                                "message": f"@{user.username} replied to your comment {truncated_comment}",
+                                "result": "",
+                            },
+                            "dateTime": now.isoformat(),
+                        }
+
+                        RedisPubSubClient.publish_json(f"events_{parent_comment.user.username}", data)
+
                 else:
+                    new_comment_id = uuid.uuid4()
                     Comment.objects.create(
-                        comment_id=uuid.uuid4(),
+                        comment_id=new_comment_id,
                         parent_comment=None,
                         post=post,
                         text=new_comment,
                         attachment=new_attachment,
                         user=user
                     )
+
+                    service = NotificationService()
+                    service.add_notification(
+                        referenceID=new_comment_id,
+                        referenceStatus=True,
+                        toUserID=post.user.username,
+                        fromUserID=user.username,
+                        content_headline="Post Comment",
+                        content_details=f"@{user.username} commented on your post.",
+                        type="post_comment",
+                        isRead=False,
+                    )
+
+                    now = datetime.now()
+                    data = {
+                        "logType": None,
+                        "pod": "podless",
+                        "event": "notifications",
+                        "message": {
+                            "status": True,
+                            "auth": True,
+                            "message": f"@{user.username} commented on your post.",
+                            "result": "",
+                        },
+                        "dateTime": now.isoformat(),
+                    }
+
+                    RedisPubSubClient.publish_json(f"events_{post.user.username}", data)
 
             return Response("OK", status=status.HTTP_200_OK)
         except Exception as e:
