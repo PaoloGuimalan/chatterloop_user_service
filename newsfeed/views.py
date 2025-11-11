@@ -366,10 +366,10 @@ class CommentsView(APIView):
     def post(self, request):
         try:
             user = self.request.user
-            post_id = request.GET.get("post_id")
-            parent_id = request.GET.get("parent_id")
-            new_comment = request.GET.get("new_comment")
-            new_attachment = request.GET.get("new_attachment")
+            post_id = request.data.get("post_id")
+            parent_id = request.data.get("parent_id")
+            new_comment = request.data.get("new_comment")
+            new_attachment = request.data.get("new_attachment")
 
             post = Post.objects.get(post_id=post_id)
             
