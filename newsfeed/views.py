@@ -362,3 +362,39 @@ class CommentsView(APIView):
                 return data
         except Exception as e:
             return Response({"error": str(e)}, status=500)
+        
+    def post(self, request):
+        try:
+            user = self.request.user
+            post_id = request.GET.get("post_id")
+            parent_id = request.GET.get("parent_id")
+            new_comment = request.GET.get("new_comment")
+            new_attachment = request.GET.get("new_attachment")
+
+            post = Post.objects.get(post_id=post_id)
+            
+            with transaction.atomic():
+                if parent_id:
+                    parent_comment = Comment.objects.get(comment_id=parent_id)
+                    
+                    Comment.objects.create(
+                        comment_id=uuid.uuid4,
+                        parent_comment=parent_comment,
+                        post=post,
+                        text=new_comment,
+                        attachment=new_attachment,
+                        user=user
+                    )
+                else:
+                    Comment.objects.create(
+                        reaction_id=uuid.uuid4,
+                        parent_comment=None,
+                        post=post,
+                        text=new_comment,
+                        attachment=new_attachment,
+                        user=user
+                    )
+
+            return Response("OK", status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
