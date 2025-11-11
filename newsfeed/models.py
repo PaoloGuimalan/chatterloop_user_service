@@ -134,7 +134,7 @@ class Comment(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(blank=True, null=True)
     deleted_by = models.ForeignKey(
-        Account, on_delete=models.DO_NOTHING, related_name="deleted_by_account"
+        Account, on_delete=models.DO_NOTHING, related_name="deleted_by_account", blank=True, null=True
     )
     deleted_at = models.DateTimeField(blank=True, null=True)
 
