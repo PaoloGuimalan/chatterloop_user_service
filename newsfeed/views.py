@@ -373,7 +373,7 @@ class CommentsView(APIView):
 
             post = Post.objects.get(post_id=post_id)
 
-            if new_comment.isspace() and new_attachment is None:
+            if new_comment.strip() == "" and new_attachment is None:
                 raise ValueError("No comment to save.")
             
             with transaction.atomic():
