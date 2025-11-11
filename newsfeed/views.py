@@ -422,3 +422,18 @@ class CommentsView(APIView):
             return Response("OK", status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": str(e)}, status=500)
+        
+    def delete(self, request):
+        try:
+            user = self.request.user
+            comment_id = request.data.get("comment_id")
+            
+            with transaction.atomic():
+                current_comment = Comment.objects.get(comment_id=comment_id)
+                current_comment.deleted_at = now()
+                current_comment.deleted_by = user
+                current_comment.save()
+
+            return Response("OK", status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
