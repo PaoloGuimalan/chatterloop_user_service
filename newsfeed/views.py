@@ -401,3 +401,22 @@ class CommentsView(APIView):
             return Response("OK", status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": str(e)}, status=500)
+        
+    def put(self, request):
+        try:
+            user = self.request.user
+            comment_id = request.data.get("comment_id")
+            updated_comment = request.data.get("updated_comment")
+            
+            with transaction.atomic():
+                current_comment = Comment.objects.get(comment_id=comment_id)
+
+                if updated_comment.strip() == "" and current_comment.attachment is None:
+                    raise ValueError("No comment to save.")
+                
+                current_comment.text = updated_comment
+                current_comment.save()
+
+            return Response("OK", status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
