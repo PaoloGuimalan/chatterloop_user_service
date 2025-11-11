@@ -19,6 +19,7 @@ from rest_framework.pagination import PageNumberPagination
 from user.services.connections import ConnectionHelpers
 from user.services.mongohelpers import NotificationService
 from user_service.services.redis import RedisPubSubClient
+from django.utils.timezone import now
 from datetime import datetime
 import uuid
 
@@ -415,6 +416,7 @@ class CommentsView(APIView):
                     raise ValueError("No comment to save.")
                 
                 current_comment.text = updated_comment
+                current_comment.updated_at = now()
                 current_comment.save()
 
             return Response("OK", status=status.HTTP_200_OK)
