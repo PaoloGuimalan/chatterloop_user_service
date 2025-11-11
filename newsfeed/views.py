@@ -401,7 +401,7 @@ class CommentsView(APIView):
                             toUserID=parent_comment.user.username,
                             fromUserID=user.username,
                             content_headline="Replied Comment",
-                            content_details=f"@{user.username} replied to your comment {truncated_comment}",
+                            content_details=f'@{user.username} replied to your comment "{truncated_comment}"',
                             type="post_comment",
                             isRead=False,
                         )
@@ -414,7 +414,7 @@ class CommentsView(APIView):
                             "message": {
                                 "status": True,
                                 "auth": True,
-                                "message": f"@{user.username} replied to your comment {truncated_comment}",
+                                "message": f'@{user.username} replied to your comment "{truncated_comment}"',
                                 "result": "",
                             },
                             "dateTime": now.isoformat(),
