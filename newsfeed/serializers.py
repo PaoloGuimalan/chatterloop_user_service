@@ -65,6 +65,7 @@ class EmojiSerializer(serializers.ModelSerializer):
 
 
 class CommentSerializer(serializers.ModelSerializer):
+    user = AccountPreviewSerializer(read_only=True)
     class Meta:
         model = Comment
         fields = "__all__"
