@@ -440,7 +440,7 @@ class CommentsView(APIView):
                         else parent_comment.text
                     )
 
-                    if parent_comment.user != user:
+                    if parent_comment.user != user and post.user != user:
                         service = NotificationService()
                         service.add_notification(
                             referenceID=new_comment_id,
@@ -488,33 +488,36 @@ class CommentsView(APIView):
                     activity_count_obj.count += 1
                     activity_count_obj.save()
 
-                    service = NotificationService()
-                    service.add_notification(
-                        referenceID=new_comment_id,
-                        referenceStatus=True,
-                        toUserID=post.user.username,
-                        fromUserID=user.username,
-                        content_headline="Post Comment",
-                        content_details=f"@{user.username} commented on your post.",
-                        type="post_comment",
-                        isRead=False,
-                    )
+                    if post.user != user:
+                        service = NotificationService()
+                        service.add_notification(
+                            referenceID=new_comment_id,
+                            referenceStatus=True,
+                            toUserID=post.user.username,
+                            fromUserID=user.username,
+                            content_headline="Post Comment",
+                            content_details=f"@{user.username} commented on your post.",
+                            type="post_comment",
+                            isRead=False,
+                        )
 
-                    now = datetime.now()
-                    data = {
-                        "logType": None,
-                        "pod": "podless",
-                        "event": "notifications",
-                        "message": {
-                            "status": True,
-                            "auth": True,
-                            "message": f"@{user.username} commented on your post.",
-                            "result": "",
-                        },
-                        "dateTime": now.isoformat(),
-                    }
+                        now = datetime.now()
+                        data = {
+                            "logType": None,
+                            "pod": "podless",
+                            "event": "notifications",
+                            "message": {
+                                "status": True,
+                                "auth": True,
+                                "message": f"@{user.username} commented on your post.",
+                                "result": "",
+                            },
+                            "dateTime": now.isoformat(),
+                        }
 
-                    RedisPubSubClient.publish_json(f"events_{post.user.username}", data)
+                        RedisPubSubClient.publish_json(
+                            f"events_{post.user.username}", data
+                        )
 
             return Response("OK", status=status.HTTP_200_OK)
         except Exception as e:
