@@ -134,7 +134,11 @@ class Comment(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(blank=True, null=True)
     deleted_by = models.ForeignKey(
-        Account, on_delete=models.DO_NOTHING, related_name="deleted_by_account", blank=True, null=True
+        Account,
+        on_delete=models.DO_NOTHING,
+        related_name="deleted_by_account",
+        blank=True,
+        null=True,
     )
     deleted_at = models.DateTimeField(blank=True, null=True)
 
@@ -144,3 +148,20 @@ class PreviewCount(models.Model):
     post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="preview")
     emoji = models.ForeignKey(Emoji, on_delete=models.CASCADE, null=True)
     count = models.IntegerField(null=False)
+
+
+class CountType(models.TextChoices):
+    COMMENT_CHOICE = "comment", "Comment"
+    SHARE_CHOICE = "share", "Share"
+
+
+class ActivityCount(models.Model):
+    count_id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
+    post = models.ForeignKey(
+        Post, on_delete=models.CASCADE, related_name="activity_counts"
+    )
+    count_type = models.CharField(choices=CountType.choices)
+    count = models.IntegerField(default=0)
+
+    class Meta:
+        unique_together = ("post", "count_type")

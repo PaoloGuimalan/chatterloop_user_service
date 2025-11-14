@@ -9,6 +9,7 @@ from .models import (
     Emoji,
     Reaction,
     Comment,
+    ActivityCount,
 )
 
 admin.site.register(Post)
@@ -20,3 +21,4 @@ admin.site.register(MapView)
 admin.site.register(Emoji)
 admin.site.register(Reaction)
 admin.site.register(Comment)
+admin.site.register(ActivityCount)
