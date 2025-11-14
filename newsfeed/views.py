@@ -6,13 +6,14 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.db.models import Q, Exists, OuterRef, Subquery, Value
 from django.db.models.functions import Coalesce
 from django.db import transaction
-from .models import Post, Emoji, Reaction, PreviewCount, Comment
+from .models import Post, Emoji, Reaction, PreviewCount, Comment, ActivityCount
 from user.models import Account
 from .serializers import (
     PostSerializer,
     EmojiSerializer,
     PreviewCountSerializer,
     CommentSerializer,
+    ActivityCountSerializer,
 )
 from user.serializers import ConnectionSerializer
 from rest_framework.pagination import PageNumberPagination
@@ -336,6 +337,23 @@ class ReactionsCountView(APIView):
             return Response({"error": str(e)}, status=500)
 
 
+class ActivityCountView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            user = self.request.user
+            post_id = request.GET.get("post_id")
+            count_type = request.GET.get("count_type")
+            post = Post.objects.get(post_id=post_id)
+            query_set = ActivityCount.objects.filter(post=post, count_type=count_type)
+
+            serialized_result = ActivityCountSerializer(query_set, many=True)
+            return Response(serialized_result.data, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+
 class CommentsView(APIView):
     permission_classes = [IsAuthenticated]
     pagination_class = Pagination
@@ -410,6 +428,12 @@ class CommentsView(APIView):
                         user=user,
                     )
 
+                    activity_count_obj = ActivityCount.objects.get(
+                        post=post, count_type="comment"
+                    )
+                    activity_count_obj.count += 1
+                    activity_count_obj.save()
+
                     truncated_comment = (
                         (parent_comment.text[:30] + "...")
                         if len(parent_comment.text) > 30
@@ -457,6 +481,12 @@ class CommentsView(APIView):
                         attachment=new_attachment,
                         user=user,
                     )
+
+                    activity_count_obj = ActivityCount.objects.get(
+                        post=post, count_type="comment"
+                    )
+                    activity_count_obj.count += 1
+                    activity_count_obj.save()
 
                     service = NotificationService()
                     service.add_notification(

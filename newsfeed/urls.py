@@ -37,6 +37,11 @@ urlpatterns = [
         name="newsfeed-total-reactions",
     ),
     path(
+        "post_activities",
+        views.ActivityCountView.as_view(),
+        name="newsfeed-post-activities",
+    ),
+    path(
         "comments",
         views.CommentsView.as_view(),
         name="newsfeed-comments",
