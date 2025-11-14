@@ -1,6 +1,6 @@
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-from .models import Emoji, Post, PreviewCount
+from .models import Emoji, Post, PreviewCount, ActivityCount
 import uuid
 
 
@@ -29,3 +29,11 @@ def create_preview_counts_for_new_post(sender, instance, created, **kwargs):
             for emoji in emojis
         ]
         PreviewCount.objects.bulk_create(preview_counts)
+
+        ActivityCount.objects.create(
+            count_id=str(uuid.uuid4()), post=instance, count_type="comment", count=0
+        )
+
+        ActivityCount.objects.create(
+            count_id=str(uuid.uuid4()), post=instance, count_type="share", count=0
+        )
