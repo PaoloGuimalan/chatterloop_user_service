@@ -8,6 +8,8 @@ from .models import (
     Emoji,
     PreviewCount,
     Comment,
+    ActivityCount,
+    CountType,
 )
 from user.serializers import AccountPreviewSerializer
 
@@ -44,6 +46,18 @@ class PreviewCountSerializer(serializers.ModelSerializer):
         fields = ["count", "emoji"]
 
 
+class CountTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CountType
+        fields = "__all__"
+
+
+class ActivityCountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ActivityCount
+        fields = ["count_type", "count"]
+
+
 class PostSerializer(serializers.ModelSerializer):
     tagging = PostTagSerializer(many=True, read_only=True)
     privacy_users = PostPrivacySerializer(many=True, read_only=True)
@@ -52,6 +66,7 @@ class PostSerializer(serializers.ModelSerializer):
     preview = PreviewCountSerializer(read_only=True, many=True)
     user_reaction = serializers.CharField()
     user = AccountPreviewSerializer(read_only=True)
+    activity_counts = ActivityCountSerializer(read_only=True, many=True)
 
     class Meta:
         model = Post
@@ -66,6 +81,7 @@ class EmojiSerializer(serializers.ModelSerializer):
 
 class CommentSerializer(serializers.ModelSerializer):
     user = AccountPreviewSerializer(read_only=True)
+
     class Meta:
         model = Comment
         fields = "__all__"

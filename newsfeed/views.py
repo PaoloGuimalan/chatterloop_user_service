@@ -45,7 +45,12 @@ class NewsfeedView(APIView):
 
             queryset = (
                 Post.objects.prefetch_related(
-                    "tagging", "privacy_users", "references", "map_info", "preview"
+                    "tagging",
+                    "privacy_users",
+                    "references",
+                    "map_info",
+                    "preview",
+                    "activity_counts",
                 )
                 .filter(
                     Q(user_id__in=connections_list)
@@ -87,7 +92,12 @@ class NewsfeedProfileView(APIView):
 
             queryset = (
                 Post.objects.prefetch_related(
-                    "tagging", "privacy_users", "references", "map_info", "preview"
+                    "tagging",
+                    "privacy_users",
+                    "references",
+                    "map_info",
+                    "preview",
+                    "activity_counts",
                 )
                 .filter(
                     Q(user__username=username) | Q(tagging__user__username=username)
@@ -125,7 +135,12 @@ class NewsfeedPostPreviewView(APIView):
 
             queryset = (
                 Post.objects.prefetch_related(
-                    "tagging", "privacy_users", "references", "map_info", "preview"
+                    "tagging",
+                    "privacy_users",
+                    "references",
+                    "map_info",
+                    "preview",
+                    "activity_counts",
                 )
                 .annotate(
                     user_reaction=Coalesce(
@@ -335,9 +350,11 @@ class CommentsView(APIView):
 
             if parent_id:
                 comment = Comment.objects.get(comment_id=parent_id)
-                queryset = Comment.objects.filter(
-                    post=post, parent_comment=comment
-                ).select_related("user").order_by("created_at")
+                queryset = (
+                    Comment.objects.filter(post=post, parent_comment=comment)
+                    .select_related("user")
+                    .order_by("created_at")
+                )
 
                 paginator = self.pagination_class()
                 paginated_queryset = paginator.paginate_queryset(
@@ -349,9 +366,11 @@ class CommentsView(APIView):
 
                 return data
             else:
-                queryset = Comment.objects.filter(
-                    post=post, parent_comment=None
-                ).select_related("user").order_by("created_at")
+                queryset = (
+                    Comment.objects.filter(post=post, parent_comment=None)
+                    .select_related("user")
+                    .order_by("created_at")
+                )
                 paginator = self.pagination_class()
                 paginated_queryset = paginator.paginate_queryset(
                     queryset, request, view=self
@@ -363,7 +382,7 @@ class CommentsView(APIView):
                 return data
         except Exception as e:
             return Response({"error": str(e)}, status=500)
-        
+
     def post(self, request):
         try:
             user = self.request.user
@@ -376,22 +395,26 @@ class CommentsView(APIView):
 
             if new_comment.strip() == "" and new_attachment is None:
                 raise ValueError("No comment to save.")
-            
+
             with transaction.atomic():
                 if parent_id:
                     new_comment_id = str(uuid.uuid4())
                     parent_comment = Comment.objects.get(comment_id=parent_id)
-                    
+
                     Comment.objects.create(
                         comment_id=new_comment_id,
                         parent_comment=parent_comment,
                         post=post,
                         text=new_comment,
                         attachment=new_attachment,
-                        user=user
+                        user=user,
                     )
 
-                    truncated_comment = (parent_comment.text[:30] + '...') if len(parent_comment.text) > 30 else parent_comment.text
+                    truncated_comment = (
+                        (parent_comment.text[:30] + "...")
+                        if len(parent_comment.text) > 30
+                        else parent_comment.text
+                    )
 
                     if parent_comment.user != user:
                         service = NotificationService()
@@ -420,7 +443,9 @@ class CommentsView(APIView):
                             "dateTime": now.isoformat(),
                         }
 
-                        RedisPubSubClient.publish_json(f"events_{parent_comment.user.username}", data)
+                        RedisPubSubClient.publish_json(
+                            f"events_{parent_comment.user.username}", data
+                        )
 
                 else:
                     new_comment_id = str(uuid.uuid4())
@@ -430,7 +455,7 @@ class CommentsView(APIView):
                         post=post,
                         text=new_comment,
                         attachment=new_attachment,
-                        user=user
+                        user=user,
                     )
 
                     service = NotificationService()
@@ -464,19 +489,19 @@ class CommentsView(APIView):
             return Response("OK", status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": str(e)}, status=500)
-        
+
     def put(self, request):
         try:
             user = self.request.user
             comment_id = request.data.get("comment_id")
             updated_comment = request.data.get("updated_comment")
-            
+
             with transaction.atomic():
                 current_comment = Comment.objects.get(comment_id=comment_id)
 
                 if updated_comment.strip() == "" and current_comment.attachment is None:
                     raise ValueError("No comment to save.")
-                
+
                 current_comment.text = updated_comment
                 current_comment.updated_at = now()
                 current_comment.save()
@@ -484,12 +509,12 @@ class CommentsView(APIView):
             return Response("OK", status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": str(e)}, status=500)
-        
+
     def delete(self, request):
         try:
             user = self.request.user
             comment_id = request.data.get("comment_id")
-            
+
             with transaction.atomic():
                 current_comment = Comment.objects.get(comment_id=comment_id)
                 current_comment.deleted_at = now()
