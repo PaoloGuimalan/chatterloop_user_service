@@ -16,13 +16,13 @@ for post_data in posts:
     if len(references) > 0:
         for reference in references:
             if reference.reference_media_type == "image":
-                content_t_m += 1.2
+                content_t_m += 6.5
             elif reference.reference_media_type == "video":
-                content_t_m += 1.5
+                content_t_m += 8.5
             else:
-                content_t_m += 1.0
+                content_t_m += 2.0
     else:
-        content_t_m += 0.5
+        content_t_m += 4.0
 
     final_content_score = content_t_m / (len(references) + 1)
 
@@ -35,7 +35,7 @@ for post_data in posts:
     shares_count = share.count
 
     weighted_engagement = comments_count * 3 + likes_count * 1 + shares_count * 5
-    decay_factor = (age_hours + 1) ** 1.0
+    decay_factor = (age_hours + 1) ** 0.5
     ranking_score = (
         (weighted_engagement / decay_factor)
         * affinity_score
