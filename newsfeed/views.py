@@ -15,7 +15,15 @@ from django.db.models import (
 )
 from django.db.models.functions import Coalesce
 from django.db import transaction
-from .models import Post, Emoji, Reaction, PreviewCount, Comment, ActivityCount
+from .models import (
+    Post,
+    Emoji,
+    Reaction,
+    PreviewCount,
+    Comment,
+    ActivityCount,
+    PostScore,
+)
 from user.models import Account
 from .serializers import (
     PostSerializer,
@@ -23,6 +31,7 @@ from .serializers import (
     PreviewCountSerializer,
     CommentSerializer,
     ActivityCountSerializer,
+    PostScoreSerializer,
 )
 from user.serializers import ConnectionSerializer
 from rest_framework.pagination import PageNumberPagination
@@ -153,7 +162,7 @@ class NewsfeedProfileView(APIView):
                     "references",
                     "map_info",
                     "preview",
-                    "activity_counts",
+                    "score",
                 )
                 .filter(
                     Q(user__username=username) | Q(tagging__user__username=username)
@@ -196,7 +205,7 @@ class NewsfeedPostPreviewView(APIView):
                     "references",
                     "map_info",
                     "preview",
-                    "activity_counts",
+                    "score",
                 )
                 .annotate(
                     user_reaction=Coalesce(
@@ -253,6 +262,10 @@ class PostReactionsView(APIView):
                 preview_count_obj = PreviewCount.objects.get(post=post, emoji=emoji)
                 preview_count_obj.count += 1
                 preview_count_obj.save()
+
+                reaction_ranking = PostScore.objects.get(post=post)
+                reaction_ranking.likes_count += 1
+                reaction_ranking.save()
 
                 if post.user.username != user.username:
                     service = NotificationService()
@@ -363,6 +376,10 @@ class PostReactionsView(APIView):
                     reaction_id=reaction.reaction_id,
                 )
 
+                reaction_ranking = PostScore.objects.get(post=post)
+                reaction_ranking.likes_count -= 1
+                reaction_ranking.save()
+
                 emoji = reaction.emoji
                 reaction.delete()
 
@@ -401,9 +418,11 @@ class ActivityCountView(APIView):
             post_id = request.GET.get("post_id")
             count_type = request.GET.get("count_type")
             post = Post.objects.get(post_id=post_id)
-            query_set = ActivityCount.objects.filter(post=post, count_type=count_type)
+            # query_set = ActivityCount.objects.filter(post=post, count_type=count_type)
+            reaction_ranking = PostScore.objects.get(post=post)
 
-            serialized_result = ActivityCountSerializer(query_set, many=True)
+            # serialized_result = ActivityCountSerializer(query_set, many=True)
+            serialized_result = PostScoreSerializer(reaction_ranking, many=True)
             return Response(serialized_result.data, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"error": str(e)}, status=500)
@@ -483,11 +502,15 @@ class CommentsView(APIView):
                         user=user,
                     )
 
-                    activity_count_obj = ActivityCount.objects.get(
-                        post=post, count_type="comment"
-                    )
-                    activity_count_obj.count += 1
-                    activity_count_obj.save()
+                    # activity_count_obj = ActivityCount.objects.get(
+                    #     post=post, count_type="comment"
+                    # )
+                    # activity_count_obj.count += 1
+                    # activity_count_obj.save()
+
+                    reaction_ranking = PostScore.objects.get(post=post)
+                    reaction_ranking.comments_count += 1
+                    reaction_ranking.save()
 
                     truncated_comment = (
                         (parent_comment.text[:30] + "...")
@@ -537,11 +560,15 @@ class CommentsView(APIView):
                         user=user,
                     )
 
-                    activity_count_obj = ActivityCount.objects.get(
-                        post=post, count_type="comment"
-                    )
-                    activity_count_obj.count += 1
-                    activity_count_obj.save()
+                    # activity_count_obj = ActivityCount.objects.get(
+                    #     post=post, count_type="comment"
+                    # )
+                    # activity_count_obj.count += 1
+                    # activity_count_obj.save()
+
+                    reaction_ranking = PostScore.objects.get(post=post)
+                    reaction_ranking.comments_count += 1
+                    reaction_ranking.save()
 
                     if post.user != user:
                         service = NotificationService()

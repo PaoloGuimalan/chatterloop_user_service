@@ -43,8 +43,6 @@ for post_data in posts:
         * recent_update_boost
     )
 
-    print(ranking_score)
-
     PostScore.objects.update_or_create(
         post=post_data,
         defaults={
