@@ -165,3 +165,14 @@ class ActivityCount(models.Model):
 
     class Meta:
         unique_together = ("post", "count_type")
+
+
+class PostScore(models.Model):
+    post = models.OneToOneField(Post, on_delete=models.CASCADE, related_name="score")
+    affinity_score = models.FloatField(default=1.0)
+    content_type_weight = models.FloatField(default=1.0)
+    recent_update_boost = models.FloatField(default=1.0)
+    likes_count = models.PositiveIntegerField(default=0)
+    comments_count = models.PositiveIntegerField(default=0)
+    shares_count = models.PositiveIntegerField(default=0)
+    ranking_score = models.FloatField(default=0.0, db_index=True)

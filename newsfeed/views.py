@@ -3,7 +3,16 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from django.db.models import Q, Exists, OuterRef, Subquery, Value
+from django.db.models import (
+    Q,
+    Exists,
+    OuterRef,
+    Subquery,
+    Value,
+    Case,
+    When,
+    IntegerField,
+)
 from django.db.models.functions import Coalesce
 from django.db import transaction
 from .models import Post, Emoji, Reaction, PreviewCount, Comment, ActivityCount
@@ -44,6 +53,29 @@ class NewsfeedView(APIView):
                 post=OuterRef("pk"), user=user
             ).values("emoji_id")[:1]
 
+            # queryset = (
+            #     Post.objects.prefetch_related(
+            #         "tagging",
+            #         "privacy_users",
+            #         "references",
+            #         "map_info",
+            #         "preview",
+            #         "activity_counts",
+            #     )
+            #     .filter(
+            #         Q(user_id__in=connections_list)
+            #         | Q(tagging__user_id__in=connections_list)
+            #         | Q(privacy_status="public"),
+            #         ~Q(user=user),
+            #     )
+            #     .annotate(
+            #         user_reaction=Coalesce(
+            #             Subquery(user_reaction_subquery), Value(None)
+            #         )
+            #     )
+            #     .order_by("-date_posted")
+            # )
+
             queryset = (
                 Post.objects.prefetch_related(
                     "tagging",
@@ -51,20 +83,43 @@ class NewsfeedView(APIView):
                     "references",
                     "map_info",
                     "preview",
-                    "activity_counts",
+                    "score",
+                )
+                .annotate(
+                    is_friend=Case(
+                        When(user_id__in=connections_list, then=Value(1)),
+                        default=Value(0),
+                        output_field=IntegerField(),
+                    ),
+                    is_friend_tagged=Case(
+                        When(tagging__user_id__in=connections_list, then=Value(1)),
+                        default=Value(0),
+                        output_field=IntegerField(),
+                    ),
+                    is_owner=Case(
+                        When(user=user, then=Value(1)),
+                        default=Value(0),
+                        output_field=IntegerField(),
+                    ),
                 )
                 .filter(
-                    Q(user_id__in=connections_list)
-                    | Q(tagging__user_id__in=connections_list)
-                    | Q(privacy_status="public"),
-                    ~Q(user=user),
+                    # Q(user_id__in=connections_list)
+                    # | Q(tagging__user_id__in=connections_list)
+                    # | Q(privacy_status="public"),
+                    # ~Q(user=user),
+                    ~Q(is_owner=1)
+                    | Q(score__ranking_score__gt=0.1)
                 )
                 .annotate(
                     user_reaction=Coalesce(
                         Subquery(user_reaction_subquery), Value(None)
                     )
                 )
-                .order_by("-date_posted")
+                .order_by(
+                    "-is_friend",  # friend posts first
+                    "is_owner",  # own posts last
+                    "-score__ranking_score",  # then by rank score
+                )
             )
 
             paginator = self.pagination_class()

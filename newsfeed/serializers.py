@@ -10,6 +10,7 @@ from .models import (
     Comment,
     ActivityCount,
     CountType,
+    PostScore,
 )
 from user.serializers import AccountPreviewSerializer
 
@@ -58,6 +59,12 @@ class ActivityCountSerializer(serializers.ModelSerializer):
         fields = ["count_type", "count"]
 
 
+class PostScoreSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PostScore
+        fields = "__all__"
+
+
 class PostSerializer(serializers.ModelSerializer):
     tagging = PostTagSerializer(many=True, read_only=True)
     privacy_users = PostPrivacySerializer(many=True, read_only=True)
@@ -66,7 +73,8 @@ class PostSerializer(serializers.ModelSerializer):
     preview = PreviewCountSerializer(read_only=True, many=True)
     user_reaction = serializers.CharField()
     user = AccountPreviewSerializer(read_only=True)
-    activity_counts = ActivityCountSerializer(read_only=True, many=True)
+    # activity_counts = ActivityCountSerializer(read_only=True, many=True)
+    score = PostScoreSerializer(read_only=True)
 
     class Meta:
         model = Post
