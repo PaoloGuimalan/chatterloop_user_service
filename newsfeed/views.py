@@ -117,7 +117,7 @@ class NewsfeedView(APIView):
                     # | Q(privacy_status="public"),
                     # ~Q(user=user),
                     ~Q(is_owner=1)
-                    | Q(score__ranking_score__gt=0.1)
+                    | Q(score__ranking_score__gt=0.0)
                 )
                 .annotate(
                     user_reaction=Coalesce(

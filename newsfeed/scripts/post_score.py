@@ -22,7 +22,7 @@ for post_data in posts:
             else:
                 content_t_m += 1.0
     else:
-        content_t_m += 0.0
+        content_t_m += 0.5
 
     final_content_score = content_t_m / (len(references) + 1)
 
