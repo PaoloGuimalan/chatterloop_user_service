@@ -96,12 +96,12 @@ class NewsfeedView(APIView):
                 )
                 .annotate(
                     is_friend=Case(
-                        When(user_id__in=connections_list, then=Value(1)),
+                        When(user_id__in=connections_list, then=Value(0.8)),
                         default=Value(0),
                         output_field=IntegerField(),
                     ),
                     is_friend_tagged=Case(
-                        When(tagging__user_id__in=connections_list, then=Value(1)),
+                        When(tagging__user_id__in=connections_list, then=Value(0.5)),
                         default=Value(0),
                         output_field=IntegerField(),
                     ),
@@ -124,8 +124,17 @@ class NewsfeedView(APIView):
                         Subquery(user_reaction_subquery), Value(None)
                     )
                 )
+                .annotate(
+                    reaction_anchor=Case(
+                        When(user_reaction=None, then=Value(1)),
+                        default=Value(0),
+                        output_field=IntegerField(),
+                    ),
+                )
                 .order_by(
                     "-is_friend",  # friend posts first
+                    "-reaction_anchor",
+                    "-is_friend_tagged",
                     "is_owner",  # own posts last
                     "-score__ranking_score",  # then by rank score
                 )
