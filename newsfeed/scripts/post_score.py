@@ -34,7 +34,11 @@ for post_data in posts:
     likes_count = reactions_total
     shares_count = share.count
 
-    weighted_engagement = comments_count * 3 + likes_count * 1 + shares_count * 5
+    base_engagement = 1
+
+    weighted_engagement = (
+        comments_count * 3 + likes_count * 1 + shares_count * 5 + base_engagement
+    )
     decay_factor = (age_hours + 1) ** 0.5
     ranking_score = (
         (weighted_engagement / decay_factor)
