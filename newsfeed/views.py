@@ -40,6 +40,7 @@ from user.services.mongohelpers import NotificationService
 from user_service.services.redis import RedisPubSubClient
 from django.utils.timezone import now
 from datetime import datetime
+from .helpers.query_functions import update_ranking_score
 import uuid
 
 
@@ -276,6 +277,10 @@ class PostReactionsView(APIView):
                 reaction_ranking.likes_count += 1
                 reaction_ranking.save()
 
+                update_ranking_score(
+                    post_id=post_id, update_type="react", is_decrease=False
+                )
+
                 if post.user.username != user.username:
                     service = NotificationService()
                     service.add_notification(
@@ -388,6 +393,10 @@ class PostReactionsView(APIView):
                 reaction_ranking = PostScore.objects.get(post=post)
                 reaction_ranking.likes_count -= 1
                 reaction_ranking.save()
+
+                update_ranking_score(
+                    post_id=post_id, update_type="react", is_decrease=True
+                )
 
                 emoji = reaction.emoji
                 reaction.delete()
@@ -521,6 +530,10 @@ class CommentsView(APIView):
                     reaction_ranking.comments_count += 1
                     reaction_ranking.save()
 
+                    update_ranking_score(
+                        post_id=post_id, update_type="comment", is_decrease=False
+                    )
+
                     truncated_comment = (
                         (parent_comment.text[:30] + "...")
                         if len(parent_comment.text) > 30
@@ -578,6 +591,10 @@ class CommentsView(APIView):
                     reaction_ranking = PostScore.objects.get(post=post)
                     reaction_ranking.comments_count += 1
                     reaction_ranking.save()
+
+                    update_ranking_score(
+                        post_id=post_id, update_type="comment", is_decrease=False
+                    )
 
                     if post.user != user:
                         service = NotificationService()
