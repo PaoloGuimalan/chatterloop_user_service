@@ -31,6 +31,8 @@ class Realm(models.Model):
     )
     name = models.CharField(max_length=150, null=False)
     profile = models.CharField(default="N/A")
+    cover_photo = models.CharField(blank=True, null=True, default=None)
+    description = models.TextField(blank=True, null=True, default=None)
     created_by = models.ForeignKey(
         Account,
         null=False,
