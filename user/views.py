@@ -76,8 +76,10 @@ class UserAuthentication(APIView):
 
         is_connection_handshaked = None
         is_user_connection_initiator = None
+        connection_id = None
 
         if connection_exists:
+            connection_id = connection_exists[0].connection_id
             is_connection_handshaked = connection_exists[0].status
             is_user_connection_initiator = (
                 True if connection_exists[0].action_by.username == username else False
@@ -112,6 +114,7 @@ class UserAuthentication(APIView):
                     "time": time_str,
                 },
                 "connection": {
+                    "connection_id": connection_id,
                     "is_connection_present": is_connection_present,
                     "is_connection_handshaked": is_connection_handshaked,
                     "is_user_connection_initiator": is_user_connection_initiator,
