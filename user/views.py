@@ -71,7 +71,7 @@ class UserAuthentication(APIView):
         is_connection_present = (
             None
             if username == self.request.user.username
-            else True if len(connection_exists) >= 0 else False
+            else True if len(connection_exists) >= 1 else False
         )
 
         is_connection_handshaked = None
