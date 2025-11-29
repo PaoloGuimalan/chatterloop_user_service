@@ -57,6 +57,32 @@ class UserAuthentication(APIView):
     def get(self, request, username=None):
         user = get_object_or_404(Account, username=username)
 
+        connection_exists = Connection.objects.filter(
+            Q(action_by=user, involved_user=self.request.user)
+            | Q(action_by=self.request.user, involved_user=user),
+            ~Q(action_by=F("involved_user")),
+            Q(action_by__is_active=True),
+            Q(action_by__is_verified=True),
+            Q(involved_user__is_active=True),
+            Q(involved_user__is_verified=True),
+            # status=True,
+        ).distinct("connection_id")
+
+        is_connection_present = (
+            None
+            if username == self.request.user.username
+            else True if len(connection_exists) >= 0 else False
+        )
+
+        is_connection_handshaked = None
+        is_user_connection_initiator = None
+
+        if connection_exists:
+            is_connection_handshaked = connection_exists[0].status
+            is_user_connection_initiator = (
+                True if connection_exists[0].action_by.username == username else False
+            )
+
         # Format birthdate parts
         birthdate = user.birthdate
         birth_month = birthdate.strftime("%B")  # Full month name
@@ -84,6 +110,11 @@ class UserAuthentication(APIView):
                 "dateCreated": {
                     "date": date_str,
                     "time": time_str,
+                },
+                "connection": {
+                    "is_connection_present": is_connection_present,
+                    "is_connection_handshaked": is_connection_handshaked,
+                    "is_user_connection_initiator": is_user_connection_initiator,
                 },
                 "id": str(user.id),
                 "userID": user.username,
