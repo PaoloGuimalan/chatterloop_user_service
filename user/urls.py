@@ -20,6 +20,11 @@ urlpatterns = [
         views.UserAuthentication.as_view(),
         name="user-authentication",
     ),
+    path(
+        "tp_auth",
+        views.ThirdPartyAuthentication.as_view(),
+        name="user-tp-authentication",
+    ),
     re_path("me", views.UserAccountManagement.as_view(), name="user-management"),
     re_path("verification", views.CodeVerification.as_view(), name="user-verification"),
     re_path("contacts", views.UserContacts.as_view(), name="user-contacts"),

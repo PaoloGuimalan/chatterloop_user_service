@@ -73,6 +73,7 @@ INSTALLED_APPS = [
     "user",
     "community",
     "newsfeed",
+    "core",
 ]
 
 MIDDLEWARE = [

@@ -30,6 +30,7 @@ from django.utils.timezone import make_aware
 from django.utils.timezone import now
 from .ext_models.mongomodels import Message
 from .services.mongohelpers import NotificationService
+from core.models import TPAuthentication
 from .utils.bcrypt_tools import hash_password
 from .utils.generators import generate_unique_username
 from .utils.external_requests import send_email_verification_code
@@ -186,6 +187,61 @@ class UserAuthentication(APIView):
                     },
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
+        except Exception as e:
+            return Response(
+                {"status": False, "message": f"{e}"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+
+class ThirdPartyAuthentication(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        try:
+            token = request.data.get("token")
+
+            decoded_token = JWTTools.decoder(token, options={"verify_signature": False})
+
+            if decoded_token:
+                authorization_token = decoded_token["azp"]
+
+                tp_check_query = TPAuthentication.objects.get(
+                    service_id=authorization_token
+                )
+
+                if tp_check_query:
+                    email = decoded_token["email"]
+                    user = Account.objects.get(email=email)
+
+                    if user:
+                        serialized_user = AccountSerializer(user)
+
+                        return Response(
+                            {
+                                "status": True,
+                                "result": {
+                                    "usertoken": jwt.encoder(serialized_user.data),
+                                    "authtoken": jwt.encoder(
+                                        {
+                                            "userID": user.username,
+                                            "username": user.username,
+                                        }
+                                    ),
+                                },
+                            },
+                            status=status.HTTP_200_OK,
+                        )
+                    else:
+                        return Response(
+                            {"status": False, "message": f"User not found"},
+                            status=status.HTTP_401_UNAUTHORIZED,
+                        )
+
+            return Response(
+                {"status": False, "message": f"Cannot proceed with login"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
         except Exception as e:
             return Response(
                 {"status": False, "message": f"{e}"},
