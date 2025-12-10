@@ -240,11 +240,18 @@ class ThirdPartyAuthentication(APIView):
 
                         first_name = decoded_token["given_name"]
                         middle_name = "N/A"
-                        last_name = decoded_token["family_name"]
+                        last_name = decoded_token.get("family_name", None)
                         email = decoded_token["email"]
+
+                        if last_name is None:
+                            split_name = first_name.split(" ")
+
+                            first_name = split_name[0]
+                            last_name = split_name[1]
 
                         create_user_query = create_user(
                             first_name,
+                            middle_name,
                             last_name,
                             email,
                             email,
@@ -252,7 +259,6 @@ class ThirdPartyAuthentication(APIView):
                             None,
                             None,
                             None,
-                            middle_name,
                             "google",
                         )
 
@@ -285,6 +291,7 @@ class ThirdPartyAuthentication(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         except Exception as e:
+            print(str(e))
             return Response(
                 {"status": False, "message": f"{e}"},
                 status=status.HTTP_401_UNAUTHORIZED,

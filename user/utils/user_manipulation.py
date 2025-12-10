@@ -8,6 +8,7 @@ from ..utils.generators import generate_unique_username
 
 def create_user(
     first_name,
+    middle_name,
     last_name,
     email,
     raw_password,
@@ -15,7 +16,6 @@ def create_user(
     birthmonth,
     birthyear,
     gender,
-    middle_name,
     join_type,
 ):
     try:
@@ -25,6 +25,7 @@ def create_user(
             middle_name = middle_name.strip()
 
         if Account.objects.filter(email=email).exists():
+            print("Email already in use")
             raise ValueError("Email already in use")
 
         username = generate_unique_username(first_name)
@@ -58,4 +59,5 @@ def create_user(
 
         return new_user
     except Exception as ex:
+        print(str(ex))
         raise ValueError(str(ex))
