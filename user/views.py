@@ -89,9 +89,11 @@ class UserAuthentication(APIView):
 
         # Format birthdate parts
         birthdate = user.birthdate
-        birth_month = birthdate.strftime("%B")  # Full month name
-        birth_day = str(birthdate.day)
-        birth_year = str(birthdate.year)
+
+        if birthdate:
+            birth_month = birthdate.strftime("%B")  # Full month name
+            birth_day = str(birthdate.day)
+            birth_year = str(birthdate.year)
 
         # Format dateCreated parts (local timestamp)
         date_created = localtime(user.date_created)
@@ -106,11 +108,15 @@ class UserAuthentication(APIView):
                     "middleName": user.middle_name,
                     "lastName": user.last_name,
                 },
-                "birthdate": {
-                    "month": birth_month,
-                    "day": birth_day,
-                    "year": birth_year,
-                },
+                "birthdate": (
+                    {
+                        "month": birth_month,
+                        "day": birth_day,
+                        "year": birth_year,
+                    }
+                    if birthdate
+                    else None
+                ),
                 "dateCreated": {
                     "date": date_str,
                     "time": time_str,
@@ -124,7 +130,9 @@ class UserAuthentication(APIView):
                 "id": str(user.id),
                 "userID": user.username,
                 "profile": user.profile,
-                "gender": user.gender.title(),  # Capitalize first letter, e.g. "Male"
+                "gender": (
+                    user.gender.title() if user.gender else None
+                ),  # Capitalize first letter, e.g. "Male"
                 "email": user.email,
                 "isActivated": user.is_active,
                 "isVerified": user.is_verified,
