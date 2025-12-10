@@ -266,8 +266,8 @@ class ThirdPartyAuthentication(APIView):
                                         "usertoken": jwt.encoder(serialized_user.data),
                                         "authtoken": jwt.encoder(
                                             {
-                                                "userID": user.username,
-                                                "username": user.username,
+                                                "userID": create_user_query.username,
+                                                "username": create_user_query.username,
                                             }
                                         ),
                                     },
