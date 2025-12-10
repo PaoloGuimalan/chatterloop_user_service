@@ -29,9 +29,11 @@ class Account(models.Model):
     first_name = models.CharField(max_length=150, null=False)
     middle_name = models.CharField(max_length=150, default="N/A")
     last_name = models.CharField(max_length=150, null=False)
-    birthdate = models.DateTimeField(null=False)
+    birthdate = models.DateTimeField(null=True, blank=True)
     profile = models.CharField(default="none")
-    gender = models.CharField(max_length=150, null=False, choices=GENDER_CHOICES)
+    gender = models.CharField(
+        max_length=150, null=True, blank=True, choices=GENDER_CHOICES
+    )
     email = models.EmailField(unique=True, validators=[EmailValidator()])
     password = models.CharField(max_length=400, null=False, default=uuid.uuid4)
     date_created = models.DateTimeField(default=now)

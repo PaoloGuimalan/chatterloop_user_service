@@ -36,6 +36,7 @@ from .utils.generators import generate_unique_username
 from .utils.external_requests import send_email_verification_code
 from django.shortcuts import get_object_or_404
 from django.utils.timezone import localtime
+from .utils.user_manipulation import create_user
 import bcrypt
 
 jwt = JWTTools
@@ -147,7 +148,8 @@ class UserAuthentication(APIView):
                 )
 
             user = Account.objects.get(
-                Q(email=email_username) | Q(username=email_username)
+                Q(Q(email=email_username) | Q(username=email_username)),
+                join_type="system",
             )
 
             if user:
@@ -233,8 +235,47 @@ class ThirdPartyAuthentication(APIView):
                             status=status.HTTP_200_OK,
                         )
                     else:
+                        # Automatic registration
+
+                        first_name = decoded_token["given_name"]
+                        middle_name = "N/A"
+                        last_name = decoded_token["family_name"]
+                        email = decoded_token["email"]
+
+                        create_user_query = create_user(
+                            first_name,
+                            last_name,
+                            email,
+                            email,
+                            None,
+                            None,
+                            None,
+                            None,
+                            middle_name,
+                            "google",
+                        )
+
+                        if create_user_query:
+                            serialized_user = AccountSerializer(create_user_query)
+
+                            return Response(
+                                {
+                                    "status": True,
+                                    "result": {
+                                        "usertoken": jwt.encoder(serialized_user.data),
+                                        "authtoken": jwt.encoder(
+                                            {
+                                                "userID": user.username,
+                                                "username": user.username,
+                                            }
+                                        ),
+                                    },
+                                },
+                                status=status.HTTP_200_OK,
+                            )
+
                         return Response(
-                            {"status": False, "message": f"User not found"},
+                            {"status": False, "message": f"User cannot be logged in"},
                             status=status.HTTP_401_UNAUTHORIZED,
                         )
 
