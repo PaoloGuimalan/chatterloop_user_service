@@ -41,6 +41,7 @@ class Account(models.Model):
     is_verified = models.BooleanField(default=False)
     is_default_user = models.BooleanField(default=False)
     is_superuser = models.BooleanField(default=False)
+    join_type = models.CharField(default="system", max_length=150, null=False)
 
     def is_authenticated(self):
         return True
