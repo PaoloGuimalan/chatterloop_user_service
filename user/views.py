@@ -214,9 +214,10 @@ class ThirdPartyAuthentication(APIView):
 
                 if tp_check_query:
                     email = decoded_token["email"]
-                    user = Account.objects.get(email=email)
+                    user = Account.objects.filter(email=email)
 
-                    if user:
+                    if len(user) > 0:
+                        user = user[0]
                         serialized_user = AccountSerializer(user)
 
                         return Response(
@@ -274,10 +275,10 @@ class ThirdPartyAuthentication(APIView):
                                 status=status.HTTP_200_OK,
                             )
 
-                        return Response(
-                            {"status": False, "message": f"User cannot be logged in"},
-                            status=status.HTTP_401_UNAUTHORIZED,
-                        )
+                return Response(
+                    {"status": False, "message": f"User cannot be logged in"},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
 
             return Response(
                 {"status": False, "message": f"Cannot proceed with login"},
