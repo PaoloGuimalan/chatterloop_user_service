@@ -26,6 +26,7 @@ urlpatterns = [
             [
                 path("user/", include("user.urls", namespace="api-user")),
                 path("newsfeed/", include("newsfeed.urls", namespace="api-newsfeed")),
+                path("diary/", include("diary.urls", namespace="api-newsfeed")),
             ]
         ),
     ),
