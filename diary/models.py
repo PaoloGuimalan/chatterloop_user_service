@@ -24,3 +24,17 @@ class Attachment(models.Model):
     entry = models.ForeignKey(Entry, on_delete=models.CASCADE, related_name="attachments")
     url = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
+
+class MapView(models.Model):
+    map_view_id = models.CharField(
+        max_length=150, default=uuid.uuid4, unique=True, primary_key=True
+    )
+    entry = models.OneToOneField(
+        Entry,
+        on_delete=models.CASCADE,
+        related_name="entry_map_info",
+    )
+    status = models.BooleanField(default=False)
+    is_stationary = models.BooleanField(default=True)
+    latitude = models.FloatField(null=True, blank=True, default=None)
+    longitude = models.FloatField(null=True, blank=True, default=None)
