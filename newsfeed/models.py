@@ -95,6 +95,8 @@ class MapView(models.Model):
     )
     status = models.BooleanField(default=False)
     is_stationary = models.BooleanField(default=True)
+    latitude = models.FloatField(null=True, blank=True, default=None)
+    longitude = models.FloatField(null=True, blank=True, default=None)
 
 
 class Emoji(models.Model):
