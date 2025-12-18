@@ -10,5 +10,9 @@ app_name = "diary"
 
 urlpatterns = [
     re_path("", include((router.urls, "diary-routes"))),
-    re_path("total", views.DiaryTotalView.as_view(), name="newsfeed-default"),
+    path(
+        "total/<str:username>/", 
+        views.DiaryTotalView.as_view(), 
+        name="newsfeed-default"
+    ),
 ]

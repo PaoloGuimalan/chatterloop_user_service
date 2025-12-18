@@ -6,6 +6,7 @@ from django.db.models import Count
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.pagination import PageNumberPagination
 from .models import Entry, Tag
+from user.models import Account
 from .serializers import EntrySerializer, TagSerializer
 
 class Pagination(PageNumberPagination):
@@ -16,12 +17,14 @@ class DiaryTotalView(APIView):
     permission_classes = [IsAuthenticated]
     pagination_class = Pagination
 
-    def get(self, request):
+    def get(self, request, username):
         user = self.request.user
 
         try:
+            current_user = Account.objects.get(username=username)
+
             limit_tags = 3
-            query_set = Entry.objects.filter(account=user).order_by("-entry_date", "-created_at")
+            query_set = Entry.objects.filter(account=current_user).order_by("-entry_date", "-created_at")
 
             serialized_data = EntrySerializer(query_set, many=True).data
 
@@ -40,6 +43,7 @@ class DiaryTotalView(APIView):
                 latest_entry_date = lastest_entry["entry_date"]
 
             return Response({
+                "user": current_user.username,
                 "total_entries": query_set.count(),
                 "latest_entry": latest_entry_date,
                 "top_tags": serialized_tags
