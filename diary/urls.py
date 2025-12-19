@@ -13,6 +13,6 @@ urlpatterns = [
     path(
         "total/<str:username>/", 
         views.DiaryTotalView.as_view(), 
-        name="newsfeed-default"
+        name="diary-total"
     ),
 ]
