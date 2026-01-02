@@ -31,6 +31,7 @@ class Account(models.Model):
     last_name = models.CharField(max_length=150, null=False)
     birthdate = models.DateTimeField(null=True, blank=True)
     profile = models.CharField(default="none")
+    coverphoto = models.CharField(default="none")
     gender = models.CharField(
         max_length=150, null=True, blank=True, choices=GENDER_CHOICES
     )

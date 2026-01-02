@@ -13,6 +13,7 @@ class AccountSerializer(serializers.ModelSerializer):
             "last_name",
             "birthdate",
             "profile",
+            "coverphoto",
             "gender",
             "email",
             "date_created",

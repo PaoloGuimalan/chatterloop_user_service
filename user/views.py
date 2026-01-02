@@ -130,6 +130,7 @@ class UserAuthentication(APIView):
                 "id": str(user.id),
                 "userID": user.username,
                 "profile": user.profile,
+                "coverphoto": user.coverphoto,
                 "gender": (
                     user.gender.title() if user.gender else None
                 ),  # Capitalize first letter, e.g. "Male"
