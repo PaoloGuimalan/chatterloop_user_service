@@ -317,7 +317,8 @@ class UserContacts(APIView):
             paginated_header = request.headers.get("paginated", "true")
 
             queryset = (
-                Connection.objects.filter(
+                Connection.objects.select_related("action_by", "involved_user")
+                .filter(
                     Q(Q(action_by=user) | Q(involved_user=user)),
                     ~Q(action_by=F("involved_user")),
                     Q(action_by__is_active=True),

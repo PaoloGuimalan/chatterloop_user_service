@@ -30,6 +30,7 @@ DEBUG = os.getenv("DEBUG")
 SECRET_KEY = os.getenv("SECRET_KEY")
 
 GUNICORN_MAX_REQUESTS = os.getenv("GUNICORN_MAX_REQUESTS")
+SILKY_PYTHON_PROFILER = os.getenv("SILKY_PYTHON_PROFILER")
 
 REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = os.getenv("REDIS_PORT")
@@ -77,6 +78,8 @@ INSTALLED_APPS = [
     "newsfeed",
     "core",
     "diary",
+    # Silk
+    "silk",
 ]
 
 MIDDLEWARE = [
@@ -90,6 +93,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "silk.middleware.SilkyMiddleware",
 ]
 
 CORS_ALLOWED_ORIGINS = []

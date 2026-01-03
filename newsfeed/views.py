@@ -63,37 +63,14 @@ class NewsfeedView(APIView):
                 post=OuterRef("pk"), user=user
             ).values("emoji_id")[:1]
 
-            # queryset = (
-            #     Post.objects.prefetch_related(
-            #         "tagging",
-            #         "privacy_users",
-            #         "references",
-            #         "map_info",
-            #         "preview",
-            #         "activity_counts",
-            #     )
-            #     .filter(
-            #         Q(user_id__in=connections_list)
-            #         | Q(tagging__user_id__in=connections_list)
-            #         | Q(privacy_status="public"),
-            #         ~Q(user=user),
-            #     )
-            #     .annotate(
-            #         user_reaction=Coalesce(
-            #             Subquery(user_reaction_subquery), Value(None)
-            #         )
-            #     )
-            #     .order_by("-date_posted")
-            # )
-
             queryset = (
-                Post.objects.prefetch_related(
+                Post.objects.select_related("user", "score")
+                .prefetch_related(
                     "tagging",
                     "privacy_users",
                     "references",
                     "map_info",
                     "preview",
-                    "score",
                 )
                 .annotate(
                     is_friend=Case(
@@ -166,13 +143,13 @@ class NewsfeedProfileView(APIView):
             ).values("emoji_id")[:1]
 
             queryset = (
-                Post.objects.prefetch_related(
+                Post.objects.select_related("user", "score")
+                .prefetch_related(
                     "tagging",
                     "privacy_users",
                     "references",
                     "map_info",
                     "preview",
-                    "score",
                 )
                 .filter(
                     Q(user__username=username) | Q(tagging__user__username=username)
@@ -209,13 +186,13 @@ class NewsfeedPostPreviewView(APIView):
             ).values("emoji_id")[:1]
 
             queryset = (
-                Post.objects.prefetch_related(
+                Post.objects.select_related("user", "score")
+                .prefetch_related(
                     "tagging",
                     "privacy_users",
                     "references",
                     "map_info",
                     "preview",
-                    "score",
                 )
                 .annotate(
                     user_reaction=Coalesce(
