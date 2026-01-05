@@ -2,11 +2,12 @@ from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from django.db.models import Count
+from django.db.models import Count, Q
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.pagination import PageNumberPagination
 from .models import Entry, Tag
 from user.models import Account
+from django.shortcuts import get_object_or_404
 from .serializers import EntrySerializer, TagSerializer
 
 class Pagination(PageNumberPagination):
@@ -48,5 +49,44 @@ class DiaryTotalView(APIView):
                 "latest_entry": latest_entry_date,
                 "top_tags": serialized_tags
             }, status=status.HTTP_200_OK)
+        except Exception as ex:
+            return Response(str(ex), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+class DiaryListView(APIView):
+    permission_classes = [IsAuthenticated]
+    pagination_class = Pagination
+
+    def get(self, request):
+        user = self.request.user
+
+        try:
+            queryset = Entry.objects.select_related("entry_map_info").prefetch_related("attachments").filter(account=user)
+
+            paginator = self.pagination_class()
+            paginated_queryset = paginator.paginate_queryset(
+                queryset, request, view=self
+            )
+
+            serialized_result = EntrySerializer(paginated_queryset, many=True)
+            data = paginator.get_paginated_response(serialized_result.data)
+
+            return data
+        
+        except Exception as ex:
+            return Response(str(ex), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+class DiaryCRUDView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, entry_id):
+        user = self.request.user
+
+        try:
+            queryset = Entry.objects.select_related("entry_map_info").prefetch_related("attachments")
+            final_query = get_object_or_404(queryset, Q(account=user) | Q(is_private=False), id=entry_id)
+
+            serialized_response = EntrySerializer(final_query)
+
+            return Response(serialized_response.data, status=status.HTTP_200_OK)
         except Exception as ex:
             return Response(str(ex), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
