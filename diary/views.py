@@ -60,7 +60,7 @@ class DiaryListView(APIView):
         user = self.request.user
 
         try:
-            queryset = Entry.objects.select_related("entry_map_info").prefetch_related("attachments").filter(account=user)
+            queryset = Entry.objects.select_related("entry_map_info").prefetch_related("attachments").filter(account=user).order_by("-created_at")
 
             paginator = self.pagination_class()
             paginated_queryset = paginator.paginate_queryset(

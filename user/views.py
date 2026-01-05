@@ -327,8 +327,9 @@ class UserContacts(APIView):
                     Q(involved_user__is_verified=True),
                     status=True,
                 )
-                .distinct("connection_id")
-                .order_by("connection_id", "-action_date")
+                # .distinct("connection_id")
+                # .order_by("connection_id", "-action_date")
+                .order_by("-action_date", "connection_id")
             )
 
             if paginated_header == "true":
