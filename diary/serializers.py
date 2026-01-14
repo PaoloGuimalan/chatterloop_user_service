@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Tag, Entry, Attachment, MapView
+from .models import Tag, Entry, Attachment, MapView, Mood
 
 
 class TagSerializer(serializers.ModelSerializer):
@@ -7,6 +7,12 @@ class TagSerializer(serializers.ModelSerializer):
         model = Tag
         fields = ["id", "name"]
         read_only_fields = ["id"]
+
+
+class MoodSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Mood
+        fields = "__all__"
 
 
 class AttachmentSerializer(serializers.ModelSerializer):
@@ -51,7 +57,7 @@ class EntrySerializer(serializers.ModelSerializer):
             "entry_date",
             "mood",
             "is_private",
-            "tags",         # write-only list of strings
+            "tags",  # write-only list of strings
             "tag_objects",  # read-only detailed tags
             "attachments",
             "entry_map_info",
