@@ -2,8 +2,15 @@ from django.db import models
 from user.models import Account
 import uuid
 
+
 class Tag(models.Model):
     name = models.CharField(max_length=50, unique=True)
+
+
+class Mood(models.Model):
+    name = models.CharField(max_length=50, unique=True)
+    emoji = models.CharField()
+
 
 class Entry(models.Model):
 
@@ -12,18 +19,22 @@ class Entry(models.Model):
     title = models.CharField(max_length=255, blank=True)
     content = models.TextField()
     entry_date = models.DateField()
-    mood = models.CharField(max_length=20, blank=True)  # or choices/int
+    mood = models.ForeignKey(Mood, null=False, on_delete=models.DO_NOTHING)
     is_private = models.BooleanField(default=True)
     tags = models.ManyToManyField(Tag, blank=True, related_name="entries")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+
 class Attachment(models.Model):
 
     id = models.UUIDField(default=uuid.uuid4, primary_key=True, unique=True)
-    entry = models.ForeignKey(Entry, on_delete=models.CASCADE, related_name="attachments")
+    entry = models.ForeignKey(
+        Entry, on_delete=models.CASCADE, related_name="attachments"
+    )
     url = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
+
 
 class MapView(models.Model):
     map_view_id = models.CharField(
