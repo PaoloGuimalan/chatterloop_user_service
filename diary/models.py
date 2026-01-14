@@ -19,7 +19,7 @@ class Entry(models.Model):
     title = models.CharField(max_length=255, blank=True)
     content = models.TextField()
     entry_date = models.DateField()
-    mood = models.ForeignKey(Mood, null=False, on_delete=models.DO_NOTHING)
+    mood = models.ForeignKey(Mood, null=True, blank=True, on_delete=models.DO_NOTHING)
     is_private = models.BooleanField(default=True)
     tags = models.ManyToManyField(Tag, blank=True, related_name="entries")
     created_at = models.DateTimeField(auto_now_add=True)
