@@ -96,7 +96,7 @@ class MoodListView(APIView):
         user = self.request.user
 
         try:
-            queryset = Mood.objects.all()
+            queryset = Mood.objects.all().order_by("id")
 
             paginator = self.pagination_class()
             paginated_queryset = paginator.paginate_queryset(
@@ -106,6 +106,54 @@ class MoodListView(APIView):
             serialized_result = MoodSerializer(paginated_queryset, many=True)
             data = paginator.get_paginated_response(serialized_result.data)
 
+            return data
+
+        except Exception as ex:
+            return Response(str(ex), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class TagListView(APIView):
+    permission_classes = [IsAuthenticated]
+    pagination_class = Pagination
+
+    def get(self, request):
+        user = self.request.user
+
+        try:
+            search = request.GET.get("search", None)
+            queryset = Tag.objects
+            check_tag_query = Tag.objects.filter(name=search)
+
+            print(search)
+
+            if search:
+                queryset = (
+                    queryset.filter(
+                        name__icontains=search,
+                    )
+                    .all()
+                    .order_by("id")
+                )
+            else:
+                queryset = queryset.all().order_by("id")
+
+            paginator = self.pagination_class()
+            paginated_queryset = paginator.paginate_queryset(
+                queryset, request, view=self
+            )
+
+            serialized_result = TagSerializer(paginated_queryset, many=True)
+            data = paginator.get_paginated_response(
+                {
+                    "list": serialized_result.data,
+                    "is_new": (
+                        False
+                        if search is None
+                        or (isinstance(search, str) and not search.strip())
+                        else not bool(len(check_tag_query))
+                    ),
+                }
+            )
             return data
 
         except Exception as ex:

@@ -14,4 +14,5 @@ urlpatterns = [
     path("entries/", views.DiaryListView.as_view(), name="diary-total"),
     path("total/<str:username>/", views.DiaryTotalView.as_view(), name="diary-total"),
     path("moods/", views.MoodListView.as_view(), name="diary-moods"),
+    path("tags/", views.TagListView.as_view(), name="diary-tags"),
 ]
