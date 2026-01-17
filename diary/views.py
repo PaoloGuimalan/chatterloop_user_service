@@ -3,12 +3,15 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.db.models import Count, Q
+from django.db import transaction
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.pagination import PageNumberPagination
 from .models import Entry, Tag, Mood
 from user.models import Account
 from django.shortcuts import get_object_or_404
 from .serializers import EntrySerializer, TagSerializer, MoodSerializer
+from django.utils import timezone
+from datetime import datetime
 
 
 class Pagination(PageNumberPagination):
@@ -34,7 +37,7 @@ class DiaryTotalView(APIView):
             serialized_data = EntrySerializer(query_set, many=True).data
 
             top_tags = (
-                Tag.objects.filter(entries__account=user)
+                Tag.objects.filter(entries__account=current_user)
                 .annotate(entry_count=Count("entries"))
                 .order_by("-entry_count")[:limit_tags]
             )
@@ -43,8 +46,8 @@ class DiaryTotalView(APIView):
 
             latest_entry_date = None
             if len(serialized_data) > 0:
-                lastest_entry = EntrySerializer(serialized_data[0]).data
-                latest_entry_date = lastest_entry["entry_date"]
+                lastest_entry = query_set.first()
+                latest_entry_date = lastest_entry.entry_date
 
             return Response(
                 {
@@ -124,8 +127,6 @@ class TagListView(APIView):
             queryset = Tag.objects
             check_tag_query = Tag.objects.filter(name=search)
 
-            print(search)
-
             if search:
                 queryset = (
                     queryset.filter(
@@ -177,5 +178,60 @@ class DiaryCRUDView(APIView):
             serialized_response = EntrySerializer(final_query)
 
             return Response(serialized_response.data, status=status.HTTP_200_OK)
+        except Exception as ex:
+            return Response(str(ex), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def post(self, request):
+        user = self.request.user
+
+        try:
+            title = request.data.get("title")
+            content = request.data.get("content")
+            mood = request.data.get("mood")
+            tags = request.data.get("tags")
+            entry_date = request.data.get("entry_date")
+            is_private = request.data.get("is_private")
+
+            date_part = entry_date.split(" ")[0]  # "2026-01-17"
+            dt = timezone.make_aware(datetime.strptime(date_part, "%Y-%m-%d"))
+            formatted_entry_date = dt.strftime("%Y-%m-%d")
+
+            if not (
+                title and title.strip() != "" and content and content.strip() != ""
+            ):
+                return Response(
+                    {"message": "Title or Content is empty or invalid"},
+                    status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                )
+
+            with transaction.atomic():
+                new_tags = [
+                    Tag(name=tag["name"]) for tag in tags if tag["is_new"] == True
+                ]
+                existing_tags = [tag["id"] for tag in tags if tag["is_new"] == False]
+
+                Tag.objects.bulk_create(new_tags, ignore_conflicts=True)
+                saved_tags = Tag.objects.filter(id__in=existing_tags)
+
+                combined_tags = list(
+                    list(Tag.objects.filter(name__in=[tag.name for tag in new_tags]))
+                ) + list(saved_tags)
+
+                entry_mood = Mood.objects.get(id=mood["id"])
+
+                queryset = Entry.objects.create(
+                    title=title,
+                    content=content,
+                    mood=entry_mood,
+                    entry_date=formatted_entry_date,
+                    is_private=is_private,
+                    account=user,
+                )
+
+                queryset.tags.set(combined_tags)
+
+                final_id = queryset.id
+
+                return Response({"entry_id": final_id}, status=status.HTTP_200_OK)
         except Exception as ex:
             return Response(str(ex), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
