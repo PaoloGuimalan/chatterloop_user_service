@@ -71,7 +71,7 @@ class DiaryListView(APIView):
 
         try:
             queryset = (
-                Entry.objects.select_related("entry_map_info")
+                Entry.objects.select_related("entry_map_info", "mood")
                 .prefetch_related("attachments")
                 .filter(account=user)
                 .order_by("-created_at")
@@ -217,7 +217,10 @@ class DiaryCRUDView(APIView):
                     list(Tag.objects.filter(name__in=[tag.name for tag in new_tags]))
                 ) + list(saved_tags)
 
-                entry_mood = Mood.objects.get(id=mood["id"])
+                entry_mood = None
+
+                if mood:
+                    entry_mood = Mood.objects.get(id=mood["id"])
 
                 queryset = Entry.objects.create(
                     title=title,

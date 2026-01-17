@@ -46,6 +46,7 @@ class EntrySerializer(serializers.ModelSerializer):
 
     attachments = AttachmentSerializer(many=True, read_only=True)
     entry_map_info = MapViewSerializer(read_only=True)
+    mood = MoodSerializer()
 
     class Meta:
         model = Entry
