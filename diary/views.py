@@ -235,6 +235,17 @@ class DiaryCRUDView(APIView):
 
                 final_id = queryset.id
 
-                return Response({"entry_id": final_id}, status=status.HTTP_200_OK)
+                created_entry_queryset = Entry.objects.select_related(
+                    "entry_map_info"
+                ).prefetch_related("attachments")
+                final_query = get_object_or_404(
+                    created_entry_queryset,
+                    Q(account=user) | Q(is_private=False),
+                    id=final_id,
+                )
+
+                serialized_response = EntrySerializer(final_query)
+
+                return Response(serialized_response.data, status=status.HTTP_200_OK)
         except Exception as ex:
             return Response(str(ex), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
