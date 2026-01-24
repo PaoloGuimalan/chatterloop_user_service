@@ -37,7 +37,7 @@ class NotificationService:
         new_now = datetime.now().astimezone()
 
         content = Content(headline=content_headline, details=content_details)
-        date = DateInfo(date=new_now, time=None)
+        date = DateInfo(date=str(new_now), time=None)
 
         notif = Notification(
             notificationID=notification_id,
