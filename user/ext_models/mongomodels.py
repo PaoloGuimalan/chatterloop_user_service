@@ -77,7 +77,7 @@ class Content(EmbeddedDocument):
 
 class DateInfo(EmbeddedDocument):
     date = StringField(required=True)
-    time = StringField(required=True)
+    time = StringField()
 
 
 class Notification(Document):

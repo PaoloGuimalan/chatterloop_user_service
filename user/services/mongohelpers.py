@@ -30,12 +30,14 @@ class NotificationService:
         while self.exists(notification_id):
             notification_id = f"NTF_{generate_random_digit(20)}"
 
-        now = datetime.now()
-        date_str = now.strftime("%m/%d/%Y")
-        time_str = now.strftime("%I:%M:%S %p").lower()  # e.g. 8:50:31 pm
+        # now = datetime.now()
+        # date_str = now.strftime("%m/%d/%Y")
+        # time_str = now.strftime("%I:%M:%S %p").lower()  # e.g. 8:50:31 pm
+
+        new_now = datetime.now().astimezone()
 
         content = Content(headline=content_headline, details=content_details)
-        date = DateInfo(date=date_str, time=time_str)
+        date = DateInfo(date=new_now, time=None)
 
         notif = Notification(
             notificationID=notification_id,
