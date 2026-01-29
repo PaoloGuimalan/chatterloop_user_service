@@ -4,9 +4,7 @@ FROM python:3.13-slim
 # Set working directory inside the container
 WORKDIR /app
 
-# Prevent Python from writing .pyc files & buffer stdout/stderr
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+COPY production.env .env
 
 # Install system dependencies and cleanup in one RUN (keep image small)
 RUN apt-get update && apt-get install -y \
