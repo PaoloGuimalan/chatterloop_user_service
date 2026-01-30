@@ -1,28 +1,49 @@
-# Use official Python base image with specific version
-FROM python:3.13-slim
+# --- Stage 1: Build Stage ---
+FROM python:3.13-slim AS builder
 
-# Set working directory inside the container
 WORKDIR /app
 
-COPY production.env .env
-
-# Install system dependencies and cleanup in one RUN (keep image small)
+# Install build dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy only requirements first to leverage Docker cache for dependencies
-COPY requirements.txt /app/
+# Build dependencies into wheels to save space in final image
+COPY requirements.txt .
+RUN pip wheel --no-cache-dir --no-deps --wheel-dir /app/wheels -r requirements.txt
 
-# Install Python dependencies
-RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Copy project files to container
-COPY . /app/
+# --- Stage 2: Final Runtime Stage ---
+FROM python:3.13-slim
 
-# Expose port 8000 for Django
+# Set recommended production environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PORT=8003
+
+WORKDIR /app
+
+# Install only essential runtime system libraries
+RUN apt-get update && apt-get install -y \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy wheels from builder and install them
+COPY --from=builder /app/wheels /wheels
+RUN pip install --no-cache /wheels/*
+
+# Copy the rest of your application code
+COPY . .
+COPY production.env .env
+
+# Security: Create and use a non-root user
+RUN useradd -m django_user && chown -R django_user /app
+USER django_user
+
+# Expose the production port
 EXPOSE 8003
 
-# Default command to run Django development server (change for production)
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8003"]
+# Run with Gunicorn instead of manage.py runserver
+# Workers formula: (2 * cores) + 1
+CMD ["gunicorn", "--bind", "0.0.0.0:8003", "--workers", "3", "--timeout", "120", "user_service.wsgi:application"]
