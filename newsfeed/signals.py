@@ -1,7 +1,7 @@
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, post_delete
 from django.utils.timezone import now
 from django.dispatch import receiver
-from .models import Emoji, Post, PreviewCount, ActivityCount, PostReference, PostScore
+from .models import Emoji, Post, PreviewCount, PostReference, PostScore, EngagementLog, Comment, Reaction
 import uuid
 
 
@@ -84,3 +84,40 @@ def create_preview_counts_for_new_post(sender, instance, created, **kwargs):
                 "ranking_score": ranking_score,
             },
         )
+
+@receiver(post_save, sender=Comment)
+def log_comment_action(sender, instance, created, **kwargs):
+    if created:
+        EngagementLog.objects.create(
+            post=instance.post,
+            user=instance.user,
+            action='commented',           # → reference_id = comment.comment_id
+            reference_id=instance.comment_id
+        )
+
+@receiver(post_delete, sender=Comment)
+def remove_comment_log(sender, instance, **kwargs):
+    # Remove related EngagementLog entry when comment deleted
+    EngagementLog.objects.filter(
+        reference_id=instance.comment_id,
+        action='commented'
+    ).delete()
+
+@receiver(post_save, sender=Reaction)
+def log_reaction_action(sender, instance, created, **kwargs):
+    if created:
+        EngagementLog.objects.create(
+            post=instance.post,
+            user=instance.user,
+            action='reacted',             # → reference_id = reaction.reaction_id  
+            reference_id=instance.reaction_id
+        )
+
+@receiver(post_delete, sender=Reaction)
+def remove_reaction_log(sender, instance, **kwargs):
+    EngagementLog.objects.filter(
+        reference_id=instance.reaction_id,
+        action='reacted'
+    ).delete()
+
+# Add Share Engagement Log to Server Express JS API

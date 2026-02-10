@@ -178,3 +178,27 @@ class PostScore(models.Model):
     comments_count = models.PositiveIntegerField(default=0)
     shares_count = models.PositiveIntegerField(default=0)
     ranking_score = models.FloatField(default=0.0, db_index=True)
+
+class EngagementLog(models.Model):
+    ACTION_CHOICES = [
+        ('viewed', 'Viewed'),
+        ('commented', 'Commented'),
+        ('reacted', 'Reacted'),
+        ('shared', 'Shared'),
+    ]
+    
+    log_id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name='engagement_logs')
+    user = models.ForeignKey(Account, on_delete=models.CASCADE)
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    reference_id = models.CharField(max_length=150, null=True, blank=True, db_index=True)  # Points to Comment/Reaction ID
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    
+    class Meta:
+        indexes = [
+            models.Index(fields=['post', 'user']),
+            models.Index(fields=['user', 'post', 'created_at']),
+            models.Index(fields=['post', 'reference_id']),
+            models.Index(fields=['user', 'action', 'created_at']),
+        ]
+
