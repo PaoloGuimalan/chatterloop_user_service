@@ -12,6 +12,8 @@ from django.db.models import (
     Case,
     When,
     IntegerField,
+    BooleanField,
+    F,
 )
 from django.db.models.functions import Coalesce
 from django.db import transaction
@@ -23,6 +25,7 @@ from .models import (
     Comment,
     ActivityCount,
     PostScore,
+    EngagementLog,
 )
 from user.models import Account
 from .serializers import (
@@ -59,9 +62,69 @@ class NewsfeedView(APIView):
             connections = ConnectionHelpers(user)
             connections_list = connections.get_connections()
 
-            user_reaction_subquery = Reaction.objects.filter(
-                post=OuterRef("pk"), user=user
-            ).values("emoji_id")[:1]
+            viewed_post_ids = request.headers.get("Viewed-Post-Ids", None)
+
+            if viewed_post_ids:
+                print("Received viewed post IDs:", viewed_post_ids)
+
+            # user_reaction_subquery = Reaction.objects.filter(
+            #     post=OuterRef("pk"), user=user
+            # ).values("emoji_id")[:1]
+
+            # queryset = (
+            #     Post.objects.select_related("user", "score")
+            #     .prefetch_related(
+            #         "tagging",
+            #         "privacy_users",
+            #         "references",
+            #         "map_info",
+            #         "preview",
+            #     )
+            #     .annotate(
+            #         is_friend=Case(
+            #             When(user_id__in=connections_list, then=Value(0.8)),
+            #             default=Value(0),
+            #             output_field=IntegerField(),
+            #         ),
+            #         is_friend_tagged=Case(
+            #             When(tagging__user_id__in=connections_list, then=Value(0.5)),
+            #             default=Value(0),
+            #             output_field=IntegerField(),
+            #         ),
+            #         is_owner=Case(
+            #             When(user=user, then=Value(1)),
+            #             default=Value(0),
+            #             output_field=IntegerField(),
+            #         ),
+            #     )
+            #     .filter(
+            #         # Q(user_id__in=connections_list)
+            #         # | Q(tagging__user_id__in=connections_list)
+            #         # | Q(privacy_status="public"),
+            #         # ~Q(user=user),
+            #         ~Q(is_owner=1)
+            #         # | Q(score__ranking_score__gt=0.0)
+            #     )
+            #     .annotate(
+            #         user_reaction=Coalesce(
+            #             Subquery(user_reaction_subquery), Value(None)
+            #         )
+            #     )
+            #     .annotate(
+            #         reaction_anchor=Case(
+            #             When(user_reaction=None, then=Value(1)),
+            #             default=Value(0),
+            #             output_field=IntegerField(),
+            #         ),
+            #     )
+            #     .order_by(
+            #         "-is_friend",  # friend posts first
+            #         "-reaction_anchor",
+            #         "-is_friend_tagged",
+            #         "is_owner",  # own posts last
+            #         "-score__ranking_score",  # then by rank score
+            #     )
+            # )
 
             queryset = (
                 Post.objects.select_related("user", "score")
@@ -88,33 +151,56 @@ class NewsfeedView(APIView):
                         default=Value(0),
                         output_field=IntegerField(),
                     ),
-                )
-                .filter(
-                    # Q(user_id__in=connections_list)
-                    # | Q(tagging__user_id__in=connections_list)
-                    # | Q(privacy_status="public"),
-                    # ~Q(user=user),
-                    ~Q(is_owner=1)
-                    # | Q(score__ranking_score__gt=0.0)
-                )
-                .annotate(
+                    my_last_view=Coalesce(
+                        Subquery(
+                            EngagementLog.objects.filter(
+                                post=OuterRef("pk"), user=user, action="viewed"
+                            )
+                            .order_by("-created_at")
+                            .values("created_at")[:1]
+                        ),
+                        Value("1970-01-01"),
+                    ),
+                    connection_latest_engagement=Coalesce(
+                        Subquery(
+                            EngagementLog.objects.filter(
+                                post=OuterRef("pk"),
+                                user_id__in=connections_list,
+                                action__in=["commented", "shared"],
+                            )
+                            .order_by("-created_at")
+                            .values("created_at")[:1]
+                        ),
+                        Value("1970-01-01"),
+                    ),
+                    should_show=Case(
+                        When(
+                            Q(my_last_view="1970-01-01")
+                            | Q(connection_latest_engagement__gt=F("my_last_view")),
+                            then=Value(True),
+                        ),
+                        default=Value(False),
+                    ),
                     user_reaction=Coalesce(
-                        Subquery(user_reaction_subquery), Value(None)
-                    )
-                )
-                .annotate(
-                    reaction_anchor=Case(
-                        When(user_reaction=None, then=Value(1)),
-                        default=Value(0),
-                        output_field=IntegerField(),
+                        Subquery(
+                            Reaction.objects.filter(
+                                post=OuterRef("pk"), user=user
+                            ).values("emoji_id")[:1]
+                        ),
+                        Value(None),
                     ),
                 )
+                .filter(~Q(is_owner=1))
+                .filter(
+                    ~Q(is_owner=1),
+                    should_show=True,
+                )
                 .order_by(
-                    "-is_friend",  # friend posts first
-                    "-reaction_anchor",
+                    "-is_friend",
+                    "-should_show",
+                    "-connection_latest_engagement",
                     "-is_friend_tagged",
-                    "is_owner",  # own posts last
-                    "-score__ranking_score",  # then by rank score
+                    "-score__ranking_score",
                 )
             )
 
