@@ -3,6 +3,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from django.db import models
 from django.db.models import (
     Q,
     Exists,
@@ -159,7 +160,7 @@ class NewsfeedView(APIView):
                             .order_by("-created_at")
                             .values("created_at")[:1]
                         ),
-                        Value("1970-01-01"),
+                        Value("1970-01-01", output_field=models.DateTimeField()),
                     ),
                     connection_latest_engagement=Coalesce(
                         Subquery(
@@ -171,7 +172,7 @@ class NewsfeedView(APIView):
                             .order_by("-created_at")
                             .values("created_at")[:1]
                         ),
-                        Value("1970-01-01"),
+                        Value("1970-01-01", output_field=models.DateTimeField()),
                     ),
                     should_show=Case(
                         When(
@@ -179,7 +180,8 @@ class NewsfeedView(APIView):
                             | Q(connection_latest_engagement__gt=F("my_last_view")),
                             then=Value(True),
                         ),
-                        default=Value(False),
+                        default=Value(False, output_field=models.BooleanField()),
+                        output_field=models.BooleanField(),
                     ),
                     user_reaction=Coalesce(
                         Subquery(
