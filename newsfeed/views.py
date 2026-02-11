@@ -57,16 +57,28 @@ class NewsfeedView(APIView):
     permission_classes = [IsAuthenticated]
     pagination_class = Pagination
 
-    def get(self, request):
+    def post(self, request):
         user = self.request.user
         try:
             connections = ConnectionHelpers(user)
             connections_list = connections.get_connections()
 
-            viewed_post_ids = request.headers.get("Viewed-Post-Ids", None)
+            viewcache = request.data.get("viewcache", [])
 
-            if viewed_post_ids:
-                print("Received viewed post IDs:", viewed_post_ids)
+            if len(viewcache):
+                EngagementLog.objects.bulk_create(
+                    [
+                        EngagementLog(
+                            log_id=str(uuid.uuid4()),
+                            user=user,
+                            post_id=view["post_id"],
+                            action="viewed",
+                            created_at=view["created_at"],
+                            duration_seconds=view.get("duration", 0),
+                        )
+                        for view in viewcache
+                    ]
+                )
 
             # user_reaction_subquery = Reaction.objects.filter(
             #     post=OuterRef("pk"), user=user
@@ -223,12 +235,16 @@ class NewsfeedProfileView(APIView):
     permission_classes = [IsAuthenticated]
     pagination_class = Pagination
 
-    def get(self, request, username):
+    def post(self, request, username):
         user = self.request.user
         try:
             user_reaction_subquery = Reaction.objects.filter(
                 post=OuterRef("pk"), user=user
             ).values("emoji_id")[:1]
+
+            viewcache = request.data.get("viewcache", [])
+
+            print("Received view cache:", viewcache)
 
             queryset = (
                 Post.objects.select_related("user", "score")
