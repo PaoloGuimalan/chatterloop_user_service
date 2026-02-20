@@ -99,15 +99,15 @@ MIDDLEWARE = [
 
 CORS_ALLOWED_ORIGINS = []
 
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://([a-zA-Z0-9-]+\.)*chatterloop\.app$",
+    r"^https://([a-zA-Z0-9-]+\.)*neonsystems\.net$",
+    r"^http://localhost:5173$",
+]
+
 CORS_ALLOW_ALL_ORIGINS = False
 
 CORS_ALLOW_HEADERS = list(default_headers) + ["x-access-token", "paginated", "action"]
-
-CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^https://.*\.chatterloop\.app$",
-    r"^https://.*\.neonsystems\.net$",
-    r"^http://localhost:5173$",
-]
 
 ROOT_URLCONF = "user_service.urls"
 
