@@ -10,6 +10,10 @@ class AutheticationBackend(BaseBackend):
     def authenticate(self, request):
         try:
             token = request.headers.get("x-access-token")
+            origin = request.headers.get("origin")
+
+            if not origin:
+                return None
 
             if not token:
                 return None
