@@ -61,7 +61,6 @@ CACHES = {
 
 ALLOWED_HOSTS = ["*"]
 
-
 # Application definition
 
 INSTALLED_APPS = [
@@ -103,6 +102,12 @@ CORS_ALLOWED_ORIGINS = []
 CORS_ALLOW_ALL_ORIGINS = True
 
 CORS_ALLOW_HEADERS = list(default_headers) + ["x-access-token", "paginated", "action"]
+
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.chatterloop\.app$",
+    r"^https://.*\.neonsystems\.net$",
+    r"^http://localhost:5173$",
+]
 
 ROOT_URLCONF = "user_service.urls"
 
@@ -182,6 +187,10 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "user.backends.AutheticationBackend",
     ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "100/day",
+        "user": "1000/hour",
+    },
 }
 
 # Default primary key field type
