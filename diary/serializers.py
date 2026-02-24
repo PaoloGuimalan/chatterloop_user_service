@@ -18,8 +18,8 @@ class MoodSerializer(serializers.ModelSerializer):
 class AttachmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Attachment
-        fields = ["id", "url", "created_at"]
-        read_only_fields = ["id", "created_at"]
+        fields = ["id", "url", "created_at", "file_type"]
+        read_only_fields = ["id", "created_at", "file_type"]
 
 
 class MapViewSerializer(serializers.ModelSerializer):
