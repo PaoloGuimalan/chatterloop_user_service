@@ -6,7 +6,7 @@ from django.db.models import Count, Q
 from django.db import transaction
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.pagination import PageNumberPagination
-from .models import Entry, Tag, Mood
+from .models import Entry, Tag, Mood, Attachment
 from user.models import Account
 from django.shortcuts import get_object_or_404
 from .serializers import EntrySerializer, TagSerializer, MoodSerializer
@@ -191,6 +191,7 @@ class DiaryCRUDView(APIView):
             tags = request.data.get("tags")
             entry_date = request.data.get("entry_date")
             is_private = request.data.get("is_private")
+            attachments = request.data.get("attachments")
 
             date_part = entry_date.split(" ")[0]  # "2026-01-17"
             dt = timezone.make_aware(datetime.strptime(date_part, "%Y-%m-%d"))
@@ -243,6 +244,15 @@ class DiaryCRUDView(APIView):
                     Q(account=user) | Q(is_private=False),
                     id=final_id,
                 )
+
+                if attachments and len(attachments) > 0:
+                    for attachment in attachments:
+                        Attachment.objects.create(
+                            entry=queryset,
+                            file_id=attachment["file_id"],
+                            file_type=attachment["file_type"],
+                            url=attachment["url"],
+                        )
 
                 serialized_response = EntrySerializer(final_query)
 

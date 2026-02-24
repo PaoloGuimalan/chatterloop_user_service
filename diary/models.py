@@ -32,6 +32,8 @@ class Attachment(models.Model):
     entry = models.ForeignKey(
         Entry, on_delete=models.CASCADE, related_name="attachments"
     )
+    file_id = models.TextField()
+    file_type = models.CharField(max_length=150)
     url = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
 
