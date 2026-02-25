@@ -18,7 +18,7 @@ class MoodSerializer(serializers.ModelSerializer):
 class AttachmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Attachment
-        fields = ["id", "url", "created_at", "file_type"]
+        fields = ["id", "url", "created_at", "file_type", "file_name"]
         read_only_fields = ["id", "created_at", "file_type"]
 
 
