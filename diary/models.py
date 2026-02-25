@@ -33,6 +33,7 @@ class Attachment(models.Model):
         Entry, on_delete=models.CASCADE, related_name="attachments"
     )
     file_id = models.TextField(null=True, blank=True, default=None)
+    file_name = models.TextField(null=True, blank=True, default=None)
     file_type = models.CharField(max_length=150, null=True, blank=True, default=None)
     url = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)

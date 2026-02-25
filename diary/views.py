@@ -250,6 +250,7 @@ class DiaryCRUDView(APIView):
                         Attachment.objects.create(
                             entry=queryset,
                             file_id=attachment["file_id"],
+                            file_name=attachment["file_name"],
                             file_type=attachment["file_type"],
                             url=attachment["url"],
                         )
