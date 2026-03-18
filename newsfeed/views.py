@@ -46,6 +46,7 @@ from django.utils.timezone import now
 from datetime import datetime
 from .helpers.query_functions import update_ranking_score
 import uuid
+from community.models import RealmFollow, Realm
 
 
 class Pagination(PageNumberPagination):
@@ -62,6 +63,11 @@ class NewsfeedView(APIView):
         try:
             connections = ConnectionHelpers(user)
             connections_list = connections.get_connections()
+            followed_realm_ids = list(
+                RealmFollow.objects.filter(follower=user).values_list(
+                    "realm_id", flat=True
+                )
+            )
 
             viewcache = request.data.get("viewcache", [])
 
@@ -140,7 +146,7 @@ class NewsfeedView(APIView):
             # )
 
             queryset = (
-                Post.objects.select_related("user", "score")
+                Post.objects.select_related("user", "score", "author_realm")
                 .prefetch_related(
                     "tagging",
                     "privacy_users",
@@ -150,7 +156,11 @@ class NewsfeedView(APIView):
                 )
                 .annotate(
                     is_friend=Case(
-                        When(user_id__in=connections_list, then=Value(0.8)),
+                        When(
+                            Q(user_id__in=connections_list)
+                            | Q(author_realm_id__in=followed_realm_ids),
+                            then=Value(0.8),
+                        ),
                         default=Value(0),
                         output_field=IntegerField(),
                     ),
@@ -246,8 +256,15 @@ class NewsfeedProfileView(APIView):
 
             print("Received view cache:", viewcache)
 
+            realm_match = Realm.objects.filter(realm_id=username).first()
+            profile_filter = Q(user__username=username) | Q(
+                tagging__user__username=username
+            )
+            if realm_match:
+                profile_filter = profile_filter | Q(author_realm=realm_match)
+
             queryset = (
-                Post.objects.select_related("user", "score")
+                Post.objects.select_related("user", "score", "author_realm")
                 .prefetch_related(
                     "tagging",
                     "privacy_users",
@@ -255,9 +272,7 @@ class NewsfeedProfileView(APIView):
                     "map_info",
                     "preview",
                 )
-                .filter(
-                    Q(user__username=username) | Q(tagging__user__username=username)
-                )
+                .filter(profile_filter)
                 .annotate(
                     user_reaction=Coalesce(
                         Subquery(user_reaction_subquery), Value(None)
@@ -290,7 +305,7 @@ class NewsfeedPostPreviewView(APIView):
             ).values("emoji_id")[:1]
 
             queryset = (
-                Post.objects.select_related("user", "score")
+                Post.objects.select_related("user", "score", "author_realm")
                 .prefetch_related(
                     "tagging",
                     "privacy_users",

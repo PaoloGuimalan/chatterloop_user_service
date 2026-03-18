@@ -76,3 +76,25 @@ class Member(models.Model):
         related_name="user_as_added_by",
     )
     date_joined = models.DateTimeField(null=True)
+
+
+class RealmFollow(models.Model):
+    follow_id = models.CharField(
+        max_length=150, default=uuid.uuid4, unique=True, primary_key=True
+    )
+    follower = models.ForeignKey(
+        Account,
+        null=False,
+        on_delete=models.CASCADE,
+        related_name="realm_follows",
+    )
+    realm = models.ForeignKey(
+        Realm,
+        null=False,
+        on_delete=models.CASCADE,
+        related_name="followers",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("follower", "realm")

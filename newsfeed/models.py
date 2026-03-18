@@ -3,6 +3,7 @@ import random
 from django.db import models
 from django.utils.timezone import now
 from user.models import Account
+from community.models import Realm
 
 
 def generate_random_digit(digit):
@@ -31,6 +32,13 @@ class Post(models.Model):
         Account,
         null=False,
         on_delete=models.DO_NOTHING,
+    )
+    author_realm = models.ForeignKey(
+        Realm,
+        null=True,
+        blank=True,
+        on_delete=models.DO_NOTHING,
+        related_name="posts",
     )
     is_shared = models.BooleanField(default=False)
     file_type = models.CharField(max_length=50)
