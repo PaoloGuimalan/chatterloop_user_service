@@ -75,6 +75,7 @@ class Member(models.Model):
         on_delete=models.DO_NOTHING,
         related_name="user_as_added_by",
     )
+    role = models.CharField(max_length=150, default="member")
     date_joined = models.DateTimeField(null=True)
 
 

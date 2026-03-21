@@ -19,6 +19,7 @@ class AccountSerializer(serializers.ModelSerializer):
             "date_created",
             "is_active",
             "is_verified",
+            "is_badged",
         ]
         read_only_fields = ["id", "date_created"]
 
