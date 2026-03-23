@@ -107,7 +107,7 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
 
 CORS_ALLOW_ALL_ORIGINS = False
 
-CORS_ALLOW_HEADERS = list(default_headers) + ["x-access-token", "paginated", "action"]
+CORS_ALLOW_HEADERS = list(default_headers) + ["x-access-token", "paginated", "action", "x-nonce"]
 
 ROOT_URLCONF = "user_service.urls"
 
