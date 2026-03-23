@@ -28,3 +28,14 @@ class RedisPubSubClient:
         pubsub = conn.pubsub()
         pubsub.subscribe(channel)
         return pubsub
+
+    @classmethod
+    def is_unique_nonce(cls, user_id, timestamp, random_str):
+        conn = cls.get_redis_connection()
+        if conn:
+            redis_key = f"nonce:{user_id}:{timestamp}:{random_str}"
+            result = conn.set(redis_key, "1", nx=True, ex=60)
+            
+            return result is True
+        
+        return False
