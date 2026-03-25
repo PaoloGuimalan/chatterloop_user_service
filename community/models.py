@@ -33,6 +33,8 @@ class Realm(models.Model):
     profile = models.CharField(default="N/A")
     cover_photo = models.CharField(blank=True, null=True, default=None)
     description = models.TextField(blank=True, null=True, default=None)
+    email = models.CharField(blank=True, null=True, default=None)
+    slug = models.TextField(blank=True, null=True, default=None)
     created_by = models.ForeignKey(
         Account,
         null=False,
