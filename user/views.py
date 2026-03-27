@@ -37,6 +37,8 @@ from .utils.external_requests import send_email_verification_code
 from django.shortcuts import get_object_or_404
 from django.utils.timezone import localtime
 from .utils.user_manipulation import create_user
+from community.models import Realm
+from community.serializers import RealmSerializer
 import bcrypt
 
 jwt = JWTTools
@@ -57,90 +59,105 @@ class UserAuthentication(APIView):
         return super().get_permissions()
 
     def get(self, request, username=None):
-        user = get_object_or_404(Account, username=username)
+        # user = get_object_or_404(Account, username=username)
+        user_queryset = Account.objects.filter(username=username)
+        user = None
 
-        connection_exists = Connection.objects.filter(
-            Q(action_by=user, involved_user=self.request.user)
-            | Q(action_by=self.request.user, involved_user=user),
-            ~Q(action_by=F("involved_user")),
-            Q(action_by__is_active=True),
-            Q(action_by__is_verified=True),
-            Q(involved_user__is_active=True),
-            Q(involved_user__is_verified=True),
-            # status=True,
-        ).distinct("connection_id")
+        if len(user_queryset) > 0:
+            user = user_queryset[0]
 
-        is_connection_present = (
-            None
-            if username == self.request.user.username
-            else True if len(connection_exists) >= 1 else False
-        )
+            connection_exists = Connection.objects.filter(
+                Q(action_by=user, involved_user=self.request.user)
+                | Q(action_by=self.request.user, involved_user=user),
+                ~Q(action_by=F("involved_user")),
+                Q(action_by__is_active=True),
+                Q(action_by__is_verified=True),
+                Q(involved_user__is_active=True),
+                Q(involved_user__is_verified=True),
+                # status=True,
+            ).distinct("connection_id")
 
-        is_connection_handshaked = None
-        is_user_connection_initiator = None
-        connection_id = None
-
-        if connection_exists:
-            connection_id = connection_exists[0].connection_id
-            is_connection_handshaked = connection_exists[0].status
-            is_user_connection_initiator = (
-                True if connection_exists[0].action_by.username == username else False
+            is_connection_present = (
+                None
+                if username == self.request.user.username
+                else True if len(connection_exists) >= 1 else False
             )
 
-        # Format birthdate parts
-        birthdate = user.birthdate
+            is_connection_handshaked = None
+            is_user_connection_initiator = None
+            connection_id = None
 
-        if birthdate:
-            birth_month = birthdate.strftime("%B")  # Full month name
-            birth_day = str(birthdate.day)
-            birth_year = str(birthdate.year)
+            if connection_exists:
+                connection_id = connection_exists[0].connection_id
+                is_connection_handshaked = connection_exists[0].status
+                is_user_connection_initiator = (
+                    True
+                    if connection_exists[0].action_by.username == username
+                    else False
+                )
 
-        # Format dateCreated parts (local timestamp)
-        date_created = localtime(user.date_created)
-        date_str = date_created.strftime("%m/%d/%Y")
-        time_str = date_created.strftime("%I:%M:%S %p").lower()
+            # Format birthdate parts
+            birthdate = user.birthdate
 
-        # Build response JSON matching your example
-        data = {
-            "data": {
-                "fullname": {
-                    "firstName": user.first_name,
-                    "middleName": user.middle_name,
-                    "lastName": user.last_name,
-                },
-                "birthdate": (
-                    {
-                        "month": birth_month,
-                        "day": birth_day,
-                        "year": birth_year,
-                    }
-                    if birthdate
-                    else None
-                ),
-                "dateCreated": {
-                    "date": date_str,
-                    "time": time_str,
-                },
-                "connection": {
-                    "connection_id": connection_id,
-                    "is_connection_present": is_connection_present,
-                    "is_connection_handshaked": is_connection_handshaked,
-                    "is_user_connection_initiator": is_user_connection_initiator,
-                },
-                "id": str(user.id),
-                "userID": user.username,
-                "profile": user.profile,
-                "coverphoto": user.coverphoto,
-                "gender": (
-                    user.gender.title() if user.gender else None
-                ),  # Capitalize first letter, e.g. "Male"
-                "email": user.email,
-                "isActivated": user.is_active,
-                "isVerified": user.is_verified,
+            if birthdate:
+                birth_month = birthdate.strftime("%B")  # Full month name
+                birth_day = str(birthdate.day)
+                birth_year = str(birthdate.year)
+
+            # Format dateCreated parts (local timestamp)
+            date_created = localtime(user.date_created)
+            date_str = date_created.strftime("%m/%d/%Y")
+            time_str = date_created.strftime("%I:%M:%S %p").lower()
+
+            # Build response JSON matching your example
+            data = {
+                "data": {
+                    "fullname": {
+                        "firstName": user.first_name,
+                        "middleName": user.middle_name,
+                        "lastName": user.last_name,
+                    },
+                    "birthdate": (
+                        {
+                            "month": birth_month,
+                            "day": birth_day,
+                            "year": birth_year,
+                        }
+                        if birthdate
+                        else None
+                    ),
+                    "dateCreated": {
+                        "date": date_str,
+                        "time": time_str,
+                    },
+                    "connection": {
+                        "connection_id": connection_id,
+                        "is_connection_present": is_connection_present,
+                        "is_connection_handshaked": is_connection_handshaked,
+                        "is_user_connection_initiator": is_user_connection_initiator,
+                    },
+                    "id": str(user.id),
+                    "userID": user.username,
+                    "profile": user.profile,
+                    "coverphoto": user.coverphoto,
+                    "gender": (
+                        user.gender.title() if user.gender else None
+                    ),  # Capitalize first letter, e.g. "Male"
+                    "email": user.email,
+                    "isActivated": user.is_active,
+                    "isVerified": user.is_verified,
+                    "type": "user",
+                }
             }
-        }
 
-        return Response(data, status=status.HTTP_200_OK)
+            return Response(data, status=status.HTTP_200_OK)
+
+        else:
+            realm_queryset = get_object_or_404(Realm, slug=username)
+            serialized_realm = RealmSerializer(realm_queryset)
+            data = {"data": {**serialized_realm.data}}
+
+            return Response(data, status=status.HTTP_200_OK)
 
     def post(self, request):
         try:
@@ -317,8 +334,7 @@ class UserContacts(APIView):
             paginated_header = request.headers.get("paginated", "true")
 
             queryset = (
-                Connection.objects.select_related("action_by", "involved_user")
-                .filter(
+                Connection.objects.select_related("action_by", "involved_user").filter(
                     Q(Q(action_by=user) | Q(involved_user=user)),
                     ~Q(action_by=F("involved_user")),
                     Q(action_by__is_active=True),
