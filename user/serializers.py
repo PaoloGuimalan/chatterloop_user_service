@@ -52,6 +52,7 @@ class AccountPreviewSerializer(serializers.ModelSerializer):
             "last_name",
             "profile",
             "gender",
+            "is_badged",
         ]
 
 

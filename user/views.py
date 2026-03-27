@@ -13,6 +13,7 @@ from django.db.models import (
     When,
     Value,
     Subquery,
+    Count,
 )
 from .models import Account, Connection, Verification
 from .serializers import (
@@ -37,7 +38,7 @@ from .utils.external_requests import send_email_verification_code
 from django.shortcuts import get_object_or_404
 from django.utils.timezone import localtime
 from .utils.user_manipulation import create_user
-from community.models import Realm
+from community.models import Realm, Member
 from community.serializers import RealmSerializer
 import bcrypt
 
@@ -59,6 +60,7 @@ class UserAuthentication(APIView):
         return super().get_permissions()
 
     def get(self, request, username=None):
+        me = self.request.user
         # user = get_object_or_404(Account, username=username)
         user_queryset = Account.objects.filter(username=username)
         user = None
@@ -146,6 +148,7 @@ class UserAuthentication(APIView):
                     "email": user.email,
                     "isActivated": user.is_active,
                     "isVerified": user.is_verified,
+                    "isBadged": user.is_badged,
                     "type": "user",
                 }
             }
@@ -153,7 +156,20 @@ class UserAuthentication(APIView):
             return Response(data, status=status.HTTP_200_OK)
 
         else:
-            realm_queryset = get_object_or_404(Realm, slug=username)
+            realm_queryset = get_object_or_404(
+                Realm.objects.annotate(
+                    followers_count=Count("followers"),
+                    is_admin=Exists(
+                        Member.objects.filter(
+                            realm=OuterRef("pk"), account=me, role="admin"
+                        )
+                    ),
+                    is_member=Exists(
+                        Member.objects.filter(realm=OuterRef("pk"), account=me)
+                    ),
+                ),
+                slug=username,
+            )
             serialized_realm = RealmSerializer(realm_queryset)
             data = {"data": {**serialized_realm.data}}
 
