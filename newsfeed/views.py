@@ -195,14 +195,12 @@ class NewsfeedProfileView(APIView):
 
             viewcache = request.data.get("viewcache", [])
 
-            print("Received view cache:", viewcache)
-
-            realm_match = Realm.objects.filter(realm_id=username).first()
-            profile_filter = Q(user__username=username) | Q(
-                tagging__user__username=username
-            )
+            realm_match = Realm.objects.filter(slug=username).first()
+            profile_filter = Q(
+                Q(user__username=username) | Q(tagging__user__username=username)
+            ) and Q(author_realm=None)
             if realm_match:
-                profile_filter = profile_filter | Q(author_realm=realm_match)
+                profile_filter = Q(author_realm=realm_match)
 
             queryset = (
                 Post.objects.select_related("user", "score", "author_realm")
