@@ -76,6 +76,7 @@ class RealmPreviewSerializer(serializers.ModelSerializer):
             "profile",
             "type",
             "is_verified",
+            "slug",
         ]
 
 
