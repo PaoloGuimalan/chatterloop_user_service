@@ -38,7 +38,7 @@ from .utils.external_requests import send_email_verification_code
 from django.shortcuts import get_object_or_404
 from django.utils.timezone import localtime
 from .utils.user_manipulation import create_user
-from community.models import Realm, Member
+from community.models import Realm, Member, RealmFollow
 from community.serializers import RealmSerializer
 import bcrypt
 
@@ -166,6 +166,9 @@ class UserAuthentication(APIView):
                     ),
                     is_member=Exists(
                         Member.objects.filter(realm=OuterRef("pk"), account=me)
+                    ),
+                    is_follower=Exists(
+                        RealmFollow.objects.filter(realm=OuterRef("pk"), follower=me)
                     ),
                 ),
                 slug=username,
