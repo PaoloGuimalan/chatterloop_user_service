@@ -7,7 +7,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from .models import RealmFollow, Realm, Member
 from .serializers import RealmSerializer
 from django.shortcuts import get_object_or_404
-from django.db.models import Q, Exists, OuterRef
+from django.db.models import Q, Exists, OuterRef, Count
 
 
 class Pagination(PageNumberPagination):
@@ -24,12 +24,22 @@ class MyRealms(APIView):
 
         try:
             search = request.query_params.get("search", None)
+            type = request.query_params.get("type", None)
 
             my_realm_queryset = Realm.objects.annotate(
+                followers_count=Count("followers"),
+                is_admin=Exists(
+                    Member.objects.filter(
+                        realm=OuterRef("pk"), account=user, role="admin"
+                    )
+                ),
                 is_member=Exists(
                     Member.objects.filter(realm=OuterRef("pk"), account=user)
                 ),
-            ).filter(is_member=True)
+                is_follower=Exists(
+                    RealmFollow.objects.filter(realm=OuterRef("pk"), follower=user)
+                ),
+            ).filter(is_member=True, type=type)
 
             if search:
                 my_realm_queryset = my_realm_queryset.filter(Q(slug__icontains=search))
@@ -56,12 +66,22 @@ class FollowRealmView(APIView):
 
         try:
             search = request.query_params.get("search", None)
+            type = request.query_params.get("type", None)
 
             followed_realm_queryset = Realm.objects.annotate(
+                followers_count=Count("followers"),
+                is_admin=Exists(
+                    Member.objects.filter(
+                        realm=OuterRef("pk"), account=user, role="admin"
+                    )
+                ),
+                is_member=Exists(
+                    Member.objects.filter(realm=OuterRef("pk"), account=user)
+                ),
                 is_follower=Exists(
                     RealmFollow.objects.filter(realm=OuterRef("pk"), follower=user)
                 ),
-            ).filter(is_follower=True)
+            ).filter(is_follower=True, type=type)
 
             if search:
                 followed_realm_queryset = followed_realm_queryset.filter(
