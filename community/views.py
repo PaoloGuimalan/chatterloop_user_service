@@ -15,6 +15,51 @@ class Pagination(PageNumberPagination):
     page_size_query_param = "page_size"
 
 
+class TopRealms(APIView):
+    permission_classes = [IsAuthenticated]
+    pagination_class = Pagination
+
+    def get(self, request):
+        user = self.request.user
+
+        try:
+            search = request.query_params.get("search", None)
+            type = request.query_params.get("type", None)
+
+            top_realm_queryset = Realm.objects.annotate(
+                followers_count=Count("followers"),
+                members=Count("member"),
+                is_admin=Exists(
+                    Member.objects.filter(
+                        realm=OuterRef("pk"), account=user, role="admin"
+                    )
+                ),
+                is_member=Exists(
+                    Member.objects.filter(realm=OuterRef("pk"), account=user)
+                ),
+                is_follower=Exists(
+                    RealmFollow.objects.filter(realm=OuterRef("pk"), follower=user)
+                ),
+            ).filter(type=type, is_private=False)
+
+            if search:
+                top_realm_queryset = top_realm_queryset.filter(
+                    Q(slug__icontains=search) | Q(name__icontains=search)
+                )
+
+            paginator = self.pagination_class()
+            paginated_queryset = paginator.paginate_queryset(
+                top_realm_queryset, request, view=self
+            )
+
+            serialized_result = RealmSerializer(paginated_queryset, many=True)
+            data = paginator.get_paginated_response(serialized_result.data)
+
+            return data
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 class MyRealms(APIView):
     permission_classes = [IsAuthenticated]
     pagination_class = Pagination
@@ -28,6 +73,7 @@ class MyRealms(APIView):
 
             my_realm_queryset = Realm.objects.annotate(
                 followers_count=Count("followers"),
+                members=Count("member"),
                 is_admin=Exists(
                     Member.objects.filter(
                         realm=OuterRef("pk"), account=user, role="admin"
@@ -42,7 +88,9 @@ class MyRealms(APIView):
             ).filter(is_member=True, type=type)
 
             if search:
-                my_realm_queryset = my_realm_queryset.filter(Q(slug__icontains=search))
+                my_realm_queryset = my_realm_queryset.filter(
+                    Q(slug__icontains=search) | Q(name__icontains=search)
+                )
 
             paginator = self.pagination_class()
             paginated_queryset = paginator.paginate_queryset(
@@ -70,6 +118,7 @@ class FollowRealmView(APIView):
 
             followed_realm_queryset = Realm.objects.annotate(
                 followers_count=Count("followers"),
+                members=Count("member"),
                 is_admin=Exists(
                     Member.objects.filter(
                         realm=OuterRef("pk"), account=user, role="admin"
@@ -85,7 +134,7 @@ class FollowRealmView(APIView):
 
             if search:
                 followed_realm_queryset = followed_realm_queryset.filter(
-                    Q(slug__icontains=search)
+                    Q(slug__icontains=search) | Q(name__icontains=search)
                 )
 
             paginator = self.pagination_class()

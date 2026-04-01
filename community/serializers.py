@@ -18,6 +18,7 @@ class RealmFollowSerializer(serializers.ModelSerializer):
 
 class RealmSerializer(serializers.ModelSerializer):
     followers_count = serializers.IntegerField(read_only=True)
+    members = serializers.IntegerField(read_only=True)
     is_member = serializers.BooleanField(read_only=True)
     is_admin = serializers.BooleanField(read_only=True)
     is_follower = serializers.BooleanField(read_only=True)
