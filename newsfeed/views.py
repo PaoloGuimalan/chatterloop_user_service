@@ -17,7 +17,7 @@ from django.db.models import (
     F,
 )
 from django.db.models.functions import Coalesce
-from django.db import transaction
+from django.db import transaction, connection
 from .models import (
     Post,
     Emoji,
@@ -73,7 +73,6 @@ class NewsfeedView(APIView):
 
             if len(viewcache):
                 post_ids = [view["post_id"] for view in viewcache]
-
                 existing_logs = EngagementLog.objects.filter(
                     user=user, post_id__in=post_ids, action="viewed"
                 ).values("post_id", "duration_seconds")
@@ -83,28 +82,32 @@ class NewsfeedView(APIView):
                     for log in existing_logs
                 }
 
-                objs = []
+                values_list = []
+                params = []
                 for view in viewcache:
                     pid = view["post_id"]
-                    old_duration = duration_map.get(pid, 0)
-                    new_duration = view.get("duration", 0)
-
-                    objs.append(
-                        EngagementLog(
-                            user=user,
-                            post_id=pid,
-                            action="viewed",
-                            updated_at=view["created_at"],
-                            duration_seconds=old_duration + new_duration,
-                        )
+                    new_total_duration = duration_map.get(pid, 0) + view.get(
+                        "duration", 0
                     )
 
-                EngagementLog.objects.bulk_create(
-                    objs,
-                    update_conflicts=True,
-                    unique_fields=["user", "post", "action"],
-                    update_fields=["duration_seconds", "updated_at"],
-                )
+                    values_list.append("(%s, %s, 'viewed', %s, %s, NOW())")
+                    params.extend(
+                        [user.id, pid, new_total_duration, view["created_at"]]
+                    )
+
+                if values_list:
+                    query = f"""
+                        INSERT INTO newsfeed_engagementlog (user_id, post_id, action, duration_seconds, updated_at, created_at)
+                        VALUES {", ".join(values_list)}
+                        ON CONFLICT (user_id, post_id, action) 
+                        WHERE action = 'viewed' -- THIS IS THE KEY: Matches your Partial Index
+                        DO UPDATE SET 
+                            duration_seconds = EXCLUDED.duration_seconds,
+                            updated_at = EXCLUDED.updated_at;
+                    """
+
+                    with connection.cursor() as cursor:
+                        cursor.execute(query, params)
 
             queryset = (
                 Post.objects.select_related("user", "score", "author_realm")
