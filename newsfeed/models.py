@@ -51,9 +51,19 @@ class Post(models.Model):
     )
     is_sponsored = models.BooleanField(default=False)
     is_live = models.BooleanField(default=False)
+    is_archived = models.BooleanField(default=False)
     on_feed = models.CharField(max_length=50)
     date_posted = models.DateTimeField(default=now)
     from_system = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True, default=None)
+    deleted_by = models.ForeignKey(
+        Account,
+        null=True,
+        blank=True,
+        default=None,
+        on_delete=models.DO_NOTHING,
+        related_name="post_deleted_by",
+    )
 
 
 class PostTag(models.Model):

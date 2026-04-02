@@ -188,8 +188,7 @@ class NewsfeedView(APIView):
                 )
                 .filter(~Q(is_owner=1))
                 .filter(
-                    ~Q(is_owner=1),
-                    should_show=True,
+                    ~Q(is_owner=1), should_show=True, deleted_at=None, is_archived=False
                 )
                 .order_by(
                     "-is_friend",
@@ -209,6 +208,47 @@ class NewsfeedView(APIView):
             data = paginator.get_paginated_response(serialized_result.data)
 
             return data
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def put(self, request):
+        user = self.request.user
+        try:
+            post_id = request.data.get("post_id")
+            fields = request.data.get("fields")
+
+            if fields:
+                Post.objects.filter(post_id=post_id).update(**fields)
+
+            return Response(
+                {
+                    "status": True,
+                    "message": "Post/s has been deleted",
+                    "reference": post_id,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def delete(self, request):
+        user = self.request.user
+        try:
+            post_ids = request.data.get("post_ids")
+
+            if len(post_ids) > 0:
+                Post.objects.filter(post_id__in=post_ids).update(
+                    deleted_at=now(), deleted_by=user
+                )
+
+            return Response(
+                {
+                    "status": True,
+                    "message": "Post/s has been deleted",
+                    "reference": post_ids,
+                },
+                status=status.HTTP_200_OK,
+            )
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -248,6 +288,7 @@ class NewsfeedProfileView(APIView):
                         Subquery(user_reaction_subquery), Value(None)
                     )
                 )
+                .filter(deleted_at=None, is_archived=False)
                 .order_by("-date_posted")
             )
 
@@ -293,7 +334,16 @@ class NewsfeedPostPreviewView(APIView):
 
             serialized_result = PostSerializer(queryset)
 
-            return Response(serialized_result.data, status=status.HTTP_200_OK)
+            if (
+                serialized_result.data["deleted_at"]
+                or serialized_result.data["is_archived"]
+            ):
+                return Response(
+                    {**serialized_result.data, "caption": "", "references": []},
+                    status=status.HTTP_200_OK,
+                )
+            else:
+                return Response(serialized_result.data, status=status.HTTP_200_OK)
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
