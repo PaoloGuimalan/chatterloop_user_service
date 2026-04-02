@@ -1,6 +1,7 @@
 import uuid
 import random
 from django.db import models
+from django.db.models import Q
 from django.utils.timezone import now
 from user.models import Account
 from community.models import Realm
@@ -206,6 +207,7 @@ class EngagementLog(models.Model):
         max_length=150, null=True, blank=True, db_index=True
     )  # Points to Comment/Reaction ID
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True, db_index=True)
     duration_seconds = models.FloatField(
         null=True, blank=True, default=None
     )  # For 'viewed' action
@@ -216,4 +218,12 @@ class EngagementLog(models.Model):
             models.Index(fields=["user", "post", "created_at"]),
             models.Index(fields=["post", "reference_id"]),
             models.Index(fields=["user", "action", "created_at"]),
+        ]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "post", "action"],
+                condition=Q(action="viewed"),
+                name="unique_viewed_engagement",
+            )
         ]

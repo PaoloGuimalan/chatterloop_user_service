@@ -72,18 +72,38 @@ class NewsfeedView(APIView):
             viewcache = request.data.get("viewcache", [])
 
             if len(viewcache):
-                EngagementLog.objects.bulk_create(
-                    [
+                post_ids = [view["post_id"] for view in viewcache]
+
+                existing_logs = EngagementLog.objects.filter(
+                    user=user, post_id__in=post_ids, action="viewed"
+                ).values("post_id", "duration_seconds")
+
+                duration_map = {
+                    log["post_id"]: log["duration_seconds"] or 0
+                    for log in existing_logs
+                }
+
+                objs = []
+                for view in viewcache:
+                    pid = view["post_id"]
+                    old_duration = duration_map.get(pid, 0)
+                    new_duration = view.get("duration", 0)
+
+                    objs.append(
                         EngagementLog(
-                            log_id=str(uuid.uuid4()),
                             user=user,
-                            post_id=view["post_id"],
+                            post_id=pid,
                             action="viewed",
-                            created_at=view["created_at"],
-                            duration_seconds=view.get("duration", 0),
+                            updated_at=view["created_at"],
+                            duration_seconds=old_duration + new_duration,
                         )
-                        for view in viewcache
-                    ]
+                    )
+
+                EngagementLog.objects.bulk_create(
+                    objs,
+                    update_conflicts=True,
+                    unique_fields=["user", "post", "action"],
+                    update_fields=["duration_seconds", "updated_at"],
                 )
 
             queryset = (
@@ -120,8 +140,8 @@ class NewsfeedView(APIView):
                             EngagementLog.objects.filter(
                                 post=OuterRef("pk"), user=user, action="viewed"
                             )
-                            .order_by("-created_at")
-                            .values("created_at")[:1]
+                            .order_by("-updated_at")
+                            .values("updated_at")[:1]
                         ),
                         Value("1970-01-01", output_field=models.DateTimeField()),
                     ),
@@ -132,8 +152,8 @@ class NewsfeedView(APIView):
                                 user_id__in=connections_list,
                                 action__in=["commented", "shared"],
                             )
-                            .order_by("-created_at")
-                            .values("created_at")[:1]
+                            .order_by("-updated_at")
+                            .values("updated_at")[:1]
                         ),
                         Value("1970-01-01", output_field=models.DateTimeField()),
                     ),
