@@ -86,21 +86,29 @@ class NewsfeedView(APIView):
                 params = []
                 for view in viewcache:
                     pid = view["post_id"]
+                    new_log_id = str(uuid.uuid4())
                     new_total_duration = duration_map.get(pid, 0) + view.get(
                         "duration", 0
                     )
 
-                    values_list.append("(%s, %s, 'viewed', %s, %s, NOW())")
+                    values_list.append("(%s, %s, %s, %s, %s, %s, NOW())")
                     params.extend(
-                        [user.id, pid, new_total_duration, view["created_at"]]
+                        [
+                            new_log_id,
+                            user.id,
+                            pid,
+                            "viewed",
+                            new_total_duration,
+                            view["created_at"],
+                        ]
                     )
 
                 if values_list:
                     query = f"""
-                        INSERT INTO newsfeed_engagementlog (user_id, post_id, action, duration_seconds, updated_at, created_at)
+                        INSERT INTO newsfeed_engagementlog (log_id, user_id, post_id, action, duration_seconds, updated_at, created_at)
                         VALUES {", ".join(values_list)}
                         ON CONFLICT (user_id, post_id, action) 
-                        WHERE action = 'viewed' -- THIS IS THE KEY: Matches your Partial Index
+                        WHERE action = 'viewed'
                         DO UPDATE SET 
                             duration_seconds = EXCLUDED.duration_seconds,
                             updated_at = EXCLUDED.updated_at;
