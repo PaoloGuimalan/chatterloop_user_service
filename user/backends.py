@@ -43,7 +43,7 @@ class AutheticationBackend(BaseBackend):
             decoded_header = jwt.decoder(token)
             decoded_id = decoded_header["userID"]
 
-            user = Account.objects.get(username=decoded_id)
+            user = Account.objects.get(id=decoded_id)
             return (user, True)
         except Account.DoesNotExist:
             return None

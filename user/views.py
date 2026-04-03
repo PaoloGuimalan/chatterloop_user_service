@@ -212,7 +212,7 @@ class UserAuthentication(APIView):
                             "result": {
                                 "usertoken": jwt.encoder(serialized_user.data),
                                 "authtoken": jwt.encoder(
-                                    {"userID": user.username, "username": user.username}
+                                    {"userID": user.id, "username": user.username}
                                 ),
                             },
                         },
@@ -272,7 +272,7 @@ class ThirdPartyAuthentication(APIView):
                                     "usertoken": jwt.encoder(serialized_user.data),
                                     "authtoken": jwt.encoder(
                                         {
-                                            "userID": user.username,
+                                            "userID": user.id,
                                             "username": user.username,
                                         }
                                     ),
@@ -317,7 +317,7 @@ class ThirdPartyAuthentication(APIView):
                                         "usertoken": jwt.encoder(serialized_user.data),
                                         "authtoken": jwt.encoder(
                                             {
-                                                "userID": create_user_query.username,
+                                                "userID": create_user_query.id,
                                                 "username": create_user_query.username,
                                             }
                                         ),
@@ -388,7 +388,7 @@ class UserContacts(APIView):
         try:
             addUsername = request.data.get("addUsername")
 
-            users = [addUsername, user.username]
+            users = [addUsername, user.id]
             pipeline = [
                 {"$match": {"conversationType": "single"}},
                 {"$match": {"$expr": {"$setEquals": ["$receivers", users]}}},
@@ -406,7 +406,7 @@ class UserContacts(APIView):
                 else generate_random_digit(20)
             )
 
-            pending_involved_user = Account.objects.get(username=addUsername)
+            pending_involved_user = Account.objects.get(id=addUsername)
 
             with transaction.atomic():
                 # Create first connection row
@@ -438,7 +438,7 @@ class UserContacts(APIView):
                     referenceID=new_connection_id,
                     referenceStatus=False,
                     toUserID=addUsername,
-                    fromUserID=user.username,
+                    fromUserID=user.id,
                     content_headline="Contact Request",
                     content_details=f"@{user.username} have sent a contact request for you.",
                     type="contact_request",
@@ -469,7 +469,7 @@ class UserContacts(APIView):
             return Response(
                 {
                     "status": True,
-                    "message": f"You have sent a contact request to @{addUsername}",
+                    "message": f"You have sent a contact request to @{pending_involved_user.username}",
                     "connection_id": new_connection_id,
                 },
                 status=status.HTTP_200_OK,
@@ -519,7 +519,7 @@ class UserContacts(APIView):
                         referenceID=connection_id,
                         referenceStatus=True,
                         toUserID=to_user_id,
-                        fromUserID=user.username,
+                        fromUserID=user.id,
                         content_headline=notifHeadline,
                         content_details=notifContent,
                         type="info_contact_accept",
@@ -552,9 +552,7 @@ class UserContacts(APIView):
                         "dateTime": now.isoformat(),
                     }
 
-                    RedisPubSubClient.publish_json(
-                        f"events_{user.username}", data_reload
-                    )
+                    RedisPubSubClient.publish_json(f"events_{user.id}", data_reload)
                     RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
                 else:
                     return Response(
@@ -631,7 +629,7 @@ class UserContacts(APIView):
                         referenceID=connection_id,
                         referenceStatus=True,
                         toUserID=to_user_id,
-                        fromUserID=user.username,
+                        fromUserID=user.id,
                         content_headline=notifHeadline,
                         content_details=notifContent,
                         type="info_contact_decline",
@@ -664,9 +662,7 @@ class UserContacts(APIView):
                         "dateTime": now.isoformat(),
                     }
 
-                    RedisPubSubClient.publish_json(
-                        f"events_{user.username}", data_reload
-                    )
+                    RedisPubSubClient.publish_json(f"events_{user.id}", data_reload)
                     RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
                 else:
                     if action == "decline":

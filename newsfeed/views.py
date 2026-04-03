@@ -397,20 +397,20 @@ class PostReactionsView(APIView):
                     post_id=post_id, update_type="react", is_decrease=False
                 )
 
-                if post.user.username != user.username:
+                if post.user.id != user.id:
                     service = NotificationService()
                     service.add_notification(
                         referenceID=new_reaction_id,
                         referenceStatus=True,
-                        toUserID=post.user.username,
-                        fromUserID=user.username,
+                        toUserID=post.user.id,
+                        fromUserID=user.id,
                         content_headline="Post Reaction",
                         content_details=f"@{user.username} reacted {emoji.emoji_content} to your post.",
                         type="post_reaction",
                         isRead=False,
                     )
 
-                    sse_sendToUser = post.user.username
+                    sse_sendToUser = post.user.id
                     sse_sendToDetails = (
                         f"@{user.username} reacted {emoji.emoji_content} to your post."
                     )
@@ -460,14 +460,14 @@ class PostReactionsView(APIView):
                 new_preview.count += 1
                 new_preview.save()
 
-                if post.user.username != user.username:
+                if post.user.id != user.id:
                     service = NotificationService()
                     service.update_content(
                         reaction_id=reaction.reaction_id,
                         new_content=f"@{user.username} reacted {new_emoji.emoji_content} to your post.",
                     )
 
-                    sse_sendToUser = post.user.username
+                    sse_sendToUser = post.user.id
                     sse_sendToDetails = f"@{user.username} reacted {new_emoji.emoji_content} to your post."
 
                     now = datetime.now()
@@ -661,8 +661,8 @@ class CommentsView(APIView):
                         service.add_notification(
                             referenceID=new_comment_id,
                             referenceStatus=True,
-                            toUserID=parent_comment.user.username,
-                            fromUserID=user.username,
+                            toUserID=parent_comment.user.id,
+                            fromUserID=user.id,
                             content_headline="Replied Comment",
                             content_details=f'@{user.username} replied to your comment "{truncated_comment}"',
                             type="post_comment",
@@ -684,7 +684,7 @@ class CommentsView(APIView):
                         }
 
                         RedisPubSubClient.publish_json(
-                            f"events_{parent_comment.user.username}", data
+                            f"events_{parent_comment.user.id}", data
                         )
 
                 else:
@@ -717,8 +717,8 @@ class CommentsView(APIView):
                         service.add_notification(
                             referenceID=new_comment_id,
                             referenceStatus=True,
-                            toUserID=post.user.username,
-                            fromUserID=user.username,
+                            toUserID=post.user.id,
+                            fromUserID=user.id,
                             content_headline="Post Comment",
                             content_details=f"@{user.username} commented on your post.",
                             type="post_comment",
@@ -739,9 +739,7 @@ class CommentsView(APIView):
                             "dateTime": now.isoformat(),
                         }
 
-                        RedisPubSubClient.publish_json(
-                            f"events_{post.user.username}", data
-                        )
+                        RedisPubSubClient.publish_json(f"events_{post.user.id}", data)
 
             return Response("OK", status=status.HTTP_200_OK)
         except Exception as e:
