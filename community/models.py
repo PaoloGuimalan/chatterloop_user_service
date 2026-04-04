@@ -80,6 +80,9 @@ class Member(models.Model):
     role = models.CharField(max_length=150, default="member")
     date_joined = models.DateTimeField(null=True)
 
+    class Meta:
+        unique_together = ("account", "realm")
+
 
 class RealmFollow(models.Model):
     follow_id = models.CharField(
