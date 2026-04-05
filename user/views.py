@@ -64,6 +64,7 @@ class UserAuthentication(APIView):
         # user = get_object_or_404(Account, username=username)
         user_queryset = Account.objects.filter(username=username)
         user = None
+        transaction_type = request.query_params.get("type", None)
 
         if len(user_queryset) > 0:
             user = user_queryset[0]
@@ -156,6 +157,13 @@ class UserAuthentication(APIView):
             return Response(data, status=status.HTTP_200_OK)
 
         else:
+            query_filter = None
+
+            if transaction_type and transaction_type == "manage":
+                query_filter = Q(realm_id=username)
+            else:
+                query_filter = Q(slug=username)
+
             realm_queryset = get_object_or_404(
                 Realm.objects.annotate(
                     followers_count=Count("followers"),
@@ -171,7 +179,7 @@ class UserAuthentication(APIView):
                         RealmFollow.objects.filter(realm=OuterRef("pk"), follower=me)
                     ),
                 ),
-                slug=username,
+                query_filter,
             )
             serialized_realm = RealmSerializer(realm_queryset)
             data = {"data": {**serialized_realm.data}}
@@ -853,7 +861,7 @@ class UserAccountManagement(APIView):
                     "message": "Account created",
                     "username": username,
                     "authtoken": jwt.encoder(
-                        {"userID": username, "username": username}
+                        {"userID": new_user.id, "username": username}
                     ),
                 },
                 status=status.HTTP_201_CREATED,
