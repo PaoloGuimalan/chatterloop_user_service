@@ -282,9 +282,7 @@ class NewsfeedProfileView(APIView):
             if realm_match:
                 profile_filter = Q(author_realm=realm_match)
             elif archive:
-                profile_filter = Q(user=user) & Q(
-                    author_realm=None
-                )
+                profile_filter = Q(user=user) & Q(author_realm=None)
 
             queryset = (
                 Post.objects.select_related("user", "score", "author_realm")
@@ -808,8 +806,10 @@ class PostSaveView(APIView):
         try:
             user = self.request.user
 
-            post_save_query = PostSave.objects.select_related("post").filter(
-                user=user, post__deleted_at=None
+            post_save_query = (
+                PostSave.objects.select_related("post")
+                .filter(user=user, post__deleted_at=None)
+                .order_by("-saved_at")
             )
 
             paginator = self.pagination_class()
