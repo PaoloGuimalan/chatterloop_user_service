@@ -11,6 +11,7 @@ from .models import (
     ActivityCount,
     CountType,
     PostScore,
+    PostSave,
 )
 from user.serializers import AccountPreviewSerializer
 from community.models import Realm
@@ -91,6 +92,7 @@ class PostSerializer(serializers.ModelSerializer):
     author_realm = RealmPreviewSerializer(read_only=True)
     # activity_counts = ActivityCountSerializer(read_only=True, many=True)
     score = PostScoreSerializer(read_only=True)
+    is_saved = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Post
@@ -108,4 +110,12 @@ class CommentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Comment
+        fields = "__all__"
+
+
+class PostSaveSerializer(serializers.ModelSerializer):
+    post = PostSerializer(read_only=True)
+
+    class Meta:
+        model = PostSave
         fields = "__all__"

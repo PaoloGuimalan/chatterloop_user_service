@@ -46,4 +46,9 @@ urlpatterns = [
         views.CommentsView.as_view(),
         name="newsfeed-comments",
     ),
+    path(
+        "saves",
+        views.PostSaveView.as_view(),
+        name="newsfeed-saves",
+    ),
 ]

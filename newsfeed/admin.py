@@ -10,6 +10,8 @@ from .models import (
     Reaction,
     Comment,
     ActivityCount,
+    PostSave,
+    PostScore,
 )
 
 admin.site.register(Post)
@@ -22,3 +24,5 @@ admin.site.register(Emoji)
 admin.site.register(Reaction)
 admin.site.register(Comment)
 admin.site.register(ActivityCount)
+admin.site.register(PostScore)
+admin.site.register(PostSave)

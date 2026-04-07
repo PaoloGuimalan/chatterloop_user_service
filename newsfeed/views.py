@@ -27,6 +27,7 @@ from .models import (
     ActivityCount,
     PostScore,
     EngagementLog,
+    PostSave,
 )
 from user.models import Account
 from .serializers import (
@@ -36,6 +37,7 @@ from .serializers import (
     CommentSerializer,
     ActivityCountSerializer,
     PostScoreSerializer,
+    PostSaveSerializer,
 )
 from user.serializers import ConnectionSerializer
 from rest_framework.pagination import PageNumberPagination
@@ -47,6 +49,7 @@ from datetime import datetime
 from .helpers.query_functions import update_ranking_score
 import uuid
 from community.models import RealmFollow, Realm
+from django.shortcuts import get_object_or_404
 
 
 class Pagination(PageNumberPagination):
@@ -177,6 +180,9 @@ class NewsfeedView(APIView):
                         default=Value(False, output_field=models.BooleanField()),
                         output_field=models.BooleanField(),
                     ),
+                    is_saved=Exists(
+                        PostSave.objects.filter(post=OuterRef("pk"), user=user)
+                    ),
                     user_reaction=Coalesce(
                         Subquery(
                             Reaction.objects.filter(
@@ -260,6 +266,9 @@ class NewsfeedProfileView(APIView):
     def post(self, request, username):
         user = self.request.user
         try:
+            archive_param = request.query_params.get("archive", False)
+            archive = True if archive_param == "true" else False
+
             user_reaction_subquery = Reaction.objects.filter(
                 post=OuterRef("pk"), user=user
             ).values("emoji_id")[:1]
@@ -284,11 +293,14 @@ class NewsfeedProfileView(APIView):
                 )
                 .filter(profile_filter)
                 .annotate(
+                    is_saved=Exists(
+                        PostSave.objects.filter(post=OuterRef("pk"), user=user)
+                    ),
                     user_reaction=Coalesce(
                         Subquery(user_reaction_subquery), Value(None)
-                    )
+                    ),
                 )
-                .filter(deleted_at=None, is_archived=False)
+                .filter(deleted_at=None, is_archived=archive)
                 .order_by("-date_posted")
             )
 
@@ -777,5 +789,62 @@ class CommentsView(APIView):
                 current_comment.save()
 
             return Response("OK", status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+
+class PostSaveView(APIView):
+    permission_classes = [IsAuthenticated]
+    pagination_class = Pagination
+
+    def get(self, request):
+        try:
+            user = self.request.user
+
+            post_save_query = PostSave.objects.select_related("post").filter(user=user)
+
+            paginator = self.pagination_class()
+            paginated_queryset = paginator.paginate_queryset(
+                post_save_query, request, view=self
+            )
+
+            serialized_result = PostSaveSerializer(paginated_queryset, many=True)
+            data = paginator.get_paginated_response(serialized_result.data)
+
+            return data
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+    def post(self, request):
+        try:
+            user = self.request.user
+            post_id = request.data.get("post_id")
+
+            current_post = get_object_or_404(Post, post_id=post_id)
+            new_save_query = PostSave.objects.create(post=current_post, user=user)
+
+            return Response(
+                {
+                    "status": True,
+                    "message": "Post has been saved",
+                    "save_id": new_save_query.id,
+                },
+                status=200,
+            )
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+    def delete(self, request):
+        try:
+            user = self.request.user
+            post_id = request.data.get("post_id")
+
+            current_post = get_object_or_404(Post, post_id=post_id)
+            PostSave.objects.filter(post=current_post, user=user).delete()
+
+            return Response(
+                {"status": True, "message": "Post has been unsaved"},
+                status=200,
+            )
         except Exception as e:
             return Response({"error": str(e)}, status=500)

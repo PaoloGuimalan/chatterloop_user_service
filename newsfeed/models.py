@@ -237,3 +237,17 @@ class EngagementLog(models.Model):
                 name="unique_viewed_engagement",
             )
         ]
+
+
+class PostSave(models.Model):
+    id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="saved_post")
+    user = models.ForeignKey(
+        Account,
+        null=False,
+        on_delete=models.DO_NOTHING,
+    )
+    saved_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        unique_together = ("post", "user")
