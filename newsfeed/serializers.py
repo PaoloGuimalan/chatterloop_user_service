@@ -113,8 +113,17 @@ class CommentSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class PostBasicSerializer(serializers.ModelSerializer):
+    user = AccountPreviewSerializer(read_only=True)
+    author_realm = RealmPreviewSerializer(read_only=True)
+
+    class Meta:
+        model = Post
+        fields = "__all__"
+
+
 class PostSaveSerializer(serializers.ModelSerializer):
-    post = PostSerializer(read_only=True)
+    post = PostBasicSerializer(read_only=True)
 
     class Meta:
         model = PostSave
