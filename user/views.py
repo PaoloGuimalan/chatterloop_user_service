@@ -54,7 +54,7 @@ class UserAuthentication(APIView):
 
     def get_permissions(self):
         if self.request.method == "GET":
-            return [IsAuthenticated()]
+            return [AllowAny()]  ## IsAuthenticated()
         elif self.request.method == "POST":
             return [AllowAny()]
         return super().get_permissions()

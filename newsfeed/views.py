@@ -260,7 +260,7 @@ class NewsfeedView(APIView):
 
 
 class NewsfeedProfileView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]  ## IsAuthenticated
     pagination_class = Pagination
 
     def post(self, request, username):
@@ -320,7 +320,7 @@ class NewsfeedProfileView(APIView):
 
 
 class NewsfeedPostPreviewView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]  ## IsAuthenticated
 
     def get(self, request, post_id):
         user = self.request.user
@@ -366,7 +366,7 @@ class NewsfeedPostPreviewView(APIView):
 
 
 class EmojisView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]  # IsAuthenticated
 
     def get(self, request):
         user = self.request.user
@@ -580,8 +580,14 @@ class ActivityCountView(APIView):
 
 
 class CommentsView(APIView):
-    permission_classes = [IsAuthenticated]
+    # permission_classes = [IsAuthenticated]
     pagination_class = Pagination
+
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [AllowAny()]  ## IsAuthenticated()
+        else:
+            return [IsAuthenticated()]
 
     def get(self, request):
         try:

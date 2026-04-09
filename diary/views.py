@@ -20,7 +20,7 @@ class Pagination(PageNumberPagination):
 
 
 class DiaryTotalView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]  ##IsAuthenticated
     pagination_class = Pagination
 
     def get(self, request, username):
