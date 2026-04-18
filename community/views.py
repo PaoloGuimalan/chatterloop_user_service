@@ -104,6 +104,26 @@ class MyRealms(APIView):
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    def put(self, request):
+        user = self.request.user
+        try:
+            realm_id = request.data.get("realm_id")
+            fields = request.data.get("fields")
+
+            if fields:
+                Realm.objects.filter(realm_id=realm_id).update(**fields)
+
+            return Response(
+                {
+                    "status": True,
+                    "message": "Realm has been updated",
+                    "reference": realm_id,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 class FollowRealmView(APIView):
     permission_classes = [IsAuthenticated]
