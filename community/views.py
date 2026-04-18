@@ -110,6 +110,21 @@ class MyRealms(APIView):
             realm_id = request.data.get("realm_id")
             fields = request.data.get("fields")
 
+            is_admin = Exists(
+                Member.objects.filter(
+                    realm__realm_id=realm_id, account=user, role="admin"
+                )
+            )
+
+            if not is_admin:
+                return Response(
+                    {
+                        "status": False,
+                        "message": "You are not authorized to update realm",
+                    },
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+
             if fields:
                 Realm.objects.filter(realm_id=realm_id).update(**fields)
 
