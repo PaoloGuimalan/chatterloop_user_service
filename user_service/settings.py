@@ -44,6 +44,22 @@ MONGODB_DB = os.getenv("MONGODB_DB")
 
 MAILINGSERVICE = os.getenv("MAILINGSERVICE")
 
+JWT_TOKEN = os.getenv("JWT_TOKEN")
+
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = os.getenv("EMAIL_HOST")
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+
+# Default Credentials (for noreply)
+EMAIL_HOST_USER = os.getenv("EMAIL_NOREPLY_USER")
+EMAIL_HOST_PASSWORD = JWT_TOKEN
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+
+# Additional Credentials for Manual Use (for verify)
+EMAIL_VERIFY_USER = os.getenv("EMAIL_VERIFY_USER")
+EMAIL_VERIFY_PASS = JWT_TOKEN
+
 CSRF_TRUSTED_ORIGINS = ["https://*.chatterloop.app", "https://*.neonsystems.net"]
 
 CACHES = {
@@ -107,7 +123,12 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
 
 CORS_ALLOW_ALL_ORIGINS = False
 
-CORS_ALLOW_HEADERS = list(default_headers) + ["x-access-token", "paginated", "action", "x-nonce"]
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "x-access-token",
+    "paginated",
+    "action",
+    "x-nonce",
+]
 
 ROOT_URLCONF = "user_service.urls"
 

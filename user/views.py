@@ -849,10 +849,11 @@ class UserAccountManagement(APIView):
             new_user.save()
 
             send_email_verification_code(
-                from_email="ChatterLoop <no-reply>",
+                from_email="ChatterLoop",
                 to_email=email,
                 subject="Verification Code",
                 user_id=username,
+                body=None,
             )
 
             return Response(
