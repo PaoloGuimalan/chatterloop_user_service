@@ -23,6 +23,7 @@ def send_email_verification_code(from_email, to_email, subject, user_id, body=No
     connection = mail.get_connection(
         username=settings.EMAIL_VERIFY_USER, password=settings.EMAIL_VERIFY_PASS
     )
+    connection.open()
 
     try:
         mail.send_mail(

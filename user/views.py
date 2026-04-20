@@ -862,7 +862,7 @@ class UserAccountManagement(APIView):
                     "message": "Account created",
                     "username": username,
                     "authtoken": jwt.encoder(
-                        {"userID": new_user.id, "username": username}
+                        {"userID": str(new_user.id), "username": username}
                     ),
                 },
                 status=status.HTTP_201_CREATED,
