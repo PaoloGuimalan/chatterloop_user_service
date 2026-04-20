@@ -1,4 +1,4 @@
-from ..utils.external_requests import send_email_verification_code
+from ..utils.external_requests import emailer
 from ..models import Account
 
 
@@ -16,8 +16,7 @@ def run():
         latest = verifications.filter(is_used=False).order_by("-date_generated").first()
 
         if latest:
-            send_email_verification_code(
-                from_email="ChatterLoop",
+            emailer.send_email_verification_code(
                 to_email=account.email,
                 subject="Verification Code",
                 user_id=account.username,

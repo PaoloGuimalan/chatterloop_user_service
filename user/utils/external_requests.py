@@ -2,51 +2,81 @@ from ..models import Account, Verification
 from django.utils.timezone import now
 from .generators import make_id
 from user_service.settings import MAILINGSERVICE
-from django.core import mail
+from django.core.mail import send_mail
 from django.conf import settings
 import requests
 
 
-def send_email_verification_code(from_email, to_email, subject, user_id, body=None):
-    generated_code = make_id(6)  # your random code generator for your logic
+from django.core.mail import get_connection
+from django.conf import settings
 
-    content = (
-        body
-        if body
-        else f"""
-    Welcome to ChatterLoop!
 
-    Your registration was successful! Here is your verification code for the account activation: {generated_code}
-    """
-    )
+class PersistentEmailSender:
+    def __init__(self):
+        self._connection = None
 
-    connection = mail.get_connection(
-        username=settings.EMAIL_VERIFY_USER, password=settings.EMAIL_VERIFY_PASS
-    )
-    connection.open()
+    def _ensure_connection(self):
+        """Open or reuse a valid SMTP connection."""
+        if self._connection is None:
+            self._connection = get_connection(
+                backend="django.core.mail.backends.smtp.EmailBackend",
+                host=settings.EMAIL_HOST,
+                port=settings.EMAIL_PORT,
+                username=settings.EMAIL_VERIFY_USER,
+                password=settings.EMAIL_VERIFY_PASS,
+                use_tls=settings.EMAIL_USE_TLS,
+                use_ssl=settings.EMAIL_USE_SSL,
+                timeout=30,
+            )
+            self._connection.open()
+        elif not getattr(self._connection, "_is_connected", False):
+            # Reconnect if closed or stale
+            self._connection.close()
+            self._connection.open()
+        self._connection._is_connected = True
 
-    try:
-        mail.send_mail(
-            subject,
-            content,
-            settings.EMAIL_VERIFY_USER,
-            [to_email],
-            connection=connection,
+    def send_email_verification_code(
+        self,
+        to_email: str,
+        user_id: str,
+        subject: str = "Verification Code",
+        body: str = None,
+    ):
+
+        generated_code = make_id(6)
+        content = (
+            body
+            or f"""
+Welcome to ChatterLoop!
+
+Your registration was successful! Here is your verification code for the account activation: {generated_code}
+            """.strip()
         )
-        # response = requests.post(f"{MAILINGSERVICE}/sendEmail", json=payload)
-        # if response.status_code == 200 and response.json().get("status") == True:
-        # Save your Verification record here only if email sent
-        ver_record = Verification(
-            user=Account.objects.get(username=user_id),
-            ver_code=generated_code,
-            date_generated=now(),
-            is_used=False,
-        )
-        ver_record.save()
-        return True
-    # else:
-    #     print("Failed to send email:", response.text)
-    #     return False
-    except Exception as e:
-        print("Error sending verification email:", e)
-        return False
+
+        self._ensure_connection()
+
+        try:
+            send_mail(
+                subject=subject,
+                message=content,
+                from_email=settings.EMAIL_VERIFY_USER,
+                recipient_list=[to_email],
+                connection=self._connection,
+            )
+
+            Verification.objects.create(
+                user=Account.objects.get(username=user_id),
+                ver_code=generated_code,
+                date_generated=now(),
+                is_used=False,
+            )
+            return True
+
+        except Exception as e:
+            print("Error sending verification email:", e)
+            self._connection._is_connected = False  # force reconnect next time
+            return False
+
+
+# Usage: create one instance at module level
+emailer = PersistentEmailSender()

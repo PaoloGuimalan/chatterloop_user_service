@@ -34,7 +34,7 @@ from .services.mongohelpers import NotificationService
 from core.models import TPAuthentication
 from .utils.bcrypt_tools import hash_password
 from .utils.generators import generate_unique_username
-from .utils.external_requests import send_email_verification_code
+from .utils.external_requests import emailer
 from django.shortcuts import get_object_or_404
 from django.utils.timezone import localtime
 from .utils.user_manipulation import create_user
@@ -848,8 +848,7 @@ class UserAccountManagement(APIView):
             )
             new_user.save()
 
-            send_email_verification_code(
-                from_email="ChatterLoop",
+            emailer.send_email_verification_code(
                 to_email=email,
                 subject="Verification Code",
                 user_id=username,
