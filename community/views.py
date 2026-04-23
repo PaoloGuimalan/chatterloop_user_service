@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from .models import RealmFollow, Realm, Member
-from .serializers import RealmSerializer
+from .serializers import RealmSerializer, RealmMemberSerializer
 from django.shortcuts import get_object_or_404
 from django.db.models import Q, Exists, OuterRef, Count
 
@@ -231,5 +231,58 @@ class FollowRealmView(APIView):
                 {"status": True, "message": f"Followed {realm_id}"},
                 status=status.HTTP_201_CREATED,
             )
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class RealmMembersView(APIView):
+    permission_classes = [IsAuthenticated]
+    pagination_class = Pagination
+
+    def get(self, request):
+        user = self.request.user
+
+        try:
+            realm_id = request.query_params.get("realm_id")
+            search = request.query_params.get("search", None)
+
+            is_member = Exists(Member.objects.filter(realm__id=realm_id, account=user))
+
+            if not is_member:
+                return Response(
+                    {
+                        "status": False,
+                        "message": "You are not allowed to access members",
+                    },
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+
+            realm_members_query_set = Member.objects.prefetch_related(
+                "account", "added_by"
+            ).filter(realm__id=realm_id)
+
+            if search:
+                if search.startswith("@"):
+                    realm_members_query_set = realm_members_query_set.filter(
+                        Q(account__username__icontains=search)
+                    )
+                else:
+                    realm_members_query_set = realm_members_query_set.filter(
+                        Q(
+                            Q(account__first_name__icontains=search)
+                            | Q(account__middle_name__icontains=search)
+                            | Q(account__last_name__icontains=search)
+                        )
+                    )
+
+            paginator = self.pagination_class()
+            paginated_queryset = paginator.paginate_queryset(
+                realm_members_query_set, request, view=self
+            )
+
+            serialized_result = RealmMemberSerializer(paginated_queryset, many=True)
+            data = paginator.get_paginated_response(serialized_result.data)
+
+            return data
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)

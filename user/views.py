@@ -358,6 +358,7 @@ class UserContacts(APIView):
     def get(self, request):
         user = self.request.user
         try:
+            search = request.query_params.get("search", None)
             paginated_header = request.headers.get("paginated", "true")
 
             queryset = (
@@ -374,6 +375,20 @@ class UserContacts(APIView):
                 # .order_by("connection_id", "-action_date")
                 .order_by("-action_date", "connection_id")
             )
+
+            if search:
+                if search.startswith("@"):
+                    queryset = queryset.filter(
+                        Q(involved_user__username__icontains=search)
+                    )
+                else:
+                    queryset = queryset.filter(
+                        Q(
+                            Q(involved_user__first_name__icontains=search)
+                            | Q(involved_user__middle_name__icontains=search)
+                            | Q(involved_user__last_name__icontains=search)
+                        )
+                    )
 
             if paginated_header == "true":
                 paginator = self.pagination_class()

@@ -1,8 +1,11 @@
 from rest_framework import serializers
 from .models import Realm, Member, RealmFollow
+from user.serializers import AccountPreviewSerializer
 
 
 class RealmMemberSerializer(serializers.ModelSerializer):
+    account = AccountPreviewSerializer()
+    added_by = AccountPreviewSerializer()
 
     class Meta:
         model = Member
