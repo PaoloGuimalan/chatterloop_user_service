@@ -13,6 +13,7 @@ class RealmMemberSerializer(serializers.ModelSerializer):
 
 
 class RealmFollowSerializer(serializers.ModelSerializer):
+    follower = AccountPreviewSerializer()
 
     class Meta:
         model = RealmFollow

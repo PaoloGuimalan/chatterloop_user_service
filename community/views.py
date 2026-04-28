@@ -4,8 +4,8 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from .models import RealmFollow, Realm, Member
-from .serializers import RealmSerializer, RealmMemberSerializer
+from .models import RealmFollow, Realm, Member, RealmFollow
+from .serializers import RealmSerializer, RealmMemberSerializer, RealmFollowSerializer
 from django.shortcuts import get_object_or_404
 from django.db.models import Q, Exists, OuterRef, Count
 
@@ -27,8 +27,8 @@ class TopRealms(APIView):
             type = request.query_params.get("type", None)
 
             top_realm_queryset = Realm.objects.annotate(
-                followers_count=Count("followers"),
-                members=Count("member"),
+                followers_count=Count("followers", distinct=True),
+                members=Count("member", distinct=True),
                 is_admin=Exists(
                     Member.objects.filter(
                         realm=OuterRef("pk"), account=user, role="admin"
@@ -72,8 +72,8 @@ class MyRealms(APIView):
             type = request.query_params.get("type", None)
 
             my_realm_queryset = Realm.objects.annotate(
-                followers_count=Count("followers"),
-                members=Count("member"),
+                followers_count=Count("followers", distinct=True),
+                members=Count("member", distinct=True),
                 is_admin=Exists(
                     Member.objects.filter(
                         realm=OuterRef("pk"), account=user, role="admin"
@@ -151,21 +151,25 @@ class FollowRealmView(APIView):
             search = request.query_params.get("search", None)
             type = request.query_params.get("type", None)
 
-            followed_realm_queryset = Realm.objects.annotate(
-                followers_count=Count("followers"),
-                members=Count("member"),
-                is_admin=Exists(
-                    Member.objects.filter(
-                        realm=OuterRef("pk"), account=user, role="admin"
-                    )
-                ),
-                is_member=Exists(
-                    Member.objects.filter(realm=OuterRef("pk"), account=user)
-                ),
-                is_follower=Exists(
-                    RealmFollow.objects.filter(realm=OuterRef("pk"), follower=user)
-                ),
-            ).filter(is_follower=True, type=type)
+            followed_realm_queryset = (
+                Realm.objects.annotate(
+                    followers_count=Count("followers", distinct=True),
+                    members=Count("member", distinct=True),
+                    is_admin=Exists(
+                        Member.objects.filter(
+                            realm=OuterRef("pk"), account=user, role="admin"
+                        )
+                    ),
+                    is_member=Exists(
+                        Member.objects.filter(realm=OuterRef("pk"), account=user)
+                    ),
+                    is_follower=Exists(
+                        RealmFollow.objects.filter(realm=OuterRef("pk"), follower=user)
+                    ),
+                )
+                .filter(is_follower=True, type=type)
+                .order_by("-id")
+            )
 
             if search:
                 followed_realm_queryset = followed_realm_queryset.filter(
@@ -257,9 +261,11 @@ class RealmMembersView(APIView):
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
 
-            realm_members_query_set = Member.objects.prefetch_related(
-                "account", "added_by"
-            ).filter(realm__id=realm_id)
+            realm_members_query_set = (
+                Member.objects.prefetch_related("account", "added_by")
+                .filter(realm__id=realm_id)
+                .order_by("-date_joined")
+            )
 
             if search:
                 if search.startswith("@"):
@@ -284,5 +290,83 @@ class RealmMembersView(APIView):
             data = paginator.get_paginated_response(serialized_result.data)
 
             return data
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class RealmFollowersView(APIView):
+    permission_classes = [IsAuthenticated]
+    pagination_class = Pagination
+
+    def get(self, request):
+        user = self.request.user
+
+        try:
+            realm_id = request.query_params.get("realm_id")
+            search = request.query_params.get("search", None)
+
+            realm_followers_query_set = (
+                RealmFollow.objects.prefetch_related("follower")
+                .filter(realm__id=str(realm_id))
+                .order_by("-created_at")
+            )
+
+            if search:
+                if search.startswith("@"):
+                    realm_followers_query_set = realm_followers_query_set.filter(
+                        Q(follower__username__icontains=search)
+                    )
+                else:
+                    realm_followers_query_set = realm_followers_query_set.filter(
+                        Q(
+                            Q(follower__first_name__icontains=search)
+                            | Q(follower__middle_name__icontains=search)
+                            | Q(follower__last_name__icontains=search)
+                        )
+                    )
+
+            paginator = self.pagination_class()
+            paginated_queryset = paginator.paginate_queryset(
+                realm_followers_query_set, request, view=self
+            )
+
+            serialized_result = RealmFollowSerializer(paginated_queryset, many=True)
+            data = paginator.get_paginated_response(serialized_result.data)
+
+            return data
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def delete(self, request):
+        user = self.request.user
+
+        try:
+            realm_id = request.data.get("realm_id")
+            follow_id = request.data.get("follow_id")
+
+            is_admin = Exists(
+                Member.objects.filter(realm__id=realm_id, account=user, role="admin")
+            )
+
+            if not is_admin:
+                return Response(
+                    {
+                        "status": False,
+                        "message": "You are not allowed to remove follower",
+                    },
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+
+            delete_query = RealmFollow.objects.get(follow_id=follow_id)
+            delete_query.delete()
+
+            return Response(
+                {
+                    "status": True,
+                    "message": "Follower has been removed",
+                    "reference": follow_id,
+                },
+                status=status.HTTP_200_OK,
+            )
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
