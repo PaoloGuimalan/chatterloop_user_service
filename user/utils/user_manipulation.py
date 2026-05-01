@@ -4,6 +4,10 @@ from django.utils.timezone import make_aware
 from django.utils.timezone import now
 from ..utils.bcrypt_tools import hash_password
 from ..utils.generators import generate_unique_username
+from ..models import UserEngagementLog
+from django.utils.timezone import now, is_naive, make_aware, get_current_timezone
+from django.utils.dateparse import parse_datetime
+import uuid
 
 
 def create_user(
@@ -61,3 +65,26 @@ def create_user(
     except Exception as ex:
         print(str(ex))
         raise ValueError(str(ex))
+
+
+def save_profile_visit(user, profile_id, target_type):
+    try:
+        user_id = uuid.UUID(user.id) if isinstance(user.id, str) else user.id
+
+        if str(profile_id) == str(user.id):
+            return
+
+        log = UserEngagementLog(
+            user_id=user_id,
+            activity_time=now(),
+            time_spent=float(0),
+            activity_type="visit",
+            target_type=target_type,
+            target_id=str(profile_id),
+        )
+        log.save()
+        return log
+
+    except Exception as ex:
+        print(ex)
+        return None

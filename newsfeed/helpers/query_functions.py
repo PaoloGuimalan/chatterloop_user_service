@@ -1,5 +1,8 @@
-from ..models import Post, PostScore, ActivityCount, PreviewCount, PostReference
-from django.utils.timezone import now
+from ..models import Post, PostScore
+from user.models import UserEngagementLog
+from django.utils.timezone import now, is_naive, make_aware, get_current_timezone
+from django.utils.dateparse import parse_datetime
+import uuid
 
 
 def update_ranking_score(post_id, update_type, is_decrease):
@@ -68,3 +71,53 @@ def update_ranking_score(post_id, update_type, is_decrease):
             "ranking_score": ranking_score,
         },
     )
+
+
+def save_viewcache_engagements(user, viewcache):
+    try:
+        if not viewcache:
+            return []
+
+        user_id = uuid.UUID(user.id) if isinstance(user.id, str) else user.id
+        post_ids = [v["post_id"] for v in viewcache]
+
+        existing_logs = UserEngagementLog.objects.filter(
+            user_id=user_id,
+            target_id__in=post_ids,
+            activity_type="view",
+        )
+
+        duration_map = {
+            str(log.target_id): (log.time_spent or 0) for log in existing_logs
+        }
+
+        created = []
+        for view in viewcache:
+            pid = view["post_id"]
+            poid = view["post_owner_id"]
+
+            if poid == user.id:
+                return
+
+            total_duration = duration_map.get(str(pid), 0) + view.get("duration", 0)
+
+            created_at = view.get("created_at")
+            if isinstance(created_at, str):
+                created_at = parse_datetime(created_at)
+            if created_at and is_naive(created_at):
+                created_at = make_aware(created_at, get_current_timezone())
+
+            log = UserEngagementLog(
+                user_id=user_id,
+                activity_time=created_at,
+                time_spent=float(total_duration),
+                activity_type="view",
+                target_type="post",
+                target_id=str(pid),
+            )
+            log.save()
+            created.append(log)
+
+        return created
+    except Exception as ex:
+        print(ex)

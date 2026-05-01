@@ -58,6 +58,7 @@ class Realm(models.Model):
     is_active = models.BooleanField(default=True)
     is_private = models.BooleanField(default=False)
     is_verified = models.BooleanField(default=False)
+    ranking_score = models.FloatField(default=0.0, db_index=True)
 
 
 class Member(models.Model):

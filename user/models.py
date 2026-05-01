@@ -5,6 +5,9 @@ from django.db import models, IntegrityError
 from django.core.validators import EmailValidator
 from django.utils.timezone import now
 
+from cassandra.cqlengine import columns
+from django_cassandra_engine.models import DjangoCassandraModel
+
 
 def generate_random_digit(digit):
     if digit < 1:
@@ -45,6 +48,7 @@ class Account(models.Model):
     is_superuser = models.BooleanField(default=False)
     user_type = models.CharField(default="user", max_length=150, null=False)
     join_type = models.CharField(default="system", max_length=150, null=False)
+    ranking_score = models.FloatField(default=0.0, db_index=True)
 
     def is_authenticated(self):
         return True
@@ -167,3 +171,20 @@ class Connection(models.Model):
     def save(self, *args, **kwargs):
         self.full_clean()  # Calls clean() and validates
         super().save(*args, **kwargs)
+
+
+class UserEngagementLog(DjangoCassandraModel):
+    log_id = columns.UUID(primary_key=True, default=uuid.uuid4)
+    user_id = columns.UUID(primary_key=True, partition_key=True)
+    activity_time = columns.DateTime(primary_key=True, clustering_order="DESC")
+
+    time_spent = columns.Float(required=False)
+    activity_type = columns.Text()  # view, search, profile_visit, comment, share
+    target_type = columns.Text(required=False)  # post, profile, search, realm, etc.
+    target_id = columns.Text(required=False)
+    metadata = columns.Text(required=False)  # JSON string for extra context
+    created_at = columns.DateTime(default=now)
+    updated_at = columns.DateTime(default=now)
+
+    class Meta:
+        get_pk_field = "log_id"

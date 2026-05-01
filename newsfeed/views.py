@@ -46,7 +46,7 @@ from user.services.mongohelpers import NotificationService
 from user_service.services.redis import RedisPubSubClient
 from django.utils.timezone import now
 from datetime import datetime
-from .helpers.query_functions import update_ranking_score
+from .helpers.query_functions import update_ranking_score, save_viewcache_engagements
 import uuid
 from community.models import RealmFollow, Realm
 from django.shortcuts import get_object_or_404
@@ -73,6 +73,7 @@ class NewsfeedView(APIView):
             )
 
             viewcache = request.data.get("viewcache", [])
+            save_viewcache_engagements(user, viewcache)
 
             if len(viewcache):
                 post_ids = [view["post_id"] for view in viewcache]
@@ -274,6 +275,9 @@ class NewsfeedProfileView(APIView):
             ).values("emoji_id")[:1]
 
             viewcache = request.data.get("viewcache", [])
+
+            if user.username != username:
+                save_viewcache_engagements(user, viewcache)
 
             realm_match = Realm.objects.filter(slug=username).first()
             profile_filter = Q(

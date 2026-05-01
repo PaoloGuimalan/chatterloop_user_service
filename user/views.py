@@ -37,7 +37,7 @@ from .utils.generators import generate_unique_username
 from .utils.external_requests import emailer
 from django.shortcuts import get_object_or_404
 from django.utils.timezone import localtime
-from .utils.user_manipulation import create_user
+from .utils.user_manipulation import create_user, save_profile_visit
 from community.models import Realm, Member, RealmFollow
 from community.serializers import RealmSerializer
 import bcrypt
@@ -112,6 +112,8 @@ class UserAuthentication(APIView):
             date_str = date_created.strftime("%m/%d/%Y")
             time_str = date_created.strftime("%I:%M:%S %p").lower()
 
+            save_profile_visit(me, user.id, "profile")
+
             # Build response JSON matching your example
             data = {
                 "data": {
@@ -181,6 +183,9 @@ class UserAuthentication(APIView):
                 ),
                 query_filter,
             )
+
+            save_profile_visit(me, realm_queryset.realm_id, "realm")
+
             serialized_realm = RealmSerializer(realm_queryset)
             data = {"data": {**serialized_realm.data}}
 

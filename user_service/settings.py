@@ -14,6 +14,7 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 from corsheaders.defaults import default_headers
+from cassandra.auth import PlainTextAuthProvider
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -25,6 +26,43 @@ DB_NAME = os.getenv("DB_NAME")
 DB_PORT = os.getenv("DB_PORT")
 DB_USERNAME = os.getenv("DB_USERNAME")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
+
+CASSANDRA_DB_HOST = os.getenv("CASSANDRA_DB_HOST")
+CASSANDRA_DB_NAME = os.getenv("CASSANDRA_DB_NAME")
+CASSANDRA_DB_KEYSPACE = os.getenv("CASSANDRA_DB_KEYSPACE") or CASSANDRA_DB_NAME
+CASSANDRA_DB_PORT = os.getenv("CASSANDRA_DB_PORT")
+CASSANDRA_DB_USERNAME = os.getenv("CASSANDRA_DB_USERNAME")
+CASSANDRA_DB_PASSWORD = os.getenv("CASSANDRA_DB_PASSWORD")
+CASSANDRA_DB_TOKEN = os.getenv("CASSANDRA_DB_TOKEN")
+CASSANDRA_DB_BUNDLE = os.getenv("CASSANDRA_DB_BUNDLE")
+CASSANDRA_DB_ENDPOINT = os.getenv("CASSANDRA_DB_ENDPOINT")
+
+
+def build_cassandra_bundle_path():
+    if not CASSANDRA_DB_BUNDLE:
+        raise ValueError("CASSANDRA_DB_BUNDLE is not set.")
+
+    bundle_path = Path(BASE_DIR) / CASSANDRA_DB_BUNDLE
+    if not bundle_path.exists():
+        raise FileNotFoundError(
+            f"Astra secure connect bundle not found at {bundle_path}"
+        )
+
+    return bundle_path
+
+
+def build_cassandra_auth_provider():
+    if not CASSANDRA_DB_TOKEN:
+        raise ValueError("CASSANDRA_DB_TOKEN is not set.")
+
+    return PlainTextAuthProvider("token", CASSANDRA_DB_TOKEN)
+
+
+CASSANDRA_BUNDLE_PATH = build_cassandra_bundle_path()
+CASSANDRA_AUTH_PROVIDER = build_cassandra_auth_provider()
+CASSANDRA_CLOUD_CONFIG = {
+    "secure_connect_bundle": str(CASSANDRA_BUNDLE_PATH),
+}
 
 DEBUG = os.getenv("DEBUG")
 SECRET_KEY = os.getenv("SECRET_KEY")
@@ -80,6 +118,7 @@ ALLOWED_HOSTS = ["*"]
 # Application definition
 
 INSTALLED_APPS = [
+    "django_cassandra_engine",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -161,7 +200,21 @@ DATABASES = {
         "PASSWORD": DB_PASSWORD,
         "HOST": DB_HOST,
         "PORT": DB_PORT,
-    }
+    },
+    "cassandra": {
+        "ENGINE": "django_cassandra_engine",
+        "NAME": CASSANDRA_DB_KEYSPACE,
+        "HOST": CASSANDRA_DB_HOST,
+        "PORT": CASSANDRA_DB_PORT,
+        "USER": "token",
+        "PASSWORD": CASSANDRA_DB_TOKEN,
+        "OPTIONS": {
+            "connection": {
+                "cloud": CASSANDRA_CLOUD_CONFIG,
+                "auth_provider": CASSANDRA_AUTH_PROVIDER,
+            }
+        },
+    },
 }
 
 
