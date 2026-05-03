@@ -6,6 +6,9 @@ from django.utils.timezone import now
 from user.models import Account
 from community.models import Realm
 
+from cassandra.cqlengine import columns
+from django_cassandra_engine.models import DjangoCassandraModel
+
 
 def generate_random_digit(digit):
     if digit < 1:
@@ -251,3 +254,28 @@ class PostSave(models.Model):
 
     class Meta:
         unique_together = ("post", "user")
+
+
+class NewsfeedIndex(DjangoCassandraModel):
+    """
+    Acts as a high-speed sorting engine and candidate provider.
+    Partition Key: bucket (author_uuid or 'global')
+    Clustering Keys: latest_activity (for sorting) and post_id (uniqueness)
+    """
+
+    # 'global', 'trending', or a specific 'author_uuid'
+    bucket = columns.Text(partition_key=True)
+
+    # Primary Key components (Clustering Keys)
+    # latest_activity: Moves the post to the top on new engagement (Bumping)
+    latest_activity = columns.DateTime(primary_key=True, clustering_order="DESC")
+    # post_id: Ensures we can identify the Postgres record
+    post_id = columns.UUID(primary_key=True, default=uuid.uuid4)
+
+    # Secondary data for fast filtering/access
+    author_id = columns.UUID()
+
+    class Meta:
+        # Set a default TTL (Time To Live) to auto-clean old index records
+        # (e.g., 30 days = 2592000 seconds)
+        get_pk_field = "post_id"
