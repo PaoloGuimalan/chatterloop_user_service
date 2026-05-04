@@ -267,6 +267,8 @@ class NewsfeedIndex(DjangoCassandraModel):
     bucket = columns.Text(partition_key=True)
 
     # Primary Key components (Clustering Keys)
+    # 1. Ranking Score: Highest scores come first
+    ranking_score = columns.Double(primary_key=True, clustering_order="DESC")
     # latest_activity: Moves the post to the top on new engagement (Bumping)
     latest_activity = columns.DateTime(primary_key=True, clustering_order="DESC")
     # post_id: Ensures we can identify the Postgres record
