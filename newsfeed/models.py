@@ -272,10 +272,10 @@ class NewsfeedIndex(DjangoCassandraModel):
     # latest_activity: Moves the post to the top on new engagement (Bumping)
     latest_activity = columns.DateTime(primary_key=True, clustering_order="DESC")
     # post_id: Ensures we can identify the Postgres record
-    post_id = columns.UUID(primary_key=True, default=uuid.uuid4)
+    post_id = columns.Text(primary_key=True)
 
     # Secondary data for fast filtering/access
-    author_id = columns.UUID()
+    author_id = columns.Text()
 
     class Meta:
         # Set a default TTL (Time To Live) to auto-clean old index records
