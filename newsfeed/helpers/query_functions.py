@@ -79,27 +79,15 @@ def save_viewcache_engagements(user, viewcache):
             return []
 
         user_id = uuid.UUID(user.id) if isinstance(user.id, str) else user.id
-        post_ids = [v["post_id"] for v in viewcache]
-
-        existing_logs = UserEngagementLog.objects.filter(
-            user_id=user_id,
-            target_id__in=post_ids,
-            activity_type="view",
-        )
-
-        duration_map = {
-            str(log.target_id): (log.time_spent or 0) for log in existing_logs
-        }
 
         created = []
         for view in viewcache:
             pid = view["post_id"]
             poid = view["post_owner_id"]
+            current_duration = view.get("duration", 0)
 
             if poid == user.id:
                 return
-
-            total_duration = duration_map.get(str(pid), 0) + view.get("duration", 0)
 
             created_at = view.get("created_at")
             if isinstance(created_at, str):
@@ -110,7 +98,7 @@ def save_viewcache_engagements(user, viewcache):
             log = UserEngagementLog(
                 user_id=user_id,
                 activity_time=created_at,
-                time_spent=float(total_duration),
+                time_spent=float(current_duration),
                 activity_type="view",
                 target_type="post",
                 target_id=str(pid),
