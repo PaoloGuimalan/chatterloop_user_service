@@ -1,5 +1,6 @@
 from ..models import Post, PostScore
 from user.models import UserEngagementLog
+from ..models import NewsfeedIndex
 from django.utils.timezone import now, is_naive, make_aware, get_current_timezone
 from django.utils.dateparse import parse_datetime
 import uuid
@@ -7,8 +8,20 @@ import uuid
 
 def update_ranking_score(post_id, update_type, is_decrease):
     post_data = Post.objects.get(post_id=post_id)
-
     post_score = PostScore.objects.get(post=post_data)
+
+    pending_bucket = (
+        post_data.author_realm.id if post_data.author_realm else post_data.user.id
+    )
+
+    try:
+        old_index = NewsfeedIndex.objects.filter(
+            bucket=str(pending_bucket), post_id=str(post_id)
+        ).first()
+    except Exception as ex:
+        print(ex)
+        old_index = None
+
     reactions = post_score.likes_count
 
     reactions_total = reactions
@@ -70,6 +83,22 @@ def update_ranking_score(post_id, update_type, is_decrease):
             "shares_count": shares_count,
             "ranking_score": ranking_score,
         },
+    )
+
+    if old_index:
+        NewsfeedIndex.objects.filter(
+            bucket=old_index.bucket,
+            ranking_score=old_index.ranking_score,
+            latest_activity=old_index.latest_activity,
+            post_id=old_index.post_id,
+        ).delete()
+
+    NewsfeedIndex.objects.create(
+        bucket=str(pending_bucket),
+        ranking_score=ranking_score,
+        latest_activity=now(),
+        post_id=str(post_id),
+        author_id=str(pending_bucket),
     )
 
 

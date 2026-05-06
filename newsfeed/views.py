@@ -46,7 +46,8 @@ from user.services.mongohelpers import NotificationService
 from user_service.services.redis import RedisPubSubClient
 from django.utils.timezone import now
 from datetime import datetime
-from .helpers.query_functions import update_ranking_score, save_viewcache_engagements
+from .helpers.query_functions import save_viewcache_engagements
+from .scripts.calculate_ranking_score import calculate_ranking_score_task
 import uuid
 from community.models import RealmFollow, Realm
 from django.shortcuts import get_object_or_404
@@ -414,9 +415,14 @@ class PostReactionsView(APIView):
                 reaction_ranking.likes_count += 1
                 reaction_ranking.save()
 
-                update_ranking_score(
-                    post_id=post_id, update_type="react", is_decrease=False
-                )
+                # calculate_ranking_score_task.apply_async(
+                #     kwargs={
+                #         "post_id": post_id,
+                #         "update_type": "react",
+                #         "is_decrease": False,
+                #     },
+                #     countdown=5,
+                # )
 
                 if post.user.id != user.id:
                     service = NotificationService()
@@ -531,9 +537,14 @@ class PostReactionsView(APIView):
                 reaction_ranking.likes_count -= 1
                 reaction_ranking.save()
 
-                update_ranking_score(
-                    post_id=post_id, update_type="react", is_decrease=True
-                )
+                # calculate_ranking_score_task.apply_async(
+                #     kwargs={
+                #         "post_id": post_id,
+                #         "update_type": "react",
+                #         "is_decrease": True,
+                #     },
+                #     countdown=5,
+                # )
 
                 emoji = reaction.emoji
                 reaction.delete()
@@ -673,9 +684,14 @@ class CommentsView(APIView):
                     reaction_ranking.comments_count += 1
                     reaction_ranking.save()
 
-                    update_ranking_score(
-                        post_id=post_id, update_type="comment", is_decrease=False
-                    )
+                    # calculate_ranking_score_task.apply_async(
+                    #     kwargs={
+                    #         "post_id": post_id,
+                    #         "update_type": "comment",
+                    #         "is_decrease": False,
+                    #     },
+                    #     countdown=5,
+                    # )
 
                     truncated_comment = (
                         (parent_comment.text[:30] + "...")
@@ -735,9 +751,14 @@ class CommentsView(APIView):
                     reaction_ranking.comments_count += 1
                     reaction_ranking.save()
 
-                    update_ranking_score(
-                        post_id=post_id, update_type="comment", is_decrease=False
-                    )
+                    # calculate_ranking_score_task.apply_async(
+                    #     kwargs={
+                    #         "post_id": post_id,
+                    #         "update_type": "comment",
+                    #         "is_decrease": False,
+                    #     },
+                    #     countdown=5,
+                    # )
 
                     if post.user != user:
                         service = NotificationService()

@@ -128,6 +128,7 @@ INSTALLED_APPS = [
     "django_extensions",
     "rest_framework",
     "corsheaders",
+    "celery",
     # Added apps
     "user",
     "community",
@@ -151,6 +152,23 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "silk.middleware.SilkyMiddleware",
 ]
+
+CELERY_BROKER_URL = (
+    f"redis://{REDIS_USERNAME}:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
+)
+CELERY_RESULT_BACKEND = (
+    f"redis://{REDIS_USERNAME}:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
+)
+CELERY_BROKER_POOL_LIMIT = 4
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_WORKER_MAX_TASKS_PER_CHILD = 1
+CELERY_WORKER_MAX_MEMORY_PER_CHILD = 100000
+CELERY_RESULT_BACKEND = None
+CELERY_IGNORE_RESULT = True
+CELERY_STORE_ERRORS_EVEN_IF_IGNORED = False
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    "max_connections": 4,
+}
 
 CORS_ALLOWED_ORIGINS = []
 
