@@ -1,6 +1,7 @@
 from ..models import Post, PostScore
 from user.models import UserEngagementLog
 from ..models import NewsfeedIndex
+from cassandra.cqlengine.query import BatchQuery
 from django.utils.timezone import now, is_naive, make_aware, get_current_timezone
 from django.utils.dateparse import parse_datetime
 import uuid
@@ -9,18 +10,6 @@ import uuid
 def update_ranking_score(post_id, update_type, is_decrease):
     post_data = Post.objects.get(post_id=post_id)
     post_score = PostScore.objects.get(post=post_data)
-
-    pending_bucket = (
-        post_data.author_realm.id if post_data.author_realm else post_data.user.id
-    )
-
-    try:
-        old_index = NewsfeedIndex.objects.filter(
-            bucket=str(pending_bucket), post_id=str(post_id)
-        ).first()
-    except Exception as ex:
-        print(ex)
-        old_index = None
 
     reactions = post_score.likes_count
 
@@ -85,22 +74,6 @@ def update_ranking_score(post_id, update_type, is_decrease):
         },
     )
 
-    if old_index:
-        NewsfeedIndex.objects.filter(
-            bucket=old_index.bucket,
-            ranking_score=old_index.ranking_score,
-            latest_activity=old_index.latest_activity,
-            post_id=old_index.post_id,
-        ).delete()
-
-    NewsfeedIndex.objects.create(
-        bucket=str(pending_bucket),
-        ranking_score=ranking_score,
-        latest_activity=now(),
-        post_id=str(post_id),
-        author_id=str(pending_bucket),
-    )
-
 
 def save_viewcache_engagements(user, viewcache):
     try:
@@ -135,6 +108,24 @@ def save_viewcache_engagements(user, viewcache):
             log.save()
             created.append(log)
 
+            # 1. Find all timestamps for this post in the user's bucket
+            rows = NewsfeedIndex.objects.filter(bucket=str(user_id), post_id=pid).all()
+
+            # 2. Delete each specific version
+            for row in rows:
+                row.delete()
+
         return created
     except Exception as ex:
         print(ex)
+
+
+def bulk_fanout_to_cache(connections_list, post_data):
+    with BatchQuery() as b:
+        for follower_id in connections_list:
+            NewsfeedIndex.batch(b).create(
+                bucket=str(follower_id),
+                post_id=str(post_data["id"]),
+                created_at=now(),
+                author_id=str(post_data["author_id"]),
+            )

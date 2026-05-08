@@ -257,27 +257,21 @@ class PostSave(models.Model):
 
 
 class NewsfeedIndex(DjangoCassandraModel):
-    """
-    Acts as a high-speed sorting engine and candidate provider.
-    Partition Key: bucket (author_uuid or 'global')
-    Clustering Keys: latest_activity (for sorting) and post_id (uniqueness)
-    """
-
-    # 'global', 'trending', or a specific 'author_uuid'
+    # The viewer_id (the person who owns this feed)
     bucket = columns.Text(partition_key=True)
-
-    # Primary Key components (Clustering Keys)
-    # 1. Ranking Score: Highest scores come first
-    ranking_score = columns.Double(primary_key=True, clustering_order="DESC")
-    # latest_activity: Moves the post to the top on new engagement (Bumping)
-    latest_activity = columns.DateTime(primary_key=True, clustering_order="DESC")
-    # post_id: Ensures we can identify the Postgres record
+    created_at = columns.DateTime(primary_key=True, clustering_order="DESC")
     post_id = columns.Text(primary_key=True)
-
-    # Secondary data for fast filtering/access
     author_id = columns.Text()
 
+    __options__ = {
+        # 14 days = 14 * 24 * 60 * 60
+        "default_time_to_live": 1209600,
+        # Optimization: Since you delete frequently, keep the grace period low
+        "gc_grace_seconds": 86400,  # 1 day (standard for high-turnover caches)
+    }
+
     class Meta:
-        # Set a default TTL (Time To Live) to auto-clean old index records
-        # (e.g., 30 days = 2592000 seconds)
         get_pk_field = "post_id"
+
+    def __str__(self):
+        return f"{self.bucket} - {self.post_id} at {self.created_at}"
