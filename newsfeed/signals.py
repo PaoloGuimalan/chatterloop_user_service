@@ -14,6 +14,7 @@ from .models import (
 from user.models import UserEngagementLog
 from user.services.connections import ConnectionHelpers
 from .helpers.query_functions import bulk_fanout_to_cache
+from django.core.cache import cache
 import uuid
 
 
@@ -119,12 +120,17 @@ def log_comment_action(sender, instance, created, **kwargs):
         )
         current_user = instance.user
 
-        connections = ConnectionHelpers(current_user)
-        connections_list = connections.get_connections()
-
-        bulk_fanout_to_cache(
-            connections_list, {"id": instance.post.post_id, "author_id": author_id}
+        lock_key = (
+            f"bump_lock:{str(instance.post.post_id)}:{str(instance.user.id)}:comment"
         )
+
+        if cache.add(lock_key, "active", timeout=1800):
+            connections = ConnectionHelpers(current_user)
+            connections_list = connections.get_connections()
+
+            bulk_fanout_to_cache(
+                connections_list, {"id": instance.post.post_id, "author_id": author_id}
+            )
 
 
 @receiver(post_delete, sender=Comment)
