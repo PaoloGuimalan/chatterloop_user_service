@@ -48,6 +48,7 @@ class Account(models.Model):
     is_superuser = models.BooleanField(default=False)
     user_type = models.CharField(default="user", max_length=150, null=False)
     join_type = models.CharField(default="system", max_length=150, null=False)
+    connection_count = models.IntegerField(default=0)
     ranking_score = models.FloatField(default=0.0, db_index=True)
 
     def is_authenticated(self):
@@ -121,6 +122,9 @@ class Connection(models.Model):
     )
     action_date = models.DateTimeField(default=now)
     type = models.CharField(max_length=150, null=False, choices=CONNECTION_TYPE_CHOICES)
+
+    interaction_score = models.IntegerField(default=0)
+    last_interaction_at = models.DateTimeField(auto_now=True)
 
     def clean(self):
         super().clean()
