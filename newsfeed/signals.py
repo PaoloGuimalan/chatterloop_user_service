@@ -13,7 +13,11 @@ from .models import (
 )
 from user.models import UserEngagementLog
 from user.services.connections import ConnectionHelpers
-from .helpers.query_functions import bulk_fanout_to_cache
+from .helpers.query_functions import (
+    bulk_fanout_to_cache,
+    interaction_score_bump,
+    follower_interaction_score_bump,
+)
 from django.core.cache import cache
 import uuid
 
@@ -111,6 +115,18 @@ def log_comment_action(sender, instance, created, **kwargs):
         )
         log.save()
 
+        # bump interaction_score
+
+        if instance.user != instance.post.user:
+            interaction_score_bump(
+                instance.user.id, instance.post.user.id, "COMMENT", False
+            )
+
+        if instance.post.author_realm:
+            follower_interaction_score_bump(
+                instance.user.id, instance.post.author_realm.realm_id, "COMMENT", False
+            )
+
         # fan-out to timelines
 
         author_id = (
@@ -120,13 +136,11 @@ def log_comment_action(sender, instance, created, **kwargs):
         )
         current_user = instance.user
 
-        lock_key = (
-            f"bump_lock:{str(instance.post.post_id)}:{str(instance.user.id)}:comment"
-        )
+        lock_key = f"chatterloop:bump_lock:{str(instance.post.post_id)}:{str(instance.user.id)}:comment"
 
         if cache.add(lock_key, "active", timeout=1800):
             connections = ConnectionHelpers(current_user)
-            connections_list = connections.get_connections()
+            connections_list = connections.get_ranked_connections(limit=500)
 
             bulk_fanout_to_cache(
                 connections_list, {"id": instance.post.post_id, "author_id": author_id}

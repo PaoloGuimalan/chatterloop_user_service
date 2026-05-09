@@ -1,9 +1,12 @@
 from ..models import Post, PostScore
-from user.models import UserEngagementLog
+from user.models import UserEngagementLog, Connection
+from community.models import RealmFollow
 from ..models import NewsfeedIndex
 from cassandra.cqlengine.query import BatchQuery
 from django.utils.timezone import now, is_naive, make_aware, get_current_timezone
 from django.utils.dateparse import parse_datetime
+from django.db import transaction
+from django.db.models import Q, F
 import uuid
 
 
@@ -129,3 +132,86 @@ def bulk_fanout_to_cache(connections_list, post_data):
                 created_at=now(),
                 author_id=str(post_data["author_id"]),
             )
+
+
+def interaction_score_bump(actor_id, receiver_id, action, is_decrease):
+    if actor_id == receiver_id:
+        return
+
+    INTERACTION_WEIGHTS = {
+        "NEW_CONNECTION": 10.0,
+        "SHARE": 7.0,
+        "REPOST": 7.0,
+        "COMMENT": 4.0,
+        "LIKE": 1.0,
+        "VIEW": 0.1,
+        "PROFILE_VISIT": 0.5,
+    }
+
+    weight = INTERACTION_WEIGHTS.get(action, 0.0)
+
+    with transaction.atomic():
+        existing_connection_query = Connection.objects.filter(
+            Q(action_by__id=actor_id, involved_user__id=receiver_id)
+            | Q(action_by__id=receiver_id, involved_user__id=actor_id)
+        )
+
+        connection_ids = []
+
+        for connection in existing_connection_query:
+            connection_ids.append(connection.connection_id)
+
+        connection_ids = list(set(connection_ids))
+
+        for id in connection_ids:
+            main_ids = []
+
+            connections_to_update = Connection.objects.filter(connection_id=id)
+
+            # 2. Loop and update
+            for connection in connections_to_update:
+                main_ids.append(connection.id)
+
+            final_updates = Connection.objects.select_for_update().filter(
+                id__in=main_ids
+            )
+
+            final_updates.update(
+                interaction_score=(
+                    F("interaction_score") - weight
+                    if is_decrease
+                    else F("interaction_score") + weight
+                ),
+                last_interaction_at=now(),
+            )
+
+
+def follower_interaction_score_bump(actor_id, receiver_id, action, is_decrease):
+    if not receiver_id:
+        return
+
+    INTERACTION_WEIGHTS = {
+        "NEW_CONNECTION": 10.0,
+        "SHARE": 7.0,
+        "REPOST": 7.0,
+        "COMMENT": 4.0,
+        "LIKE": 1.0,
+        "VIEW": 0.1,
+        "PROFILE_VISIT": 0.5,
+    }
+
+    weight = INTERACTION_WEIGHTS.get(action, 0.0)
+
+    with transaction.atomic():
+        follower_log = RealmFollow.objects.select_for_update().filter(
+            follower_id=actor_id, realm_id=receiver_id
+        )
+
+        follower_log.update(
+            interaction_score=(
+                F("interaction_score") - weight
+                if is_decrease
+                else F("interaction_score") + weight
+            ),
+            last_interaction_at=now(),
+        )

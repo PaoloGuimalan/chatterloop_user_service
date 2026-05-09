@@ -46,7 +46,12 @@ from user.services.mongohelpers import NotificationService
 from user_service.services.redis import RedisPubSubClient
 from django.utils.timezone import now
 from datetime import datetime
-from .helpers.query_functions import save_viewcache_engagements, update_ranking_score
+from .helpers.query_functions import (
+    save_viewcache_engagements,
+    update_ranking_score,
+    interaction_score_bump,
+    follower_interaction_score_bump,
+)
 import uuid
 from community.models import RealmFollow, Realm
 from django.shortcuts import get_object_or_404
@@ -415,6 +420,11 @@ class PostReactionsView(APIView):
                 reaction_ranking.save()
 
                 update_ranking_score(post_id, "react", False)
+                interaction_score_bump(user.id, post.user.id, "LIKE", False)
+                if post.author_realm:
+                    follower_interaction_score_bump(
+                        user.id, post.author_realm.realm_id, "LIKE", False
+                    )
 
                 if post.user.id != user.id:
                     service = NotificationService()
@@ -530,6 +540,11 @@ class PostReactionsView(APIView):
                 reaction_ranking.save()
 
                 update_ranking_score(post_id, "react", True)
+                interaction_score_bump(user.id, post.user.id, "LIKE", True)
+                if post.author_realm:
+                    follower_interaction_score_bump(
+                        user.id, post.author_realm.realm_id, "LIKE", True
+                    )
 
                 emoji = reaction.emoji
                 reaction.delete()

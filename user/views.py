@@ -38,6 +38,10 @@ from .utils.external_requests import emailer
 from django.shortcuts import get_object_or_404
 from django.utils.timezone import localtime
 from .utils.user_manipulation import create_user, save_profile_visit
+from newsfeed.helpers.query_functions import (
+    interaction_score_bump,
+    follower_interaction_score_bump,
+)
 from community.models import Realm, Member, RealmFollow
 from community.serializers import RealmSerializer
 import bcrypt
@@ -113,6 +117,7 @@ class UserAuthentication(APIView):
             time_str = date_created.strftime("%I:%M:%S %p").lower()
 
             save_profile_visit(me, user.id, "profile")
+            interaction_score_bump(me.id, user.id, "PROFILE_VISIT", False)
 
             # Build response JSON matching your example
             data = {
@@ -185,6 +190,9 @@ class UserAuthentication(APIView):
             )
 
             save_profile_visit(me, realm_queryset.realm_id, "realm")
+            follower_interaction_score_bump(
+                me.id, realm_queryset.realm_id, "PROFILE_VISIT", False
+            )
 
             serialized_realm = RealmSerializer(realm_queryset)
             data = {"data": {**serialized_realm.data}}
@@ -512,105 +520,120 @@ class UserContacts(APIView):
             to_user_id = request.data.get("to_user_id")
             now = datetime.now()
 
-            existing_connection_query = Connection.objects.filter(
-                Q(~Q(action_by=user), involved_user=user),
-                connection_id=connection_id,
-            )
-
-            other_users = []
-
-            if existing_connection_query.exists():
-                to_update_query = Connection.objects.filter(
+            with transaction.atomic():
+                existing_connection_query = Connection.objects.filter(
+                    Q(~Q(action_by=user), involved_user=user),
                     connection_id=connection_id,
                 )
 
-                for conn in existing_connection_query:
-                    if conn.action_by != user:
-                        other_users.append(conn.action_by)
-                    if conn.involved_user != user:
-                        other_users.append(conn.involved_user)
+                other_users = []
 
-                # Remove duplicates if needed
-                other_users = list(set(other_users))
+                if existing_connection_query.exists():
+                    to_update_query = Connection.objects.filter(
+                        connection_id=connection_id,
+                    )
 
-                to_update_query.update(status=True)
+                    for conn in existing_connection_query:
+                        if conn.action_by != user:
+                            other_users.append(conn.action_by)
+                        if conn.involved_user != user:
+                            other_users.append(conn.involved_user)
 
-                service = NotificationService()
-                updated = service.update_reference_status(connection_id, True)
+                    # Remove duplicates if needed
+                    other_users = list(set(other_users))
 
-                if updated:
-                    notifHeadline = "Accepted Request"
-                    notifContent = f"@{user.username} accepted your request"
+                    to_update_query.update(status=True)
 
                     service = NotificationService()
-                    service.add_notification(
-                        referenceID=connection_id,
-                        referenceStatus=True,
-                        toUserID=to_user_id,
-                        fromUserID=user.id,
-                        content_headline=notifHeadline,
-                        content_details=notifContent,
-                        type="info_contact_accept",
-                        isRead=False,
-                    )
+                    updated = service.update_reference_status(connection_id, True)
 
-                    data = {
-                        "logType": None,
-                        "pod": "podless",
-                        "event": "notifications",
-                        "message": {
-                            "status": True,
-                            "auth": True,
-                            "message": notifContent,
-                            "result": "",
-                        },
-                        "dateTime": now.isoformat(),
-                    }
+                    if updated:
 
-                    data_reload = {
-                        "logType": None,
-                        "pod": "podless",
-                        "event": "notifications_reload",
-                        "message": {
-                            "status": True,
-                            "auth": True,
-                            "message": "",
-                            "result": "",
-                        },
-                        "dateTime": now.isoformat(),
-                    }
+                        accepter_update = Account.objects.select_for_update().get(
+                            id=user.id
+                        )
+                        accepter_update.connection_count += 1
+                        accepter_update.save()
 
-                    RedisPubSubClient.publish_json(f"events_{user.id}", data_reload)
-                    RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
+                        for other_user in other_users:
+                            acceptee_update = Account.objects.select_for_update().get(
+                                id=other_user.id
+                            )
+                            acceptee_update.connection_count += 1
+                            acceptee_update.save()
+
+                        notifHeadline = "Accepted Request"
+                        notifContent = f"@{user.username} accepted your request"
+
+                        service = NotificationService()
+                        service.add_notification(
+                            referenceID=connection_id,
+                            referenceStatus=True,
+                            toUserID=to_user_id,
+                            fromUserID=user.id,
+                            content_headline=notifHeadline,
+                            content_details=notifContent,
+                            type="info_contact_accept",
+                            isRead=False,
+                        )
+
+                        data = {
+                            "logType": None,
+                            "pod": "podless",
+                            "event": "notifications",
+                            "message": {
+                                "status": True,
+                                "auth": True,
+                                "message": notifContent,
+                                "result": "",
+                            },
+                            "dateTime": now.isoformat(),
+                        }
+
+                        data_reload = {
+                            "logType": None,
+                            "pod": "podless",
+                            "event": "notifications_reload",
+                            "message": {
+                                "status": True,
+                                "auth": True,
+                                "message": "",
+                                "result": "",
+                            },
+                            "dateTime": now.isoformat(),
+                        }
+
+                        RedisPubSubClient.publish_json(f"events_{user.id}", data_reload)
+                        RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
+                    else:
+                        return Response(
+                            {"message": "Notification Error has occured"},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        )
                 else:
                     return Response(
-                        {"message": "Notification Error has occured"},
-                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        {"message": "You are not allowed to approve connection"},
+                        status=status.HTTP_401_UNAUTHORIZED,
                     )
-            else:
+
+                data = {
+                    "logType": None,
+                    "pod": "podless",
+                    "event": "contactslist",
+                    "message": {"status": True, "auth": True, "result": ""},
+                    "dateTime": now.isoformat(),
+                }
+
+                RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
+                RedisPubSubClient.publish_json(f"events_{user.username}", data)
+
+                for other in other_users:
+                    RedisPubSubClient.publish_json(f"events_{other.username}", data)
+
                 return Response(
-                    {"message": "You are not allowed to approve connection"},
-                    status=status.HTTP_401_UNAUTHORIZED,
+                    {"status": True, "message": "Contact has been accepted"},
+                    status=status.HTTP_200_OK,
                 )
-
-            data = {
-                "logType": None,
-                "pod": "podless",
-                "event": "contactslist",
-                "message": {"status": True, "auth": True, "result": ""},
-                "dateTime": now.isoformat(),
-            }
-
-            RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
-            RedisPubSubClient.publish_json(f"events_{user.username}", data)
-
-            for other in other_users:
-                RedisPubSubClient.publish_json(f"events_{other.username}", data)
-
-            return Response(
-                {"status": True, "message": "Contact has been accepted"},
-                status=status.HTTP_200_OK,
-            )
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -622,108 +645,125 @@ class UserContacts(APIView):
             action = request.headers.get("action")
             now = datetime.now()
 
-            existing_connection_query = Connection.objects.filter(
-                Q(Q(action_by=user) | Q(involved_user=user)),
-                type="single",
-                connection_id=connection_id,
-            )
-
-            other_users = []
-
-            if existing_connection_query.exists():
-                for conn in existing_connection_query:
-                    if conn.action_by != user:
-                        other_users.append(conn.action_by)
-                    if conn.involved_user != user:
-                        other_users.append(conn.involved_user)
-
-                # Remove duplicates if needed
-                other_users = list(set(other_users))
-                delete_query = Connection.objects.filter(
+            with transaction.atomic():
+                existing_connection_query = Connection.objects.filter(
+                    Q(Q(action_by=user) | Q(involved_user=user)),
                     type="single",
                     connection_id=connection_id,
                 )
-                delete_query.delete()
 
-                service = NotificationService()
-                updated = service.update_reference_status(connection_id, True)
+                other_users = []
 
-                if updated and action == "decline":
-                    notifHeadline = "Declined Request"
-                    notifContent = f"@{user.username} declined your request"
+                if existing_connection_query.exists():
+                    for conn in existing_connection_query:
+                        if conn.action_by != user:
+                            other_users.append(conn.action_by)
+                        if conn.involved_user != user:
+                            other_users.append(conn.involved_user)
+
+                    # Remove duplicates if needed
+                    other_users = list(set(other_users))
+                    delete_query = Connection.objects.filter(
+                        type="single",
+                        connection_id=connection_id,
+                    )
+                    delete_query.delete()
 
                     service = NotificationService()
-                    service.add_notification(
-                        referenceID=connection_id,
-                        referenceStatus=True,
-                        toUserID=to_user_id,
-                        fromUserID=user.id,
-                        content_headline=notifHeadline,
-                        content_details=notifContent,
-                        type="info_contact_decline",
-                        isRead=False,
+                    updated = service.update_reference_status(connection_id, True)
+
+                    if updated and not action == "decline":
+                        accepter_update = Account.objects.select_for_update().get(
+                            id=user.id
+                        )
+                        accepter_update.connection_count -= 1
+                        accepter_update.save()
+
+                        for other_user in other_users:
+                            acceptee_update = Account.objects.select_for_update().get(
+                                id=other_user.id
+                            )
+                            acceptee_update.connection_count -= 1
+                            acceptee_update.save()
+
+                    if updated and action == "decline":
+                        notifHeadline = "Declined Request"
+                        notifContent = f"@{user.username} declined your request"
+
+                        service = NotificationService()
+                        service.add_notification(
+                            referenceID=connection_id,
+                            referenceStatus=True,
+                            toUserID=to_user_id,
+                            fromUserID=user.id,
+                            content_headline=notifHeadline,
+                            content_details=notifContent,
+                            type="info_contact_decline",
+                            isRead=False,
+                        )
+
+                        data = {
+                            "logType": None,
+                            "pod": "podless",
+                            "event": "notifications",
+                            "message": {
+                                "status": True,
+                                "auth": True,
+                                "message": notifContent,
+                                "result": "",
+                            },
+                            "dateTime": now.isoformat(),
+                        }
+
+                        data_reload = {
+                            "logType": None,
+                            "pod": "podless",
+                            "event": "notifications_reload",
+                            "message": {
+                                "status": True,
+                                "auth": True,
+                                "message": "",
+                                "result": "",
+                            },
+                            "dateTime": now.isoformat(),
+                        }
+
+                        RedisPubSubClient.publish_json(f"events_{user.id}", data_reload)
+                        RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
+                    else:
+                        if action == "decline":
+                            return Response(
+                                {"message": "Notification Error has occured"},
+                                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            )
+                else:
+                    return Response(
+                        {"message": "You are not allowed to remove this connection"},
+                        status=status.HTTP_401_UNAUTHORIZED,
                     )
 
-                    data = {
-                        "logType": None,
-                        "pod": "podless",
-                        "event": "notifications",
-                        "message": {
-                            "status": True,
-                            "auth": True,
-                            "message": notifContent,
-                            "result": "",
-                        },
-                        "dateTime": now.isoformat(),
-                    }
+                data = {
+                    "logType": None,
+                    "pod": "podless",
+                    "event": "contactslist",
+                    "message": {"status": True, "auth": True, "result": ""},
+                    "dateTime": now.isoformat(),
+                }
 
-                    data_reload = {
-                        "logType": None,
-                        "pod": "podless",
-                        "event": "notifications_reload",
-                        "message": {
-                            "status": True,
-                            "auth": True,
-                            "message": "",
-                            "result": "",
-                        },
-                        "dateTime": now.isoformat(),
-                    }
+                RedisPubSubClient.publish_json(f"events_{user.username}", data)
 
-                    RedisPubSubClient.publish_json(f"events_{user.id}", data_reload)
-                    RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
-                else:
-                    if action == "decline":
-                        return Response(
-                            {"message": "Notification Error has occured"},
-                            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        )
-            else:
-                return Response(
-                    {"message": "You are not allowed to remove this connection"},
-                    status=status.HTTP_401_UNAUTHORIZED,
+                for other in other_users:
+                    RedisPubSubClient.publish_json(f"events_{other.username}", data)
+
+                message_response = (
+                    "You have successfully removed connection"
+                    if action == "remove"
+                    else "You declined a connection request"
                 )
 
-            data = {
-                "logType": None,
-                "pod": "podless",
-                "event": "contactslist",
-                "message": {"status": True, "auth": True, "result": ""},
-                "dateTime": now.isoformat(),
-            }
-
-            RedisPubSubClient.publish_json(f"events_{user.username}", data)
-
-            for other in other_users:
-                RedisPubSubClient.publish_json(f"events_{other.username}", data)
-
-            message_response = (
-                "You have successfully removed connection"
-                if action == "remove"
-                else "You declined a connection request"
-            )
-
-            return Response({"message": message_response}, status=status.HTTP_200_OK)
+                return Response(
+                    {"message": message_response}, status=status.HTTP_200_OK
+                )
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

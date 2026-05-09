@@ -123,7 +123,7 @@ class Connection(models.Model):
     action_date = models.DateTimeField(default=now)
     type = models.CharField(max_length=150, null=False, choices=CONNECTION_TYPE_CHOICES)
 
-    interaction_score = models.IntegerField(default=0)
+    interaction_score = models.FloatField(default=10.0)
     last_interaction_at = models.DateTimeField(auto_now=True)
 
     def clean(self):

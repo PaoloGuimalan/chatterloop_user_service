@@ -108,5 +108,8 @@ class RealmFollow(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
+    interaction_score = models.FloatField(default=10.0)
+    last_interaction_at = models.DateTimeField(auto_now=True)
+
     class Meta:
         unique_together = ("follower", "realm")
