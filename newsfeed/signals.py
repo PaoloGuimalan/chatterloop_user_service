@@ -7,7 +7,6 @@ from .models import (
     PreviewCount,
     PostReference,
     PostScore,
-    EngagementLog,
     Comment,
     Reaction,
 )
@@ -98,12 +97,12 @@ def create_preview_counts_for_new_post(sender, instance, created, **kwargs):
 @receiver(post_save, sender=Comment)
 def log_comment_action(sender, instance, created, **kwargs):
     if created:
-        EngagementLog.objects.create(
-            post=instance.post,
-            user=instance.user,
-            action="commented",  # → reference_id = comment.comment_id
-            reference_id=instance.comment_id,
-        )
+        # EngagementLog.objects.create(
+        #     post=instance.post,
+        #     user=instance.user,
+        #     action="commented",  # → reference_id = comment.comment_id
+        #     reference_id=instance.comment_id,
+        # )
 
         log = UserEngagementLog(
             user_id=str(instance.user.id),
@@ -150,9 +149,9 @@ def log_comment_action(sender, instance, created, **kwargs):
 @receiver(post_delete, sender=Comment)
 def remove_comment_log(sender, instance, **kwargs):
     # Remove related EngagementLog entry when comment deleted
-    EngagementLog.objects.filter(
-        reference_id=instance.comment_id, action="commented"
-    ).delete()
+    # EngagementLog.objects.filter(
+    #     reference_id=instance.comment_id, action="commented"
+    # ).delete()
 
     logs = UserEngagementLog.objects.filter(
         user_id=str(instance.user.id),
@@ -172,12 +171,12 @@ def remove_comment_log(sender, instance, **kwargs):
 @receiver(post_save, sender=Reaction)
 def log_reaction_action(sender, instance, created, **kwargs):
     if created:
-        EngagementLog.objects.create(
-            post=instance.post,
-            user=instance.user,
-            action="reacted",  # → reference_id = reaction.reaction_id
-            reference_id=instance.reaction_id,
-        )
+        # EngagementLog.objects.create(
+        #     post=instance.post,
+        #     user=instance.user,
+        #     action="reacted",  # → reference_id = reaction.reaction_id
+        #     reference_id=instance.reaction_id,
+        # )
 
         log = UserEngagementLog(
             user_id=str(instance.user.id),
@@ -192,9 +191,9 @@ def log_reaction_action(sender, instance, created, **kwargs):
 
 @receiver(post_delete, sender=Reaction)
 def remove_reaction_log(sender, instance, **kwargs):
-    EngagementLog.objects.filter(
-        reference_id=instance.reaction_id, action="reacted"
-    ).delete()
+    # EngagementLog.objects.filter(
+    #     reference_id=instance.reaction_id, action="reacted"
+    # ).delete()
 
     logs = UserEngagementLog.objects.filter(
         user_id=str(instance.user.id),

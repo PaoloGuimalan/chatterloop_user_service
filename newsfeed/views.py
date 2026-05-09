@@ -26,8 +26,8 @@ from .models import (
     Comment,
     ActivityCount,
     PostScore,
-    EngagementLog,
     PostSave,
+    NewsfeedIndex,
 )
 from user.models import Account
 from .serializers import (
@@ -80,53 +80,156 @@ class NewsfeedView(APIView):
             viewcache = request.data.get("viewcache", [])
             save_viewcache_engagements(user, viewcache)
 
-            if len(viewcache):
-                post_ids = [view["post_id"] for view in viewcache]
-                existing_logs = EngagementLog.objects.filter(
-                    user=user, post_id__in=post_ids, action="viewed"
-                ).values("post_id", "duration_seconds")
+            # if len(viewcache):
+            #     post_ids = [view["post_id"] for view in viewcache]
+            #     existing_logs = EngagementLog.objects.filter(
+            #         user=user, post_id__in=post_ids, action="viewed"
+            #     ).values("post_id", "duration_seconds")
 
-                duration_map = {
-                    log["post_id"]: log["duration_seconds"] or 0
-                    for log in existing_logs
-                }
+            #     duration_map = {
+            #         log["post_id"]: log["duration_seconds"] or 0
+            #         for log in existing_logs
+            #     }
 
-                values_list = []
-                params = []
-                for view in viewcache:
-                    pid = view["post_id"]
-                    new_log_id = str(uuid.uuid4())
-                    new_total_duration = duration_map.get(pid, 0) + view.get(
-                        "duration", 0
-                    )
+            #     values_list = []
+            #     params = []
+            #     for view in viewcache:
+            #         pid = view["post_id"]
+            #         new_log_id = str(uuid.uuid4())
+            #         new_total_duration = duration_map.get(pid, 0) + view.get(
+            #             "duration", 0
+            #         )
 
-                    values_list.append("(%s, %s, %s, %s, %s, %s, NOW())")
-                    params.extend(
-                        [
-                            new_log_id,
-                            user.id,
-                            pid,
-                            "viewed",
-                            new_total_duration,
-                            view["created_at"],
-                        ]
-                    )
+            #         values_list.append("(%s, %s, %s, %s, %s, %s, NOW())")
+            #         params.extend(
+            #             [
+            #                 new_log_id,
+            #                 user.id,
+            #                 pid,
+            #                 "viewed",
+            #                 new_total_duration,
+            #                 view["created_at"],
+            #             ]
+            #         )
 
-                if values_list:
-                    query = f"""
-                        INSERT INTO newsfeed_engagementlog (log_id, user_id, post_id, action, duration_seconds, updated_at, created_at)
-                        VALUES {", ".join(values_list)}
-                        ON CONFLICT (user_id, post_id, action) 
-                        WHERE action = 'viewed'
-                        DO UPDATE SET 
-                            duration_seconds = EXCLUDED.duration_seconds,
-                            updated_at = EXCLUDED.updated_at;
-                    """
+            #     if values_list:
+            #         query = f"""
+            #             INSERT INTO newsfeed_engagementlog (log_id, user_id, post_id, action, duration_seconds, updated_at, created_at)
+            #             VALUES {", ".join(values_list)}
+            #             ON CONFLICT (user_id, post_id, action)
+            #             WHERE action = 'viewed'
+            #             DO UPDATE SET
+            #                 duration_seconds = EXCLUDED.duration_seconds,
+            #                 updated_at = EXCLUDED.updated_at;
+            #         """
 
-                    with connection.cursor() as cursor:
-                        cursor.execute(query, params)
+            #         with connection.cursor() as cursor:
+            #             cursor.execute(query, params)
 
-            queryset = (
+            # queryset = (
+            #     Post.objects.select_related("user", "score", "author_realm")
+            #     .prefetch_related(
+            #         "tagging",
+            #         "privacy_users",
+            #         "references",
+            #         "map_info",
+            #         "preview",
+            #     )
+            #     .annotate(
+            #         is_friend=Case(
+            #             When(
+            #                 Q(user_id__in=connections_list)
+            #                 | Q(author_realm_id__in=followed_realm_ids),
+            #                 then=Value(0.8),
+            #             ),
+            #             default=Value(0),
+            #             output_field=IntegerField(),
+            #         ),
+            #         is_friend_tagged=Case(
+            #             When(tagging__user_id__in=connections_list, then=Value(0.5)),
+            #             default=Value(0),
+            #             output_field=IntegerField(),
+            #         ),
+            #         is_owner=Case(
+            #             When(user=user, then=Value(1)),
+            #             default=Value(0),
+            #             output_field=IntegerField(),
+            #         ),
+            #         my_last_view=Coalesce(
+            #             Subquery(
+            #                 EngagementLog.objects.filter(
+            #                     post=OuterRef("pk"), user=user, action="viewed"
+            #                 )
+            #                 .order_by("-updated_at")
+            #                 .values("updated_at")[:1]
+            #             ),
+            #             Value("1970-01-01", output_field=models.DateTimeField()),
+            #         ),
+            #         connection_latest_engagement=Coalesce(
+            #             Subquery(
+            #                 EngagementLog.objects.filter(
+            #                     post=OuterRef("pk"),
+            #                     user_id__in=connections_list,
+            #                     action__in=["commented", "shared"],
+            #                 )
+            #                 .order_by("-updated_at")
+            #                 .values("updated_at")[:1]
+            #             ),
+            #             Value("1970-01-01", output_field=models.DateTimeField()),
+            #         ),
+            #         should_show=Case(
+            #             When(
+            #                 Q(my_last_view="1970-01-01")
+            #                 | Q(connection_latest_engagement__gt=F("my_last_view")),
+            #                 then=Value(True),
+            #             ),
+            #             default=Value(False, output_field=models.BooleanField()),
+            #             output_field=models.BooleanField(),
+            #         ),
+            #         is_saved=Exists(
+            #             PostSave.objects.filter(post=OuterRef("pk"), user=user)
+            #         ),
+            #         user_reaction=Coalesce(
+            #             Subquery(
+            #                 Reaction.objects.filter(
+            #                     post=OuterRef("pk"), user=user
+            #                 ).values("emoji_id")[:1]
+            #             ),
+            #             Value(None),
+            #         ),
+            #     )
+            #     .filter(~Q(is_owner=1))
+            #     .filter(
+            #         ~Q(is_owner=1), should_show=True, deleted_at=None, is_archived=False
+            #     )
+            #     .order_by(
+            #         "-is_friend",
+            #         "-should_show",
+            #         "-connection_latest_engagement",
+            #         "-is_friend_tagged",
+            #         "-score__ranking_score",
+            #     )
+            # )
+
+            # paginator = self.pagination_class()
+            # paginated_queryset = paginator.paginate_queryset(
+            #     queryset, request, view=self
+            # )
+
+            # serialized_result = PostSerializer(paginated_queryset, many=True)
+            # data = paginator.get_paginated_response(serialized_result.data)
+
+            # return data
+
+            newsfeed_queryset = (
+                NewsfeedIndex.objects.filter(bucket=str(user.id))
+                .limit(10)
+                .values_list("post_id", flat=True)
+            )
+
+            candidate_post_ids = list(newsfeed_queryset)
+
+            hydrated_posts = (
                 Post.objects.select_related("user", "score", "author_realm")
                 .prefetch_related(
                     "tagging",
@@ -150,42 +253,6 @@ class NewsfeedView(APIView):
                         default=Value(0),
                         output_field=IntegerField(),
                     ),
-                    is_owner=Case(
-                        When(user=user, then=Value(1)),
-                        default=Value(0),
-                        output_field=IntegerField(),
-                    ),
-                    my_last_view=Coalesce(
-                        Subquery(
-                            EngagementLog.objects.filter(
-                                post=OuterRef("pk"), user=user, action="viewed"
-                            )
-                            .order_by("-updated_at")
-                            .values("updated_at")[:1]
-                        ),
-                        Value("1970-01-01", output_field=models.DateTimeField()),
-                    ),
-                    connection_latest_engagement=Coalesce(
-                        Subquery(
-                            EngagementLog.objects.filter(
-                                post=OuterRef("pk"),
-                                user_id__in=connections_list,
-                                action__in=["commented", "shared"],
-                            )
-                            .order_by("-updated_at")
-                            .values("updated_at")[:1]
-                        ),
-                        Value("1970-01-01", output_field=models.DateTimeField()),
-                    ),
-                    should_show=Case(
-                        When(
-                            Q(my_last_view="1970-01-01")
-                            | Q(connection_latest_engagement__gt=F("my_last_view")),
-                            then=Value(True),
-                        ),
-                        default=Value(False, output_field=models.BooleanField()),
-                        output_field=models.BooleanField(),
-                    ),
                     is_saved=Exists(
                         PostSave.objects.filter(post=OuterRef("pk"), user=user)
                     ),
@@ -198,28 +265,26 @@ class NewsfeedView(APIView):
                         Value(None),
                     ),
                 )
-                .filter(~Q(is_owner=1))
                 .filter(
-                    ~Q(is_owner=1), should_show=True, deleted_at=None, is_archived=False
+                    post_id__in=candidate_post_ids, deleted_at=None, is_archived=False
                 )
                 .order_by(
                     "-is_friend",
-                    "-should_show",
-                    "-connection_latest_engagement",
                     "-is_friend_tagged",
                     "-score__ranking_score",
                 )
             )
 
-            paginator = self.pagination_class()
-            paginated_queryset = paginator.paginate_queryset(
-                queryset, request, view=self
+            serialized_result = PostSerializer(hydrated_posts, many=True)
+
+            return Response(
+                {
+                    "count": len(candidate_post_ids),
+                    "next": True if len(serialized_result.data) == 10 else None,
+                    "previous": None,
+                    "results": serialized_result.data,
+                }
             )
-
-            serialized_result = PostSerializer(paginated_queryset, many=True)
-            data = paginator.get_paginated_response(serialized_result.data)
-
-            return data
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

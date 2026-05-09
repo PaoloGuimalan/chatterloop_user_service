@@ -202,44 +202,44 @@ class PostScore(models.Model):
     ranking_score = models.FloatField(default=0.0, db_index=True)
 
 
-class EngagementLog(models.Model):
-    ACTION_CHOICES = [
-        ("viewed", "Viewed"),
-        ("commented", "Commented"),
-        ("reacted", "Reacted"),
-        ("shared", "Shared"),
-    ]
+# class EngagementLog(models.Model):
+#     ACTION_CHOICES = [
+#         ("viewed", "Viewed"),
+#         ("commented", "Commented"),
+#         ("reacted", "Reacted"),
+#         ("shared", "Shared"),
+#     ]
 
-    log_id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
-    post = models.ForeignKey(
-        Post, on_delete=models.CASCADE, related_name="engagement_logs"
-    )
-    user = models.ForeignKey(Account, on_delete=models.CASCADE)
-    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
-    reference_id = models.CharField(
-        max_length=150, null=True, blank=True, db_index=True
-    )  # Points to Comment/Reaction ID
-    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
-    updated_at = models.DateTimeField(auto_now=True, db_index=True)
-    duration_seconds = models.FloatField(
-        null=True, blank=True, default=None
-    )  # For 'viewed' action
+#     log_id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
+#     post = models.ForeignKey(
+#         Post, on_delete=models.CASCADE, related_name="engagement_logs"
+#     )
+#     user = models.ForeignKey(Account, on_delete=models.CASCADE)
+#     action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+#     reference_id = models.CharField(
+#         max_length=150, null=True, blank=True, db_index=True
+#     )  # Points to Comment/Reaction ID
+#     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+#     updated_at = models.DateTimeField(auto_now=True, db_index=True)
+#     duration_seconds = models.FloatField(
+#         null=True, blank=True, default=None
+#     )  # For 'viewed' action
 
-    class Meta:
-        indexes = [
-            models.Index(fields=["post", "user"]),
-            models.Index(fields=["user", "post", "created_at"]),
-            models.Index(fields=["post", "reference_id"]),
-            models.Index(fields=["user", "action", "created_at"]),
-        ]
+#     class Meta:
+#         indexes = [
+#             models.Index(fields=["post", "user"]),
+#             models.Index(fields=["user", "post", "created_at"]),
+#             models.Index(fields=["post", "reference_id"]),
+#             models.Index(fields=["user", "action", "created_at"]),
+#         ]
 
-        constraints = [
-            models.UniqueConstraint(
-                fields=["user", "post", "action"],
-                condition=Q(action="viewed"),
-                name="unique_viewed_engagement",
-            )
-        ]
+#         constraints = [
+#             models.UniqueConstraint(
+#                 fields=["user", "post", "action"],
+#                 condition=Q(action="viewed"),
+#                 name="unique_viewed_engagement",
+#             )
+#         ]
 
 
 class PostSave(models.Model):
@@ -259,8 +259,8 @@ class PostSave(models.Model):
 class NewsfeedIndex(DjangoCassandraModel):
     # The viewer_id (the person who owns this feed)
     bucket = columns.Text(partition_key=True)
-    created_at = columns.DateTime(primary_key=True, clustering_order="DESC")
     post_id = columns.Text(primary_key=True)
+    created_at = columns.DateTime(primary_key=True, clustering_order="DESC")
     author_id = columns.Text()
 
     __options__ = {
