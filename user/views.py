@@ -41,6 +41,7 @@ from .utils.user_manipulation import create_user, save_profile_visit
 from newsfeed.helpers.query_functions import (
     interaction_score_bump,
     follower_interaction_score_bump,
+    remove_feed_on_unfriend,
 )
 from community.models import Realm, Member, RealmFollow
 from community.serializers import RealmSerializer
@@ -658,8 +659,10 @@ class UserContacts(APIView):
                     for conn in existing_connection_query:
                         if conn.action_by != user:
                             other_users.append(conn.action_by)
+                            to_user_id = conn.action_by.id
                         if conn.involved_user != user:
                             other_users.append(conn.involved_user)
+                            to_user_id = conn.involved_user.id
 
                     # Remove duplicates if needed
                     other_users = list(set(other_users))
@@ -760,6 +763,8 @@ class UserContacts(APIView):
                     if action == "remove"
                     else "You declined a connection request"
                 )
+
+                remove_feed_on_unfriend(user.id, to_user_id)
 
                 return Response(
                     {"message": message_response}, status=status.HTTP_200_OK

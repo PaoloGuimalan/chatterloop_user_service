@@ -213,3 +213,12 @@ def follower_interaction_score_bump(actor_id, receiver_id, action, is_decrease):
             ),
             last_interaction_at=now(),
         )
+
+
+def remove_feed_on_unfriend(actor_id, author_id):
+    rows = NewsfeedIndex.objects.filter(
+        bucket=str(actor_id), author_id=author_id, type="fanout"
+    )
+
+    for row in rows:
+        row.delete()
