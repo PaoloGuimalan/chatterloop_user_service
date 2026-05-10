@@ -262,6 +262,7 @@ class NewsfeedIndex(DjangoCassandraModel):
     post_id = columns.Text(primary_key=True)
     created_at = columns.DateTime(primary_key=True, clustering_order="DESC")
     author_id = columns.Text()
+    type = columns.Text(required=True, default="fanout")  # fanout, suggested, sponsored
 
     __options__ = {
         # 14 days = 14 * 24 * 60 * 60
