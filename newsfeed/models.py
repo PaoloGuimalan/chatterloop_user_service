@@ -276,3 +276,22 @@ class NewsfeedIndex(DjangoCassandraModel):
 
     def __str__(self):
         return f"{self.bucket} - {self.post_id} at {self.created_at}"
+    
+class TrendingPool(DjangoCassandraModel):
+    # The partition key: "global", "gaming", "fitness", etc.
+    # experiment between 100 or 1000 for trending post scores
+    category = columns.Text(partition_key=True)
+    
+    # Unique post identifier for Postgres hydration
+    post_id = columns.Text(primary_key=True)
+    created_at = columns.DateTime(primary_key=True, clustering_order="DESC")
+    author_id = columns.Text()
+
+    __options__ = {
+        "default_time_to_live": 259200, # 3 days
+        "gc_grace_seconds": 86400,
+    }
+
+    class Meta:
+        get_pk_field = "post_id"
+

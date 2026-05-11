@@ -1,5 +1,5 @@
 from user.serializers import ConnectionSerializer
-from ..models import Connection
+from ..models import Connection, Account
 from django.db.models import Q, F
 
 
@@ -76,3 +76,16 @@ class ConnectionHelpers:
                     seen.add(v)
 
         return unique_values[:limit]
+    
+
+    def get_mutual_connections(self, friend_id):
+        friend = Account.objects.get(id=friend_id)
+
+        viewer_connections_list = self.get_connections()
+
+        friend_connections = ConnectionHelpers(friend)
+        friend_connections_list = friend_connections.get_connections()
+
+        final_intersection_list = list(set(viewer_connections_list) & set(friend_connections_list))
+
+        return final_intersection_list

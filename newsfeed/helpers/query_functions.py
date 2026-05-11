@@ -222,3 +222,24 @@ def remove_feed_on_unfriend(actor_id, author_id):
 
     for row in rows:
         row.delete()
+
+def get_latest_mutual_engagements(mutual_friend_ids, candidate_pids):
+    latest_social_map = {}
+    candidate_pids_str = [str(pid) for pid in candidate_pids]
+
+    for mf_id in mutual_friend_ids:
+        logs = UserEngagementLog.objects.filter(
+            user_id=mf_id,
+            activity_type__in=['comment', 'share'],
+            target_id__in=candidate_pids_str
+        )
+
+        for log in logs:
+            pid = log.target_id
+            ts = log.activity_time
+            
+            if pid not in latest_social_map or ts > latest_social_map[pid]:
+                latest_social_map[pid] = ts
+
+    return latest_social_map
+
