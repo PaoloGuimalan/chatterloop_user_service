@@ -84,7 +84,7 @@ class NewsfeedView(APIView):
 
             newsfeed_queryset = (
                 NewsfeedIndex.objects.filter(bucket=str(user.id))
-                .limit(page_size)
+                .limit(int(page_size))
                 .values_list("post_id", flat=True)
             )
 
@@ -139,7 +139,7 @@ class NewsfeedView(APIView):
             serialized_result = PostSerializer(hydrated_posts, many=True)
 
             is_page_matched = len(serialized_result.data) == len(candidate_post_ids)
-            is_next = True if is_page_matched and len(serialized_result.data) == page_size else None
+            is_next = True if is_page_matched and len(serialized_result.data) == int(page_size) else None
 
             return Response(
                 {
