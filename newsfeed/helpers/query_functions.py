@@ -289,7 +289,6 @@ def backfill_new_friend_feed(viewer_id, new_friend_id):
                 should_insert = True
 
         if should_insert:
-            print(pid)
             NewsfeedIndex.batch(b).create(
                 bucket=str(viewer_id),
                 post_id=pid,
@@ -300,4 +299,6 @@ def backfill_new_friend_feed(viewer_id, new_friend_id):
 
     if inserted_count > 0:
         b.execute()
-        print(f"Successfully executed batch for {inserted_count} posts")
+        print(
+            f"Successfully executed batch for {inserted_count} posts | {viewer_id}:{new_friend_id}"
+        )
