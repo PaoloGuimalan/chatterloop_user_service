@@ -139,7 +139,8 @@ class NewsfeedView(APIView):
             serialized_result = PostSerializer(hydrated_posts, many=True)
 
             is_page_matched = len(serialized_result.data) == len(candidate_post_ids)
-            is_next = True if is_page_matched and len(serialized_result.data) == int(page_size) else None
+            will_still_paginate = len(serialized_result.data) == int(page_size)
+            is_next = will_still_paginate if is_page_matched else None
 
             return Response(
                 {
