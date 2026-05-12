@@ -42,6 +42,7 @@ from newsfeed.helpers.query_functions import (
     interaction_score_bump,
     follower_interaction_score_bump,
     remove_feed_on_unfriend,
+    backfill_new_friend_feed,
 )
 from community.models import Realm, Member, RealmFollow
 from community.serializers import RealmSerializer
@@ -563,6 +564,9 @@ class UserContacts(APIView):
                             acceptee_update.connection_count += 1
                             acceptee_update.save()
 
+                            backfill_new_friend_feed(user.id, other_user.id)
+                            backfill_new_friend_feed(other_user.id, user.id)
+
                         notifHeadline = "Accepted Request"
                         notifContent = f"@{user.username} accepted your request"
 
@@ -765,6 +769,7 @@ class UserContacts(APIView):
                 )
 
                 remove_feed_on_unfriend(user.id, to_user_id)
+                remove_feed_on_unfriend(to_user_id, user.id)
 
                 return Response(
                     {"message": message_response}, status=status.HTTP_200_OK

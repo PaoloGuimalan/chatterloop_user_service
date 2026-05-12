@@ -1,5 +1,5 @@
 from ..models import Post, PostScore
-from user.models import UserEngagementLog, Connection
+from user.models import UserEngagementLog, Connection, Account
 from community.models import RealmFollow
 from ..models import NewsfeedIndex
 from cassandra.cqlengine.query import BatchQuery
@@ -7,6 +7,7 @@ from django.utils.timezone import now, is_naive, make_aware, get_current_timezon
 from django.utils.dateparse import parse_datetime
 from django.db import transaction
 from django.db.models import Q, F
+from user.services.connections import ConnectionHelpers
 import uuid
 
 
@@ -223,6 +224,7 @@ def remove_feed_on_unfriend(actor_id, author_id):
     for row in rows:
         row.delete()
 
+
 def get_latest_mutual_engagements(mutual_friend_ids, candidate_pids):
     latest_social_map = {}
     candidate_pids_str = [str(pid) for pid in candidate_pids]
@@ -230,16 +232,72 @@ def get_latest_mutual_engagements(mutual_friend_ids, candidate_pids):
     for mf_id in mutual_friend_ids:
         logs = UserEngagementLog.objects.filter(
             user_id=mf_id,
-            activity_type__in=['comment', 'share'],
-            target_id__in=candidate_pids_str
+            activity_type__in=["comment", "share"],
+            target_id__in=candidate_pids_str,
         )
 
         for log in logs:
             pid = log.target_id
             ts = log.activity_time
-            
+
             if pid not in latest_social_map or ts > latest_social_map[pid]:
                 latest_social_map[pid] = ts
 
     return latest_social_map
 
+
+def backfill_new_friend_feed(viewer_id, new_friend_id):
+    user = Account.objects.get(id=viewer_id)
+
+    candidate_posts = Post.objects.filter(user__id=str(new_friend_id))[:50]
+    candidate_pids = [str(p.post_id) for p in candidate_posts]
+
+    view_logs = UserEngagementLog.objects.filter(
+        user_id=viewer_id,
+        activity_type="view",
+        target_type="post",
+        target_id__in=candidate_pids,
+    )
+
+    user_connections = ConnectionHelpers(user)
+    mutual_friends = user_connections.get_mutual_connections(new_friend_id)
+
+    mutual_friend_engagements = {}
+    mutual_friend_engagements = get_latest_mutual_engagements(
+        mutual_friends, candidate_pids
+    )
+
+    for log in view_logs:
+        if log.target_id not in mutual_friend_engagements:
+            mutual_friend_engagements[log.target_id] = log.activity_time
+
+    b = BatchQuery()
+
+    inserted_count = 0
+    for post in candidate_posts:
+        pid = str(post.post_id)
+        final_timestamp = post.date_posted
+        should_insert = False
+
+        if pid not in mutual_friend_engagements:
+            should_insert = True
+        else:
+            bump_ts = mutual_friend_engagements.get(pid, None)
+
+            if bump_ts and bump_ts > mutual_friend_engagements[pid]:
+                final_timestamp = bump_ts
+                should_insert = True
+
+        if should_insert:
+            print(pid)
+            NewsfeedIndex.batch(b).create(
+                bucket=str(viewer_id),
+                post_id=pid,
+                created_at=now(),
+                author_id=str(new_friend_id),
+            )
+            inserted_count += 1
+
+    if inserted_count > 0:
+        b.execute()
+        print(f"Successfully executed batch for {inserted_count} posts")
