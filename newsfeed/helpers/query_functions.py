@@ -86,20 +86,24 @@ def save_viewcache_engagements(user, viewcache):
 
         user_id = uuid.UUID(user.id) if isinstance(user.id, str) else user.id
 
-        created = []
+        logs_to_create = []
+        post_ids_to_clean = []
+
         for view in viewcache:
             pid = view["post_id"]
             poid = view["post_owner_id"]
             current_duration = view.get("duration", 0)
 
-            if poid != user.id:
+            post_ids_to_clean.append(str(pid))
+
+            if str(poid) != str(user.id):
                 created_at = view.get("created_at")
                 if isinstance(created_at, str):
                     created_at = parse_datetime(created_at)
                 if created_at and is_naive(created_at):
                     created_at = make_aware(created_at, get_current_timezone())
 
-                log = UserEngagementLog(
+                log_instance = UserEngagementLog(
                     user_id=user_id,
                     activity_time=created_at,
                     time_spent=float(current_duration),
@@ -107,19 +111,24 @@ def save_viewcache_engagements(user, viewcache):
                     target_type="post",
                     target_id=str(pid),
                 )
-                log.save()
-                created.append(log)
+                logs_to_create.append(log_instance)
 
-            # 1. Find all timestamps for this post in the user's bucket
-            rows = NewsfeedIndex.objects.filter(bucket=str(user_id), post_id=pid)
+        with BatchQuery() as b:
 
-            # 2. Delete each specific version
-            for row in rows:
-                row.delete()
+            for log in logs_to_create:
+                log.batch(b).save()
 
-        return created
+            if post_ids_to_clean:
+                rows_to_delete = NewsfeedIndex.objects.filter(
+                    bucket=str(user_id), post_id__in=post_ids_to_clean
+                )
+                for row in rows_to_delete:
+                    row.batch(b).delete()
+
+        return logs_to_create
     except Exception as ex:
-        print(ex)
+        print(f"Error saving viewcache metrics: {ex}")
+        return []
 
 
 def bulk_fanout_to_cache(connections_list, post_data):
