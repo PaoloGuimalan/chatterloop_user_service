@@ -51,6 +51,8 @@ from .helpers.query_functions import (
     update_ranking_score,
     interaction_score_bump,
     follower_interaction_score_bump,
+    fetch_friends_posts,
+    fetch_trending_posts,
 )
 import uuid
 from community.models import RealmFollow, Realm
@@ -79,16 +81,29 @@ class NewsfeedView(APIView):
                 )
             )
 
+            current_mode = RedisPubSubClient.get_and_toggle_feed_mode(user.id)
+
             viewcache = request.data.get("viewcache", [])
             save_viewcache_engagements(user, viewcache)
 
-            newsfeed_queryset = (
-                NewsfeedIndex.objects.filter(bucket=str(user.id))
-                .limit(int(page_size))
-                .values_list("post_id", flat=True)
-            )
+            if current_mode == "friends":
+                candidate_post_ids = fetch_friends_posts(user.id, page_size)
 
-            candidate_post_ids = list(newsfeed_queryset)
+                if not candidate_post_ids:
+                    candidate_post_ids = fetch_trending_posts(
+                        user.id, page_size, 100, ["global"]
+                    )
+                    current_mode = "trending"
+                    RedisPubSubClient.update_feed_mode(user.id, current_mode)
+            else:
+                candidate_post_ids = fetch_trending_posts(
+                    user.id, page_size, 100, ["global"]
+                )
+
+                if not candidate_post_ids:
+                    candidate_post_ids = fetch_friends_posts(user.id, page_size)
+                    current_mode = "friends"
+                    RedisPubSubClient.update_feed_mode(user.id, current_mode)
 
             hydrated_posts = (
                 Post.objects.select_related("user", "score", "author_realm")

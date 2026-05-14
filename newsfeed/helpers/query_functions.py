@@ -1,7 +1,7 @@
 from ..models import Post, PostScore
 from user.models import UserEngagementLog, Connection, Account
 from community.models import RealmFollow
-from ..models import NewsfeedIndex
+from ..models import NewsfeedIndex, TrendingPool
 from cassandra.cqlengine.query import BatchQuery
 from django.utils.timezone import now, is_naive, make_aware, get_current_timezone
 from django.utils.dateparse import parse_datetime
@@ -311,3 +311,31 @@ def backfill_new_friend_feed(viewer_id, new_friend_id):
         print(
             f"Successfully executed batch for {inserted_count} posts | {viewer_id}:{new_friend_id}"
         )
+
+
+def fetch_friends_posts(user_id, page_size=10):
+    newsfeed_queryset = (
+        NewsfeedIndex.objects.filter(bucket=str(user_id))
+        .limit(int(page_size))
+        .values_list("post_id", flat=True)
+    )
+    return list(newsfeed_queryset)
+
+
+def fetch_trending_posts(user_id, page_size=10, candidate_limit=100, user_interests=[]):
+    # change for later when trending pool is widely used, make population pool flexible to seen posts
+    trending_queryset = (
+        TrendingPool.objects.filter(category__in=user_interests)
+        .limit(int(candidate_limit))
+        .values_list("post_id", flat=True)
+    )
+    trending_pids = list(trending_queryset)
+
+    if not trending_pids:
+        return []
+
+    seen_logs = UserEngagementLog.objects.filter(
+        user_id=str(user_id), activity_type="view", target_id__in=trending_pids
+    )
+    seen_pids = {str(log.target_id) for log in seen_logs}
+    return [pid for pid in trending_pids if pid not in seen_pids][: int(page_size)]
