@@ -324,6 +324,10 @@ def fetch_friends_posts(user_id, page_size=10):
 
 def fetch_trending_posts(user_id, page_size=10, candidate_limit=100, user_interests=[]):
     # change for later when trending pool is widely used, make population pool flexible to seen posts
+    user_uuid = (
+        uuid.UUID(str(user_id)) if not isinstance(user_id, uuid.UUID) else user_id
+    )
+
     trending_queryset = (
         TrendingPool.objects.filter(category__in=user_interests)
         .limit(int(candidate_limit))
@@ -335,7 +339,7 @@ def fetch_trending_posts(user_id, page_size=10, candidate_limit=100, user_intere
         return []
 
     seen_logs = UserEngagementLog.objects.filter(
-        user_id=str(user_id), activity_type="view", target_id__in=trending_pids
+        user_id=user_uuid, activity_type="view", target_id__in=trending_pids
     )
     seen_pids = {str(log.target_id) for log in seen_logs}
     return [pid for pid in trending_pids if pid not in seen_pids][: int(page_size)]
