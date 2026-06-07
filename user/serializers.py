@@ -3,6 +3,8 @@ from .models import Account, Connection
 
 
 class AccountSerializer(serializers.ModelSerializer):
+    is_complete = serializers.BooleanField(read_only=True)
+
     class Meta:
         model = Account
         fields = [
@@ -20,8 +22,9 @@ class AccountSerializer(serializers.ModelSerializer):
             "is_active",
             "is_verified",
             "is_badged",
+            "is_complete",
         ]
-        read_only_fields = ["id", "date_created"]
+        read_only_fields = ["id", "date_created", "is_complete"]
 
     def create(self, validated_data):
         password = validated_data.pop("password")
@@ -39,6 +42,20 @@ class AccountSerializer(serializers.ModelSerializer):
             instance.set_password(password)
         instance.save()
         return instance
+
+    def _get_profile_requirements(self):
+        """List of required fields for profile completion - easy to extend"""
+        return ["birthdate", "gender"]
+
+    def to_representation(self, instance):
+        representation = super().to_representation(instance)
+
+        # Check if all required fields are filled
+        required_fields = self._get_profile_requirements()
+        is_complete = all(getattr(instance, field, None) for field in required_fields)
+
+        representation["is_complete"] = is_complete
+        return representation
 
 
 class AccountPreviewSerializer(serializers.ModelSerializer):
