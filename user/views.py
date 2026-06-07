@@ -867,7 +867,13 @@ class UserSearch(APIView):
 
 
 class UserAccountManagement(APIView):
-    permission_classes = [AllowAny]
+
+    def get_permissions(self):
+        if self.request.method == "PUT":
+            return [IsAuthenticated()]  ## IsAuthenticated()
+        elif self.request.method == "POST":
+            return [AllowAny()]
+        return super().get_permissions()
 
     def post(self, request):
         try:
@@ -899,6 +905,9 @@ class UserAccountManagement(APIView):
             birthdate = make_aware(birthdate_naive)
 
             hashed_password = hash_password(raw_password)
+
+            if gender:
+                gender = gender.lower()
 
             new_user = Account(
                 username=username,
@@ -935,6 +944,43 @@ class UserAccountManagement(APIView):
                     ),
                 },
                 status=status.HTTP_201_CREATED,
+            )
+
+        except Exception as e:
+            return Response(
+                {"status": False, "message": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def put(self, request):
+        try:
+            data = request.data
+            account = self.request.user
+
+            editable_fields = [
+                "first_name",
+                "middle_name",
+                "last_name",
+                "birthdate",
+                "profile",
+                "coverphoto",
+                "gender",
+                "email",
+            ]
+
+            for field in editable_fields:
+                if field in data:
+                    setattr(account, field, data[field])
+
+            account.save()
+
+            return Response(
+                {
+                    "status": True,
+                    "message": "Account updated successfully",
+                    "data": AccountSerializer(account).data,
+                },
+                status=status.HTTP_200_OK,
             )
 
         except Exception as e:
