@@ -20,7 +20,20 @@ class Pagination(PageNumberPagination):
 
 
 class DiaryTotalView(APIView):
-    permission_classes = [AllowAny]  ##IsAuthenticated
+
+    def get_permissions(self):
+        if self.request.method in ["GET"]:
+            return [AllowAny()]
+        return super().get_permissions()
+
+    def get_authenticators(self):
+        """Disable authentication completely for GET and POST requests"""
+        if self.request.method in ["GET"]:
+            return (
+                []
+            )  # Returns an empty list, skipping your AuthenticationBackend completely
+        return super().get_authenticators()
+
     pagination_class = Pagination
 
     def get(self, request, username):

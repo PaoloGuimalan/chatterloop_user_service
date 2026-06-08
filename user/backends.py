@@ -3,6 +3,8 @@ from .models import Account
 from .utils.jwt_tools import JWTTools
 from user_service.utils.crypto import decrypt_nonce
 from user_service.services.redis import RedisPubSubClient
+from .services.mongohelpers import SessionService
+from django.core.exceptions import PermissionDenied
 import time
 
 jwt = JWTTools
@@ -15,30 +17,40 @@ class AutheticationBackend(BaseBackend):
             token = request.headers.get("x-access-token")
             origin = request.headers.get("origin")
             nonce = request.headers.get("x-nonce")
+            device_token = request.headers.get("device-token")
 
             if not origin:
-                return None
+                raise PermissionDenied("Origin blocked")
 
             if not token:
-                return None
+                raise PermissionDenied("Token not defined")
 
             if not nonce:
-                return None
+                raise PermissionDenied("No Nonce defined")
+
+            if not device_token:
+                raise PermissionDenied("Device not recognized. Try logging in again.")
+
+            session = SessionService()
+            is_existing = session.exists(device_token)
+
+            if not is_existing:
+                raise PermissionDenied("Device not logged in.")
 
             decrypted = decrypt_nonce(nonce)
 
             if not decrypted:
-                return None
+                raise PermissionDenied("Error Nonce")
 
             now = int(time.time())
             if abs(now - decrypted["timestamp"]) > 60:
-                return None
+                raise PermissionDenied("Expired Nonce")
 
             is_valid = RedisPubSubClient.is_unique_nonce(
                 decrypted["userId"], decrypted["timestamp"], decrypted["random"]
             )
             if not is_valid:
-                return None
+                raise PermissionDenied("Invalid Nonce")
 
             decoded_header = jwt.decoder(token)
             decoded_id = decoded_header["userID"]
@@ -46,9 +58,10 @@ class AutheticationBackend(BaseBackend):
             user = Account.objects.get(id=decoded_id)
             return (user, True)
         except Account.DoesNotExist:
-            return None
-        except:
-            return None
+            raise PermissionDenied("Account does not exist")
+        except Exception as ex:
+            print(ex)
+            raise PermissionDenied("Error querying account")
 
     def get_user(self, user_id):
         try:

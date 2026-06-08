@@ -211,7 +211,20 @@ class NewsfeedView(APIView):
 
 
 class NewsfeedProfileView(APIView):
-    permission_classes = [AllowAny]  ## IsAuthenticated
+
+    def get_permissions(self):
+        if self.request.method in ["POST"]:
+            return [AllowAny()]
+        return super().get_permissions()
+
+    def get_authenticators(self):
+        """Disable authentication completely for GET and POST requests"""
+        if self.request.method in ["POST"]:
+            return (
+                []
+            )  # Returns an empty list, skipping your AuthenticationBackend completely
+        return super().get_authenticators()
+
     pagination_class = Pagination
 
     def post(self, request, username):
@@ -274,7 +287,19 @@ class NewsfeedProfileView(APIView):
 
 
 class NewsfeedPostPreviewView(APIView):
-    permission_classes = [AllowAny]  ## IsAuthenticated
+
+    def get_permissions(self):
+        if self.request.method in ["GET"]:
+            return [AllowAny()]
+        return super().get_permissions()
+
+    def get_authenticators(self):
+        """Disable authentication completely for GET and POST requests"""
+        if self.request.method in ["GET"]:
+            return (
+                []
+            )  # Returns an empty list, skipping your AuthenticationBackend completely
+        return super().get_authenticators()
 
     def get(self, request, post_id):
         user = self.request.user
@@ -320,7 +345,19 @@ class NewsfeedPostPreviewView(APIView):
 
 
 class EmojisView(APIView):
-    permission_classes = [AllowAny]  # IsAuthenticated
+
+    def get_permissions(self):
+        if self.request.method in ["GET"]:
+            return [AllowAny()]
+        return super().get_permissions()
+
+    def get_authenticators(self):
+        """Disable authentication completely for GET and POST requests"""
+        if self.request.method in ["GET"]:
+            return (
+                []
+            )  # Returns an empty list, skipping your AuthenticationBackend completely
+        return super().get_authenticators()
 
     def get(self, request):
         user = self.request.user
@@ -544,10 +581,17 @@ class CommentsView(APIView):
     pagination_class = Pagination
 
     def get_permissions(self):
-        if self.request.method == "GET":
-            return [AllowAny()]  ## IsAuthenticated()
-        else:
-            return [IsAuthenticated()]
+        if self.request.method in ["GET"]:
+            return [AllowAny()]
+        return super().get_permissions()
+
+    def get_authenticators(self):
+        """Disable authentication completely for GET and POST requests"""
+        if self.request.method in ["GET"]:
+            return (
+                []
+            )  # Returns an empty list, skipping your AuthenticationBackend completely
+        return super().get_authenticators()
 
     def get(self, request):
         try:

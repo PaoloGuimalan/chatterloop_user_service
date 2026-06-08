@@ -185,6 +185,7 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     "paginated",
     "action",
     "x-nonce",
+    "device-token",
 ]
 
 ROOT_URLCONF = "user_service.urls"

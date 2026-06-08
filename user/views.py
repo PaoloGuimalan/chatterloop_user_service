@@ -30,7 +30,7 @@ from datetime import datetime
 from django.utils.timezone import make_aware
 from django.utils.timezone import now
 from .ext_models.mongomodels import Message
-from .services.mongohelpers import NotificationService
+from .services.mongohelpers import NotificationService, SessionService
 from core.models import TPAuthentication
 from .utils.bcrypt_tools import hash_password
 from .utils.generators import generate_unique_username
@@ -59,11 +59,17 @@ class Pagination(PageNumberPagination):
 class UserAuthentication(APIView):
 
     def get_permissions(self):
-        if self.request.method == "GET":
-            return [AllowAny()]  ## IsAuthenticated()
-        elif self.request.method == "POST":
+        if self.request.method in ["GET", "POST"]:
             return [AllowAny()]
         return super().get_permissions()
+
+    def get_authenticators(self):
+        """Disable authentication completely for GET and POST requests"""
+        if self.request.method in ["GET", "POST"]:
+            return (
+                []
+            )  # Returns an empty list, skipping your AuthenticationBackend completely
+        return super().get_authenticators()
 
     def get(self, request, username=None):
         me = self.request.user
@@ -205,6 +211,16 @@ class UserAuthentication(APIView):
         try:
             email_username = request.data.get("email_username")
             password = request.data.get("password")
+            device_token = request.headers.get("device-token")
+
+            if not device_token:
+                return Response(
+                    {
+                        "status": False,
+                        "message": "Device unrecognized",
+                    },
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
 
             if not email_username or not password:
                 return Response(
@@ -228,6 +244,11 @@ class UserAuthentication(APIView):
                 if is_correct:
 
                     serialized_user = AccountSerializer(user)
+
+                    session = SessionService()
+
+                    if not session.exists(device_token):
+                        session.add_session(request, user.id, device_token)
 
                     return Response(
                         {
@@ -265,11 +286,24 @@ class UserAuthentication(APIView):
 
 
 class ThirdPartyAuthentication(APIView):
-    permission_classes = [AllowAny]
+
+    def get_permissions(self):
+        if self.request.method in ["POST"]:
+            return [AllowAny()]
+        return super().get_permissions()
+
+    def get_authenticators(self):
+        """Disable authentication completely for GET and POST requests"""
+        if self.request.method in ["POST"]:
+            return (
+                []
+            )  # Returns an empty list, skipping your AuthenticationBackend completely
+        return super().get_authenticators()
 
     def post(self, request):
         try:
             token = request.data.get("token")
+            device_token = request.headers.get("device-token")
 
             decoded_token = JWTTools.decoder(token, options={"verify_signature": False})
 
@@ -287,6 +321,11 @@ class ThirdPartyAuthentication(APIView):
                     if len(user) > 0:
                         user = user[0]
                         serialized_user = AccountSerializer(user)
+
+                        session = SessionService()
+
+                        if not session.exists(device_token):
+                            session.add_session(request, user.id, device_token)
 
                         return Response(
                             {
@@ -869,11 +908,17 @@ class UserSearch(APIView):
 class UserAccountManagement(APIView):
 
     def get_permissions(self):
-        if self.request.method == "PUT":
-            return [IsAuthenticated()]  ## IsAuthenticated()
-        elif self.request.method == "POST":
+        if self.request.method in ["POST"]:
             return [AllowAny()]
         return super().get_permissions()
+
+    def get_authenticators(self):
+        """Disable authentication completely for GET and POST requests"""
+        if self.request.method in ["POST"]:
+            return (
+                []
+            )  # Returns an empty list, skipping your AuthenticationBackend completely
+        return super().get_authenticators()
 
     def post(self, request):
         try:

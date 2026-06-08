@@ -96,3 +96,23 @@ class Notification(Document):
 
 
 # END: Notifications Models
+
+
+class Session(Document):
+    meta = {"collection": "sessions"}
+
+    sessionID = StringField(required=True)
+    userID = StringField(required=True)
+    userAgent = StringField(required=True)
+    deviceType = StringField(required=True)
+    deviceToken = StringField(required=True)
+
+    status = BooleanField(default=None)
+
+    browser = StringField(default=None)
+    os = StringField(default=None)
+    ip = StringField(default=None)
+
+    lastSeen = DateTimeField(default=None)
+
+    __v = IntField(db_field="__v")
