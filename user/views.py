@@ -59,16 +59,28 @@ class Pagination(PageNumberPagination):
 class UserAuthentication(APIView):
 
     def get_permissions(self):
-        if self.request.method in ["GET", "POST"]:
+        if self.request.method == "GET":
+            # Require IsAuthenticated only if x-access-token header exists
+            if self.request.headers.get("x-access-token"):
+                return [IsAuthenticated()]
             return [AllowAny()]
+
+        if self.request.method == "POST":
+            return [AllowAny()]
+
         return super().get_permissions()
 
     def get_authenticators(self):
-        """Disable authentication completely for GET and POST requests"""
-        if self.request.method in ["GET", "POST"]:
-            return (
-                []
-            )  # Returns an empty list, skipping your AuthenticationBackend completely
+        """Disable authentication for POST, but allow it for GET when x-access-token exists"""
+        if self.request.method == "POST":
+            return []
+
+        if self.request.method == "GET":
+            # Keep authenticators if x-access-token header exists, otherwise disable
+            if self.request.headers.get("x-access-token"):
+                return super().get_authenticators()
+            return []
+
         return super().get_authenticators()
 
     def get(self, request, username=None):
