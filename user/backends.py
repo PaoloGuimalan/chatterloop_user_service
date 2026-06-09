@@ -31,12 +31,6 @@ class AutheticationBackend(BaseBackend):
             if not device_token:
                 raise PermissionDenied("Device not recognized. Try logging in again.")
 
-            session = SessionService()
-            is_existing = session.exists(device_token)
-
-            if not is_existing:
-                raise PermissionDenied("Device not logged in.")
-
             decrypted = decrypt_nonce(nonce)
 
             if not decrypted:
@@ -56,6 +50,13 @@ class AutheticationBackend(BaseBackend):
             decoded_id = decoded_header["userID"]
 
             user = Account.objects.get(id=decoded_id)
+
+            session = SessionService()
+            is_existing = session.exists(device_token, user.id)
+
+            if not is_existing:
+                raise PermissionDenied("Device not logged in.")
+
             return (user, True)
         except Account.DoesNotExist:
             raise PermissionDenied("Account does not exist")

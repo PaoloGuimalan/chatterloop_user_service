@@ -80,9 +80,12 @@ class SessionService:
             cls._instance = super(SessionService, cls).__new__(cls)
         return cls._instance
 
-    def exists(self, device_token):
+    def exists(self, device_token, user_id):
         """Check if a session exists by its deviceToken."""
-        return Session.objects(deviceToken=device_token).first() is not None
+        return (
+            Session.objects(deviceToken=device_token, userID=str(user_id)).first()
+            is not None
+        )
 
     def add_session(self, request, userID, device_token):
         """Extracts all client parameters and user metadata straight from the Django request."""

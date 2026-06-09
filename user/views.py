@@ -247,7 +247,7 @@ class UserAuthentication(APIView):
 
                     session = SessionService()
 
-                    if not session.exists(device_token):
+                    if not session.exists(device_token, user.id):
                         session.add_session(request, user.id, device_token)
 
                     return Response(
@@ -324,7 +324,7 @@ class ThirdPartyAuthentication(APIView):
 
                         session = SessionService()
 
-                        if not session.exists(device_token):
+                        if not session.exists(device_token, user.id):
                             session.add_session(request, user.id, device_token)
 
                         return Response(
