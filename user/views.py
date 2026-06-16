@@ -86,7 +86,9 @@ class UserAuthentication(APIView):
     def get(self, request, username=None):
         me = self.request.user
         # user = get_object_or_404(Account, username=username)
-        user_queryset = Account.objects.filter(username=username)
+        user_queryset = Account.objects.filter(
+            username=username, is_active=True, is_verified=True, user_type="user"
+        )
         user = None
         transaction_type = request.query_params.get("type", None)
 
@@ -1023,6 +1025,7 @@ class UserAccountManagement(APIView):
                 "coverphoto",
                 "gender",
                 "email",
+                "username",
             ]
 
             for field in editable_fields:

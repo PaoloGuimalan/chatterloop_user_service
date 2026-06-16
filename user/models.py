@@ -41,6 +41,7 @@ class Account(models.Model):
     email = models.EmailField(unique=True, validators=[EmailValidator()])
     password = models.CharField(max_length=400, null=False, default=uuid.uuid4)
     date_created = models.DateTimeField(default=now)
+    date_updated = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)
     is_verified = models.BooleanField(default=False)
     is_badged = models.BooleanField(default=False)
