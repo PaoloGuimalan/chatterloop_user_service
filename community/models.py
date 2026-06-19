@@ -61,6 +61,7 @@ class Realm(models.Model):
     is_private = models.BooleanField(default=False)
     is_verified = models.BooleanField(default=False)
     is_temporary = models.BooleanField(default=False)
+    starts_at = models.DateTimeField(null=True)
     expires_at = models.DateTimeField(null=True)
     created_at = models.DateTimeField(default=now)
     ranking_score = models.FloatField(default=0.0, db_index=True)
