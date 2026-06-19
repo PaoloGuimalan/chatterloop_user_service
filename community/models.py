@@ -2,6 +2,7 @@ import uuid
 import random
 from django.db import models
 from user.models import Account
+from django.utils.timezone import now
 
 
 def generate_random_digit(digit):
@@ -19,6 +20,7 @@ class Realm(models.Model):
         ("page", "Page"),
         ("server", "Server"),
         ("group", "Group"),
+        ("conference", "Conference"),
     ]
 
     id = models.CharField(
@@ -58,6 +60,9 @@ class Realm(models.Model):
     is_active = models.BooleanField(default=True)
     is_private = models.BooleanField(default=False)
     is_verified = models.BooleanField(default=False)
+    is_temporary = models.BooleanField(default=False)
+    expires_at = models.DateTimeField(null=True)
+    created_at = models.DateTimeField(default=now)
     ranking_score = models.FloatField(default=0.0, db_index=True)
 
 
