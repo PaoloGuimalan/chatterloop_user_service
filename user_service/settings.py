@@ -81,6 +81,7 @@ MONGODB_CLUSTER_HOST = os.getenv("MONGODB_CLUSTER_HOST")
 MONGODB_DB = os.getenv("MONGODB_DB")
 
 MAILINGSERVICE = os.getenv("MAILINGSERVICE")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://chatterloop.app")
 
 JWT_TOKEN = os.getenv("JWT_TOKEN")
 

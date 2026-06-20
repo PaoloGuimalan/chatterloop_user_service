@@ -44,14 +44,11 @@ class PersistentEmailSender:
     ):
 
         generated_code = make_id(6)
-        content = (
-            body
-            or f"""
+        content = body or f"""
 Welcome to ChatterLoop!
 
 Your registration was successful! Here is your verification code for the account activation: {generated_code}
             """.strip()
-        )
 
         self._ensure_connection()
 
@@ -75,6 +72,39 @@ Your registration was successful! Here is your verification code for the account
         except Exception as e:
             print("Error sending verification email:", e)
             self._connection._is_connected = False  # force reconnect next time
+            return False
+
+    def send_realm_invite_email(
+        self,
+        to_email: str,
+        realm_name: str,
+        invite_link: str,
+        inviter_name: str = "Chatterloop",
+        subject: str = "You're invited to a Chatterloop Realm",
+        body: str = None,
+    ):
+
+        content = body or f"""
+{inviter_name} invited you to join {realm_name}.
+
+Open the invite link below to continue:
+{invite_link}
+            """.strip()
+
+        self._ensure_connection()
+
+        try:
+            send_mail(
+                subject=subject,
+                message=content,
+                from_email=settings.EMAIL_VERIFY_USER,
+                recipient_list=[to_email],
+                connection=self._connection,
+            )
+            return True
+        except Exception as e:
+            print("Error sending realm invite email:", e)
+            self._connection._is_connected = False
             return False
 
 

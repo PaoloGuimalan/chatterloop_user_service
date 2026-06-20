@@ -1,5 +1,6 @@
 import uuid
 import random
+import secrets
 from django.db import models
 from user.models import Account
 from django.utils.timezone import now
@@ -11,6 +12,10 @@ def generate_random_digit(digit):
     start = 10 ** (digit - 1)
     end = 10**digit - 1
     return str(random.randint(start, end))
+
+
+def generate_invite_token():
+    return secrets.token_urlsafe(16)
 
 
 class Realm(models.Model):
@@ -119,3 +124,72 @@ class RealmFollow(models.Model):
 
     class Meta:
         unique_together = ("follower", "realm")
+
+
+class Invite(models.Model):
+
+    INVITE_KIND_CHOICES = [
+        ("invite", "Invite"),
+        ("request", "Request"),
+    ]
+
+    INVITE_STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("accepted", "Accepted"),
+        ("declined", "Declined"),
+        ("revoked", "Revoked"),
+    ]
+
+    id = models.CharField(
+        max_length=150, default=uuid.uuid4, unique=True, blank=True, primary_key=True
+    )
+    realm = models.ForeignKey(
+        Realm,
+        null=False,
+        on_delete=models.DO_NOTHING,
+        related_name="realm_invites",
+    )
+    kind = models.CharField(
+        max_length=150, choices=INVITE_KIND_CHOICES, default="invite"
+    )
+    status = models.CharField(
+        max_length=150, choices=INVITE_STATUS_CHOICES, default="pending"
+    )
+    target_email = models.EmailField(db_index=True)
+    target_user = models.ForeignKey(
+        Account,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="realm_invites_targeted",
+    )
+    accepted_by_user = models.ForeignKey(
+        Account,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="realm_invites_accepted",
+    )
+    invite_token = models.CharField(
+        max_length=255, unique=True, default=generate_invite_token
+    )
+    created_by = models.ForeignKey(
+        Account,
+        null=False,
+        on_delete=models.DO_NOTHING,
+        related_name="realm_invites_created",
+    )
+    created_at = models.DateTimeField(default=now)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["realm", "target_email"]),
+            models.Index(fields=["realm", "invite_token"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.target_email:
+            self.target_email = self.target_email.strip().lower()
+        super().save(*args, **kwargs)
