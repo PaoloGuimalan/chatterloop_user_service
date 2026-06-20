@@ -5,7 +5,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from .models import RealmFollow, Realm, Member, Invite
+from .models import RealmFollow, Realm, Member, Invite, generate_invite_token
 from .serializers import (
     RealmSerializer,
     RealmMemberSerializer,
@@ -386,11 +386,12 @@ class InviteView(APIView):
                 )
 
             realm = get_object_or_404(Realm, realm_id=realm_id)
+            normalized_kind = "request" if kind == "request" else "invite"
             is_admin = Member.objects.filter(
                 realm=realm, account=user, role="admin"
             ).exists()
 
-            if not is_admin:
+            if normalized_kind != "request" and not is_admin:
                 return Response(
                     {"status": False, "message": "You are not allowed to invite users"},
                     status=status.HTTP_401_UNAUTHORIZED,
@@ -399,33 +400,61 @@ class InviteView(APIView):
             normalized_email = str(target_email).strip().lower()
             target_user = Account.objects.filter(email__iexact=normalized_email).first()
 
-            invite = Invite.objects.create(
-                realm=realm,
-                kind="request" if kind == "request" else "invite",
-                status="pending",
-                target_email=normalized_email,
-                target_user=target_user,
-                created_by=user,
+            existing_pending_invite = (
+                Invite.objects.filter(
+                    realm=realm,
+                    target_email=normalized_email,
+                    status="pending",
+                )
+                .order_by("-created_at")
+                .first()
             )
 
-            frontend_base_url = getattr(settings, "FRONTEND_URL", "https://chatterloop.app").rstrip("/")
-            invite_path = (
-                f"/conference/{realm.slug}"
-                if realm.type == "conference" and realm.slug
-                else f"/{realm.slug or realm.realm_id}"
-            )
-            invite_link = f"{frontend_base_url}{invite_path}?invite_token={invite.invite_token}"
-            emailer.send_realm_invite_email(
-                to_email=normalized_email,
-                realm_name=realm.name,
-                invite_link=invite_link,
-                inviter_name=user.username,
-            )
+            if existing_pending_invite:
+                existing_pending_invite.kind = normalized_kind
+                existing_pending_invite.target_user = target_user
+                existing_pending_invite.created_by = user
+                existing_pending_invite.created_at = now()
+                existing_pending_invite.resolved_at = None
+                if normalized_kind == "invite":
+                    existing_pending_invite.invite_token = generate_invite_token()
+                existing_pending_invite.save()
+                invite = existing_pending_invite
+            else:
+                invite = Invite.objects.create(
+                    realm=realm,
+                    kind=normalized_kind,
+                    status="pending",
+                    target_email=normalized_email,
+                    target_user=target_user,
+                    created_by=user,
+                )
+
+            if normalized_kind == "invite":
+                frontend_base_url = getattr(
+                    settings, "FRONTEND_URL", "https://chatterloop.app"
+                ).rstrip("/")
+                invite_path = (
+                    f"/conference/{realm.slug}"
+                    if realm.type == "conference" and realm.slug
+                    else f"/{realm.slug or realm.realm_id}"
+                )
+                invite_link = (
+                    f"{frontend_base_url}{invite_path}?invite_token={invite.invite_token}"
+                )
+                emailer.send_realm_invite_email(
+                    to_email=normalized_email,
+                    realm_name=realm.name,
+                    invite_link=invite_link,
+                    inviter_name=user.username,
+                )
 
             return Response(
                 {
                     "status": True,
-                    "message": "Invite created",
+                    "message": "Invite created"
+                    if normalized_kind == "invite"
+                    else "Access request submitted",
                     "result": self._serialize_invite(invite),
                 },
                 status=status.HTTP_201_CREATED,
