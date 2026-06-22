@@ -57,6 +57,7 @@ from .helpers.query_functions import (
 import uuid
 from community.models import RealmFollow, Realm
 from django.shortcuts import get_object_or_404
+from user.utils.blocking import get_blocked_account_ids, is_blocked
 
 
 class Pagination(PageNumberPagination):
@@ -80,6 +81,7 @@ class NewsfeedView(APIView):
                     "realm_id", flat=True
                 )
             )
+            blocked_account_ids = get_blocked_account_ids(user)
 
             current_mode = RedisPubSubClient.get_and_toggle_feed_mode(user.id)
 
@@ -144,6 +146,7 @@ class NewsfeedView(APIView):
                 .filter(
                     post_id__in=candidate_post_ids, deleted_at=None, is_archived=False
                 )
+                .exclude(user_id__in=blocked_account_ids)
                 .order_by(
                     "-is_friend",
                     "-is_friend_tagged",
@@ -243,6 +246,18 @@ class NewsfeedProfileView(APIView):
                 save_viewcache_engagements(user, viewcache)
 
             realm_match = Realm.objects.filter(slug=username).first()
+
+            if not realm_match and isinstance(user, Account):
+                target_account = Account.objects.filter(username=username).first()
+                if target_account and is_blocked(user, target_account):
+                    empty_paginator = self.pagination_class()
+                    empty_page = empty_paginator.paginate_queryset(
+                        Post.objects.none(), request, view=self
+                    )
+                    return empty_paginator.get_paginated_response(
+                        PostSerializer(empty_page, many=True).data
+                    )
+
             profile_filter = Q(
                 Q(user__username=username) | Q(tagging__user__username=username)
             ) & Q(author_realm=None)

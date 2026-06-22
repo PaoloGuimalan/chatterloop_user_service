@@ -1,6 +1,7 @@
 from django.contrib.auth.backends import BaseBackend
 from .models import Account
 from .utils.jwt_tools import JWTTools
+from .utils.consent import get_pending_consents
 from user_service.utils.crypto import decrypt_nonce
 from user_service.services.redis import RedisPubSubClient
 from .services.mongohelpers import SessionService
@@ -9,8 +10,43 @@ import time
 
 jwt = JWTTools
 
+# Views a user must be able to reach even with an incomplete/non-compliant
+# account, since these are exactly how they complete it (profile fields,
+# email verification, consent acceptance).
+COMPLIANCE_EXEMPT_VIEW_NAMES = {
+    "api-user:user-management",
+    "api-user:user-verification",
+    "api-user:policy-document-list",
+    "api-user:policy-consent-accept",
+    "api-user:account-data-export",
+}
+
 
 class AutheticationBackend(BaseBackend):
+
+    def _check_compliance(self, request, user):
+        resolver_match = getattr(request, "resolver_match", None)
+        if resolver_match is None:
+            return
+
+        view_name = resolver_match.view_name
+        if view_name in COMPLIANCE_EXEMPT_VIEW_NAMES:
+            return
+
+        if user.is_minor():
+            raise PermissionDenied(
+                "ACCOUNT_UNDERAGE: account does not meet the minimum age requirement"
+            )
+
+        if not user.is_profile_complete():
+            raise PermissionDenied(
+                "PROFILE_INCOMPLETE: birthdate and gender are required"
+            )
+
+        if get_pending_consents(user):
+            raise PermissionDenied(
+                "CONSENT_REQUIRED: latest Terms and Conditions must be accepted"
+            )
 
     def authenticate(self, request):
         try:
@@ -51,15 +87,24 @@ class AutheticationBackend(BaseBackend):
 
             user = Account.objects.get(id=decoded_id)
 
+            if not user.is_active:
+                raise PermissionDenied(
+                    "ACCOUNT_INACTIVE: this account has been deactivated"
+                )
+
             session = SessionService()
             is_existing = session.exists(device_token, user.id)
 
             if not is_existing:
                 raise PermissionDenied("Device not logged in.")
 
+            self._check_compliance(request, user)
+
             return (user, True)
         except Account.DoesNotExist:
             raise PermissionDenied("Account does not exist")
+        except PermissionDenied:
+            raise
         except Exception as ex:
             print(ex)
             raise PermissionDenied("Error querying account")

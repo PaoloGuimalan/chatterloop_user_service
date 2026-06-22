@@ -1,4 +1,4 @@
-from ..models import Account
+from ..models import Account, MINIMUM_AGE, calculate_age
 from datetime import datetime
 from django.utils.timezone import make_aware
 from django.utils.timezone import now
@@ -39,6 +39,12 @@ def create_user(
         if birthday is not None and birthmonth is not None and birthyear is not None:
             birthdate_naive = datetime(birthyear, birthmonth, birthday)
             birthdate = make_aware(birthdate_naive)
+
+            age = calculate_age(birthdate)
+            if age is None or age < MINIMUM_AGE:
+                raise ValueError(
+                    f"You must be at least {MINIMUM_AGE} years old to use Chatterloop"
+                )
 
         hashed_password = hash_password(raw_password)
 

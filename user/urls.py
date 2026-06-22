@@ -25,8 +25,25 @@ urlpatterns = [
         views.ThirdPartyAuthentication.as_view(),
         name="user-tp-authentication",
     ),
+    path(
+        "me/export",
+        views.AccountDataExport.as_view(),
+        name="account-data-export",
+    ),
     re_path("me", views.UserAccountManagement.as_view(), name="user-management"),
     re_path("verification", views.CodeVerification.as_view(), name="user-verification"),
     re_path("contacts", views.UserContacts.as_view(), name="user-contacts"),
     path("search/<str:query>/", views.UserSearch.as_view(), name="user-search"),
+    path(
+        "policies",
+        views.PolicyDocumentList.as_view(),
+        name="policy-document-list",
+    ),
+    path(
+        "policies/accept",
+        views.PolicyConsentAccept.as_view(),
+        name="policy-consent-accept",
+    ),
+    path("blocks", views.BlockedUserList.as_view(), name="blocked-user-list"),
+    path("reports", views.ReportCreate.as_view(), name="report-create"),
 ]

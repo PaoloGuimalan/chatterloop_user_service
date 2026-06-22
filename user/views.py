@@ -15,7 +15,15 @@ from django.db.models import (
     Subquery,
     Count,
 )
-from .models import Account, Connection, Verification
+from .models import (
+    Account,
+    Connection,
+    Verification,
+    Block,
+    Report,
+    MINIMUM_AGE,
+    calculate_age,
+)
 from .serializers import (
     AccountSerializer,
     ConnectionSerializer,
@@ -38,13 +46,21 @@ from .utils.external_requests import emailer
 from django.shortcuts import get_object_or_404
 from django.utils.timezone import localtime
 from .utils.user_manipulation import create_user, save_profile_visit
+from .utils.consent import (
+    get_current_policy_documents,
+    get_pending_consents,
+    record_consent_acceptance,
+)
+from .utils.account_deletion import delete_account
+from .utils.data_export import export_account_data
+from .utils.blocking import get_blocked_account_ids, is_blocked
 from newsfeed.helpers.query_functions import (
     interaction_score_bump,
     follower_interaction_score_bump,
     remove_feed_on_unfriend,
     backfill_new_friend_feed,
 )
-from community.models import Realm, Member, RealmFollow
+from community.models import Realm, Member, RealmFollow, Invite
 from community.serializers import RealmSerializer
 import bcrypt
 
@@ -94,6 +110,12 @@ class UserAuthentication(APIView):
 
         if len(user_queryset) > 0:
             user = user_queryset[0]
+
+            if isinstance(me, Account) and is_blocked(me, user):
+                return Response(
+                    {"message": "Profile not available"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
             connection_exists = Connection.objects.filter(
                 Q(action_by=user, involved_user=self.request.user)
@@ -499,6 +521,12 @@ class UserContacts(APIView):
 
             pending_involved_user = Account.objects.get(id=addUsername)
 
+            if is_blocked(user, pending_involved_user):
+                return Response(
+                    {"status": False, "message": "You cannot contact this user"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
             with transaction.atomic():
                 # Create first connection row
                 conn1 = Connection(
@@ -852,11 +880,13 @@ class UserSearch(APIView):
             connection_action_by = connection_exists.filter(action_by=OuterRef("pk"))
             connection_active = connection_exists.filter(status=True)
             connection_id_subquery = connection_exists.values("connection_id")[:1]
+            blocked_account_ids = get_blocked_account_ids(user)
 
             if query.startswith("@"):
                 domain = query.split("@")[1]
                 users_qs = Account.objects.filter(
                     ~Q(id=user.id),
+                    ~Q(id__in=blocked_account_ids),
                     is_active=True,
                     is_verified=True,
                     username__icontains=domain,  # case-insensitive contains
@@ -880,7 +910,10 @@ class UserSearch(APIView):
             else:
                 users_qs = (
                     Account.objects.filter(
-                        ~Q(id=user.id), is_active=True, is_verified=True
+                        ~Q(id=user.id),
+                        ~Q(id__in=blocked_account_ids),
+                        is_active=True,
+                        is_verified=True,
                     )
                     .filter(
                         Q(first_name__icontains=query)
@@ -941,10 +974,46 @@ class UserAccountManagement(APIView):
             last_name = data.get("lastName")
             email = data.get("email")
             raw_password = data.get("password")
-            birthday = int(data.get("birthday"))  # int day
-            birthmonth = int(data.get("birthmonth"))  # int month
-            birthyear = int(data.get("birthyear"))  # int year
             gender = data.get("gender")
+            agreed_to_terms = data.get("agreedToTerms")
+
+            if not gender or not str(gender).strip():
+                return Response(
+                    {"status": False, "message": "Gender is required"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if not agreed_to_terms:
+                return Response(
+                    {
+                        "status": False,
+                        "message": "You must agree to the Terms and Conditions",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            try:
+                birthday = int(data.get("birthday"))  # int day
+                birthmonth = int(data.get("birthmonth"))  # int month
+                birthyear = int(data.get("birthyear"))  # int year
+                birthdate_naive = datetime(birthyear, birthmonth, birthday)
+            except (TypeError, ValueError):
+                return Response(
+                    {"status": False, "message": "A valid birthdate is required"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            birthdate = make_aware(birthdate_naive)
+
+            age = calculate_age(birthdate)
+            if age is None or age < MINIMUM_AGE:
+                return Response(
+                    {
+                        "status": False,
+                        "message": f"You must be at least {MINIMUM_AGE} years old to use Chatterloop",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
             middle_name = request.data.get("middleName")
             if not middle_name or middle_name.strip() == "":
@@ -960,13 +1029,9 @@ class UserAccountManagement(APIView):
 
             username = generate_unique_username(first_name)
 
-            birthdate_naive = datetime(birthyear, birthmonth, birthday)
-            birthdate = make_aware(birthdate_naive)
-
             hashed_password = hash_password(raw_password)
 
-            if gender:
-                gender = gender.lower()
+            gender = gender.lower()
 
             new_user = Account(
                 username=username,
@@ -986,6 +1051,13 @@ class UserAccountManagement(APIView):
             )
             new_user.save()
 
+            record_consent_acceptance(
+                new_user,
+                ["terms"],
+                ip_address=request.META.get("REMOTE_ADDR"),
+                user_agent=request.headers.get("User-Agent"),
+            )
+
             emailer.send_email_verification_code(
                 to_email=email,
                 subject="Verification Code",
@@ -1001,6 +1073,7 @@ class UserAccountManagement(APIView):
                     "authtoken": jwt.encoder(
                         {"userID": str(new_user.id), "username": username}
                     ),
+                    "usertoken": jwt.encoder(AccountSerializer(new_user).data),
                 },
                 status=status.HTTP_201_CREATED,
             )
@@ -1028,6 +1101,26 @@ class UserAccountManagement(APIView):
                 "username",
             ]
 
+            if "birthdate" in data and data["birthdate"]:
+                from django.utils.dateparse import parse_datetime
+
+                parsed_birthdate = parse_datetime(str(data["birthdate"]))
+                if parsed_birthdate is None:
+                    return Response(
+                        {"status": False, "message": "Invalid birthdate format"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                age = calculate_age(parsed_birthdate)
+                if age is None or age < MINIMUM_AGE:
+                    return Response(
+                        {
+                            "status": False,
+                            "message": f"You must be at least {MINIMUM_AGE} years old to use Chatterloop",
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
             for field in editable_fields:
                 if field in data:
                     setattr(account, field, data[field])
@@ -1043,6 +1136,103 @@ class UserAccountManagement(APIView):
                 status=status.HTTP_200_OK,
             )
 
+        except Exception as e:
+            return Response(
+                {"status": False, "message": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def delete(self, request):
+        try:
+            account = self.request.user
+            delete_account(account)
+
+            return Response(
+                {"status": True, "message": "Account deleted"},
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            return Response(
+                {"status": False, "message": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class AccountDataExport(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            account = self.request.user
+            return Response(
+                {"status": True, "data": export_account_data(account)},
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            return Response(
+                {"status": False, "message": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class PolicyDocumentList(APIView):
+    permission_classes = [AllowAny]
+
+    def get_authenticators(self):
+        return []
+
+    def get(self, request):
+        try:
+            current_docs = get_current_policy_documents()
+            data = [
+                {
+                    "document_type": doc.document_type,
+                    "version": doc.version,
+                    "document_url": doc.document_url,
+                    "effective_date": doc.effective_date,
+                }
+                for doc in current_docs.values()
+            ]
+            return Response(
+                {"status": True, "data": data},
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            return Response(
+                {"status": False, "message": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class PolicyConsentAccept(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            account = self.request.user
+            document_types = request.data.get("document_types")
+
+            if not document_types:
+                document_types = [
+                    pending["document_type"]
+                    for pending in get_pending_consents(account)
+                ]
+
+            record_consent_acceptance(
+                account,
+                document_types,
+                ip_address=request.META.get("REMOTE_ADDR"),
+                user_agent=request.headers.get("User-Agent"),
+            )
+
+            return Response(
+                {
+                    "status": True,
+                    "message": "Consent recorded",
+                    "data": AccountSerializer(account).data,
+                },
+                status=status.HTTP_200_OK,
+            )
         except Exception as e:
             return Response(
                 {"status": False, "message": str(e)},
@@ -1090,5 +1280,171 @@ class CodeVerification(APIView):
         except Exception as e:
             return Response(
                 {"status": False, "message": f"Error verifying code: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class BlockedUserList(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            account = self.request.user
+            blocks = Block.objects.filter(blocker=account).select_related("blocked")
+            data = [
+                {
+                    "id": block.blocked.id,
+                    "username": block.blocked.username,
+                    "first_name": block.blocked.first_name,
+                    "last_name": block.blocked.last_name,
+                    "profile": block.blocked.profile,
+                    "created_at": block.created_at,
+                }
+                for block in blocks
+            ]
+            return Response({"status": True, "data": data}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {"status": False, "message": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def post(self, request):
+        try:
+            account = self.request.user
+            target_id = request.data.get("user_id")
+
+            if not target_id:
+                return Response(
+                    {"status": False, "message": "user_id is required"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if str(target_id) == str(account.id):
+                return Response(
+                    {"status": False, "message": "You cannot block yourself"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            target = get_object_or_404(Account, id=target_id)
+
+            with transaction.atomic():
+                Block.objects.get_or_create(blocker=account, blocked=target)
+
+                Connection.objects.filter(
+                    Q(action_by=account, involved_user=target)
+                    | Q(action_by=target, involved_user=account)
+                ).delete()
+
+                Invite.objects.filter(
+                    Q(created_by=account, target_user=target)
+                    | Q(created_by=target, target_user=account)
+                ).delete()
+
+            return Response(
+                {"status": True, "message": "User blocked"},
+                status=status.HTTP_201_CREATED,
+            )
+        except Exception as e:
+            return Response(
+                {"status": False, "message": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def delete(self, request):
+        try:
+            account = self.request.user
+            target_id = request.data.get("user_id")
+
+            if not target_id:
+                return Response(
+                    {"status": False, "message": "user_id is required"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            Block.objects.filter(blocker=account, blocked_id=target_id).delete()
+
+            return Response(
+                {"status": True, "message": "User unblocked"},
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            return Response(
+                {"status": False, "message": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class ReportCreate(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            account = self.request.user
+            data = request.data
+
+            target_type = data.get("target_type")
+            target_id = data.get("target_id")
+            reason = data.get("reason")
+            description = data.get("description", "")
+
+            valid_target_types = dict(Report.TARGET_TYPE_CHOICES)
+            if target_type not in valid_target_types:
+                return Response(
+                    {"status": False, "message": "Invalid target_type"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            valid_reasons = dict(Report.REASON_CHOICES)
+            if reason not in valid_reasons:
+                return Response(
+                    {"status": False, "message": "Invalid reason"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if target_type == "user":
+                reported_user = get_object_or_404(Account, id=target_id)
+                target_id = None
+            elif target_type == "post":
+                from newsfeed.models import Post
+
+                post = get_object_or_404(Post, post_id=target_id)
+                reported_user = post.user
+            elif target_type == "comment":
+                from newsfeed.models import Comment
+
+                comment = get_object_or_404(Comment, comment_id=target_id)
+                reported_user = comment.user
+            elif target_type == "message":
+                message = Message.objects(messageID=target_id).first()
+                if not message:
+                    return Response(
+                        {"status": False, "message": "Message not found"},
+                        status=status.HTTP_404_NOT_FOUND,
+                    )
+                reported_user = get_object_or_404(Account, id=message.sender)
+
+            if reported_user.id == account.id:
+                return Response(
+                    {"status": False, "message": "You cannot report yourself"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            report = Report.objects.create(
+                reporter=account,
+                reported_user=reported_user,
+                target_type=target_type,
+                target_id=target_id,
+                reason=reason,
+                description=description,
+            )
+
+            return Response(
+                {"status": True, "message": "Report submitted", "data": {"id": report.id}},
+                status=status.HTTP_201_CREATED,
+            )
+        except Exception as e:
+            return Response(
+                {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

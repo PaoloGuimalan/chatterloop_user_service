@@ -1,9 +1,11 @@
 from rest_framework import serializers
 from .models import Account, Connection
+from .utils.consent import get_pending_consents
 
 
 class AccountSerializer(serializers.ModelSerializer):
     is_complete = serializers.BooleanField(read_only=True)
+    pending_consents = serializers.ListField(read_only=True)
 
     class Meta:
         model = Account
@@ -23,8 +25,9 @@ class AccountSerializer(serializers.ModelSerializer):
             "is_verified",
             "is_badged",
             "is_complete",
+            "pending_consents",
         ]
-        read_only_fields = ["id", "date_created", "is_complete"]
+        read_only_fields = ["id", "date_created", "is_complete", "pending_consents"]
 
     def create(self, validated_data):
         password = validated_data.pop("password")
@@ -43,18 +46,14 @@ class AccountSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
-    def _get_profile_requirements(self):
-        """List of required fields for profile completion - easy to extend"""
-        return ["birthdate", "gender"]
-
     def to_representation(self, instance):
         representation = super().to_representation(instance)
 
-        # Check if all required fields are filled
-        required_fields = self._get_profile_requirements()
-        is_complete = all(getattr(instance, field, None) for field in required_fields)
-
-        representation["is_complete"] = is_complete
+        pending_consents = get_pending_consents(instance)
+        representation["pending_consents"] = pending_consents
+        representation["is_complete"] = (
+            instance.is_profile_complete() and not pending_consents
+        )
         return representation
 
 
