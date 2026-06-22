@@ -83,7 +83,9 @@ class SessionService:
     def exists(self, device_token, user_id):
         """Check if a session exists by its deviceToken."""
         return (
-            Session.objects(deviceToken=device_token, userID=str(user_id)).first()
+            Session._get_collection().find_one(
+                {"deviceToken": device_token, "userID": str(user_id)}
+            )
             is not None
         )
 

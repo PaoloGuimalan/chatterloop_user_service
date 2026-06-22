@@ -97,44 +97,33 @@ def export_account_data(account):
         ),
         "messages_sent": [
             {
-                "messageID": message.messageID,
-                "conversationID": message.conversationID,
-                "content": message.content,
-                "messageDate": (
-                    {
-                        "date": message.messageDate.date,
-                        "time": message.messageDate.time,
-                    }
-                    if message.messageDate
-                    else None
-                ),
-                "isDeleted": message.isDeleted,
+                "messageID": doc.get("messageID"),
+                "conversationID": doc.get("conversationID"),
+                "content": doc.get("content"),
+                "messageDate": doc.get("messageDate"),
+                "isDeleted": doc.get("isDeleted", False),
             }
-            for message in Message.objects(sender=account_id)
+            for doc in Message._get_collection().find({"sender": account_id})
         ],
         "notifications": [
             {
-                "notificationID": notification.notificationID,
-                "fromUserID": notification.fromUserID,
-                "type": notification.type,
-                "headline": notification.content.headline if notification.content else None,
-                "details": notification.content.details if notification.content else None,
-                "date": (
-                    {"date": notification.date.date, "time": notification.date.time}
-                    if notification.date
-                    else None
-                ),
-                "isRead": notification.isRead,
+                "notificationID": doc.get("notificationID"),
+                "fromUserID": doc.get("fromUserID"),
+                "type": doc.get("type"),
+                "headline": (doc.get("content") or {}).get("headline"),
+                "details": (doc.get("content") or {}).get("details"),
+                "date": doc.get("date"),
+                "isRead": doc.get("isRead", False),
             }
-            for notification in Notification.objects(toUserID=account_id)
+            for doc in Notification._get_collection().find({"toUserID": account_id})
         ],
         "sessions": [
             {
-                "deviceType": session.deviceType,
-                "browser": session.browser,
-                "os": session.os,
-                "lastSeen": session.lastSeen,
+                "deviceType": doc.get("deviceType"),
+                "browser": doc.get("browser"),
+                "os": doc.get("os"),
+                "lastSeen": doc.get("lastSeen"),
             }
-            for session in Session.objects(userID=account_id)
+            for doc in Session._get_collection().find({"userID": account_id})
         ],
     }

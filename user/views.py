@@ -1053,7 +1053,7 @@ class UserAccountManagement(APIView):
 
             record_consent_acceptance(
                 new_user,
-                ["terms"],
+                ["terms", "privacy"],
                 ip_address=request.META.get("REMOTE_ADDR"),
                 user_agent=request.headers.get("User-Agent"),
             )
@@ -1416,13 +1416,15 @@ class ReportCreate(APIView):
                 comment = get_object_or_404(Comment, comment_id=target_id)
                 reported_user = comment.user
             elif target_type == "message":
-                message = Message.objects(messageID=target_id).first()
-                if not message:
+                message_doc = Message._get_collection().find_one(
+                    {"messageID": target_id}
+                )
+                if not message_doc:
                     return Response(
                         {"status": False, "message": "Message not found"},
                         status=status.HTTP_404_NOT_FOUND,
                     )
-                reported_user = get_object_or_404(Account, id=message.sender)
+                reported_user = get_object_or_404(Account, id=message_doc["sender"])
 
             if reported_user.id == account.id:
                 return Response(
