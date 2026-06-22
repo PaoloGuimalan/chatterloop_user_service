@@ -292,7 +292,7 @@ class UserAuthentication(APIView):
                             "result": {
                                 "usertoken": jwt.encoder(serialized_user.data),
                                 "authtoken": jwt.encoder(
-                                    {"userID": user.id, "username": user.username}
+                                    {"userID": str(user.id), "username": user.username}
                                 ),
                             },
                         },
@@ -370,7 +370,7 @@ class ThirdPartyAuthentication(APIView):
                                     "usertoken": jwt.encoder(serialized_user.data),
                                     "authtoken": jwt.encoder(
                                         {
-                                            "userID": user.id,
+                                            "userID": str(user.id),
                                             "username": user.username,
                                         }
                                     ),
@@ -415,7 +415,7 @@ class ThirdPartyAuthentication(APIView):
                                         "usertoken": jwt.encoder(serialized_user.data),
                                         "authtoken": jwt.encoder(
                                             {
-                                                "userID": create_user_query.id,
+                                                "userID": str(create_user_query.id),
                                                 "username": create_user_query.username,
                                             }
                                         ),
