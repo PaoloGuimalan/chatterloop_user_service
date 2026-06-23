@@ -43,11 +43,17 @@ class DiaryTotalView(APIView):
             current_user = Account.objects.get(username=username)
 
             limit_tags = 3
-            query_set = Entry.objects.filter(account=current_user).order_by(
-                "-entry_date", "-created_at"
-            )
+            query_set = Entry.objects.filter(account=current_user)
 
-            serialized_data = EntrySerializer(query_set, many=True).data
+            # Pull just the latest entry's date with a single LIMIT 1 query
+            # (only the date column) instead of serializing every entry — the
+            # full serialization here was unused and caused an N+1 over each
+            # entry's mood/map/attachments/tags relations.
+            latest_entry_date = (
+                query_set.order_by("-entry_date", "-created_at")
+                .values_list("entry_date", flat=True)
+                .first()
+            )
 
             top_tags = (
                 Tag.objects.filter(entries__account=current_user)
@@ -56,11 +62,6 @@ class DiaryTotalView(APIView):
             )
 
             serialized_tags = TagSerializer(top_tags, many=True).data
-
-            latest_entry_date = None
-            if len(serialized_data) > 0:
-                lastest_entry = query_set.first()
-                latest_entry_date = lastest_entry.entry_date
 
             return Response(
                 {
