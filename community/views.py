@@ -16,8 +16,10 @@ from django.shortcuts import get_object_or_404
 from django.db.models import Q, Exists, OuterRef, Count
 from django.db import transaction
 from django.utils.timezone import now
+from datetime import datetime
 from user.models import Account
 from user.utils.external_requests import emailer
+from user_service.services.redis import RedisPubSubClient
 
 
 class Pagination(PageNumberPagination):
@@ -354,6 +356,62 @@ class InviteView(APIView):
     def _serialize_invite(self, invite):
         return InviteSerializer(invite).data
 
+    def _publish_event(self, user_id, event, message):
+        if not user_id:
+            return
+        try:
+            RedisPubSubClient.publish_json(
+                f"events_{user_id}",
+                {
+                    "logType": None,
+                    "pod": "podless",
+                    "event": event,
+                    "message": message,
+                    "dateTime": datetime.now().isoformat(),
+                },
+            )
+        except Exception as err:
+            print(f"Failed to publish {event} event: {err}")
+
+    def _notify_request_created(self, invite, actor):
+        # Push a realtime "new join request" to every host/admin of the realm.
+        invite_payload = self._serialize_invite(invite)
+        recipient_ids = set(
+            Member.objects.filter(realm=invite.realm, role="admin").values_list(
+                "account__id", flat=True
+            )
+        )
+        if invite.realm.created_by_id:
+            recipient_ids.add(invite.realm.created_by_id)
+
+        message = {
+            "status": True,
+            "auth": True,
+            "realm_id": invite.realm.realm_id,
+            "invite": invite_payload,
+        }
+
+        for recipient_id in recipient_ids:
+            if actor and recipient_id == actor.id:
+                continue
+            self._publish_event(recipient_id, "conference_request", message)
+
+    def _notify_request_resolved(self, invite, actor):
+        # Push the resolved status back to the user who made the request.
+        target_id = invite.target_user_id
+        if not target_id or (actor and target_id == actor.id):
+            return
+
+        message = {
+            "status": True,
+            "auth": True,
+            "realm_id": invite.realm.realm_id,
+            "invite_token": invite.invite_token,
+            "request_status": invite.status,
+            "invite": self._serialize_invite(invite),
+        }
+        self._publish_event(target_id, "conference_request_status", message)
+
     def _add_member_if_missing(self, invite, actor):
         if not invite.target_user:
             return
@@ -448,6 +506,8 @@ class InviteView(APIView):
                     invite_link=invite_link,
                     inviter_name=user.username,
                 )
+            else:
+                self._notify_request_created(invite, user)
 
             return Response(
                 {
@@ -502,6 +562,40 @@ class InviteView(APIView):
                     status=status.HTTP_200_OK,
                 )
 
+            if realm_id:
+                realm = get_object_or_404(Realm, realm_id=realm_id)
+                is_admin = Member.objects.filter(
+                    realm=realm, account=request.user, role="admin"
+                ).exists()
+
+                if not is_admin and realm.created_by != request.user:
+                    return Response(
+                        {
+                            "status": False,
+                            "message": "You are not allowed to view invites for this realm",
+                        },
+                        status=status.HTTP_401_UNAUTHORIZED,
+                    )
+
+                invites = Invite.objects.filter(realm=realm)
+
+                kind = request.query_params.get("kind")
+                if kind in {"invite", "request"}:
+                    invites = invites.filter(kind=kind)
+
+                status_filter = request.query_params.get("status")
+                if status_filter in {"pending", "accepted", "declined", "revoked"}:
+                    invites = invites.filter(status=status_filter)
+
+                invites = invites.order_by("-created_at")
+                return Response(
+                    {
+                        "status": True,
+                        "result": InviteSerializer(invites, many=True).data,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
             invites = Invite.objects.filter(created_by=request.user).order_by("-created_at")
             return Response(
                 {
@@ -541,21 +635,50 @@ class InviteView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            if normalized_status == "accepted":
-                if invite.target_email and invite.target_email != user.email.lower():
-                    return Response(
-                        {
-                            "status": False,
-                            "message": "This invite is not assigned to your account",
-                        },
-                        status=status.HTTP_401_UNAUTHORIZED,
-                    )
+            is_realm_admin = (
+                Member.objects.filter(
+                    realm=invite.realm, account=user, role="admin"
+                ).exists()
+                or invite.realm.created_by == user
+            )
 
-                if invite.target_user and invite.target_user != user:
+            if normalized_status == "accepted":
+                if invite.kind == "request":
+                    # A host/admin approves another member's join request.
+                    if not is_realm_admin:
+                        return Response(
+                            {
+                                "status": False,
+                                "message": "You are not allowed to approve this request",
+                            },
+                            status=status.HTTP_401_UNAUTHORIZED,
+                        )
+                else:
+                    if invite.target_email and invite.target_email != user.email.lower():
+                        return Response(
+                            {
+                                "status": False,
+                                "message": "This invite is not assigned to your account",
+                            },
+                            status=status.HTTP_401_UNAUTHORIZED,
+                        )
+
+                    if invite.target_user and invite.target_user != user:
+                        return Response(
+                            {
+                                "status": False,
+                                "message": "This invite was assigned to another account",
+                            },
+                            status=status.HTTP_401_UNAUTHORIZED,
+                        )
+
+            if normalized_status == "declined" and invite.kind == "request":
+                # Only a host/admin can decline an incoming join request.
+                if not is_realm_admin and invite.created_by != user:
                     return Response(
                         {
                             "status": False,
-                            "message": "This invite was assigned to another account",
+                            "message": "You are not allowed to decline this request",
                         },
                         status=status.HTTP_401_UNAUTHORIZED,
                     )
@@ -583,6 +706,12 @@ class InviteView(APIView):
 
                 if normalized_status == "accepted":
                     self._add_member_if_missing(invite, user)
+
+            if invite.kind == "request" and normalized_status in {
+                "accepted",
+                "declined",
+            }:
+                self._notify_request_resolved(invite, user)
 
             return Response(
                 {
