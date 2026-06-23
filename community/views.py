@@ -373,51 +373,54 @@ class InviteView(APIView):
         except Exception as err:
             print(f"Failed to publish {event} event: {err}")
 
-    def _notify_request_created(self, invite, actor):
-        # Push a realtime "new join request" to every host/admin of the realm.
-        invite_payload = self._serialize_invite(invite)
+    # The conference SSE events below are intentionally payload-light: they
+    # only signal "this list changed, refetch it" with the realm_id. The
+    # client always pulls the full list from the REST endpoints, so realtime
+    # never has to carry (and risk desyncing) the actual request/member rows.
+    def _realm_admin_recipient_ids(self, realm):
         recipient_ids = set(
-            Member.objects.filter(realm=invite.realm, role="admin").values_list(
+            Member.objects.filter(realm=realm, role="admin").values_list(
                 "account__id", flat=True
             )
         )
-        if invite.realm.created_by_id:
-            recipient_ids.add(invite.realm.created_by_id)
+        if realm.created_by_id:
+            recipient_ids.add(realm.created_by_id)
+        return recipient_ids
 
-        message = {
-            "status": True,
-            "auth": True,
-            "realm_id": invite.realm.realm_id,
-            "invite": invite_payload,
-        }
+    def _notify_requests_changed(self, realm):
+        message = {"status": True, "auth": True, "realm_id": realm.realm_id}
+        for recipient_id in self._realm_admin_recipient_ids(realm):
+            self._publish_event(recipient_id, "conference_requests_changed", message)
 
+    def _notify_members_changed(self, realm):
+        recipient_ids = set(
+            Member.objects.filter(realm=realm).values_list("account__id", flat=True)
+        )
+        if realm.created_by_id:
+            recipient_ids.add(realm.created_by_id)
+        message = {"status": True, "auth": True, "realm_id": realm.realm_id}
         for recipient_id in recipient_ids:
-            if actor and recipient_id == actor.id:
-                continue
-            self._publish_event(recipient_id, "conference_request", message)
+            self._publish_event(recipient_id, "conference_members_changed", message)
 
-    def _notify_request_resolved(self, invite, actor):
-        # Push the resolved status back to the user who made the request.
-        target_id = invite.target_user_id
-        if not target_id or (actor and target_id == actor.id):
+    def _notify_access_changed(self, account_id, realm):
+        # Targeted signal so a single requester refetches their room/access info.
+        if not account_id:
             return
-
-        message = {
-            "status": True,
-            "auth": True,
-            "realm_id": invite.realm.realm_id,
-            "invite_token": invite.invite_token,
-            "request_status": invite.status,
-            "invite": self._serialize_invite(invite),
-        }
-        self._publish_event(target_id, "conference_request_status", message)
+        message = {"status": True, "auth": True, "realm_id": realm.realm_id}
+        self._publish_event(account_id, "conference_access_changed", message)
 
     def _add_member_if_missing(self, invite, actor):
-        if not invite.target_user:
+        # For email invites target_user is often unset (only target_email is
+        # known), so fall back to the user accepting the invite. For requests,
+        # target_user (the requester) is set and rightly takes precedence over
+        # the admin acting on it. Without this, accepted invitees never become
+        # members and are forced to re-request access on every rejoin.
+        account = invite.target_user or actor
+        if not account:
             return
 
         Member.objects.get_or_create(
-            account=invite.target_user,
+            account=account,
             realm=invite.realm,
             defaults={
                 "added_by": actor,
@@ -507,7 +510,7 @@ class InviteView(APIView):
                     inviter_name=user.username,
                 )
             else:
-                self._notify_request_created(invite, user)
+                self._notify_requests_changed(realm)
 
             return Response(
                 {
@@ -707,11 +710,18 @@ class InviteView(APIView):
                 if normalized_status == "accepted":
                     self._add_member_if_missing(invite, user)
 
+            # Accepting adds a member, so the participants list changed.
+            if normalized_status == "accepted":
+                self._notify_members_changed(invite.realm)
+
+            # A resolved join request changes the host's pending list, and the
+            # requester needs to refetch their access/room info either way.
             if invite.kind == "request" and normalized_status in {
                 "accepted",
                 "declined",
             }:
-                self._notify_request_resolved(invite, user)
+                self._notify_requests_changed(invite.realm)
+                self._notify_access_changed(invite.target_user_id, invite.realm)
 
             return Response(
                 {
