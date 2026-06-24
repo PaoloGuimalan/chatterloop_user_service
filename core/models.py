@@ -25,7 +25,12 @@ class PolicyDocument(models.Model):
     )
     document_type = models.CharField(max_length=20, choices=DOCUMENT_TYPE_CHOICES)
     version = models.CharField(max_length=50)
-    document_url = models.CharField(max_length=500)
+    # Rich-text (HTML) body of the policy. Preferred way to store a document so a
+    # new version is just text, with no static file/PDF hosting involved.
+    content = models.TextField(blank=True, default="")
+    # Optional fallback: a full URL to an externally hosted document (e.g. a PDF
+    # on another origin). Used only when `content` is empty.
+    document_url = models.CharField(max_length=500, blank=True, default="")
     effective_date = models.DateTimeField(default=now)
     created_at = models.DateTimeField(default=now)
 

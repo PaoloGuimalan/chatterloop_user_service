@@ -1188,6 +1188,7 @@ class PolicyDocumentList(APIView):
                 {
                     "document_type": doc.document_type,
                     "version": doc.version,
+                    "content": doc.content,
                     "document_url": doc.document_url,
                     "effective_date": doc.effective_date,
                 }
