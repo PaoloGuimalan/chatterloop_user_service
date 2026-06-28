@@ -8,6 +8,7 @@ from ..models import UserEngagementLog
 from django.utils.timezone import now, is_naive, make_aware, get_current_timezone
 from django.utils.dateparse import parse_datetime
 import uuid
+from .entity import resolve_user_entity
 
 
 def create_user(
@@ -66,6 +67,7 @@ def create_user(
             join_type=join_type,
         )
         new_user.save()
+        resolve_user_entity(new_user)
 
         return new_user
     except Exception as ex:

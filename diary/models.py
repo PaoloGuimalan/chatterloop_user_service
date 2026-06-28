@@ -1,5 +1,5 @@
 from django.db import models
-from user.models import Account
+from entity.models import Entity
 import uuid
 
 
@@ -15,7 +15,12 @@ class Mood(models.Model):
 class Entry(models.Model):
 
     id = models.UUIDField(default=uuid.uuid4, primary_key=True, unique=True)
-    account = models.ForeignKey(Account, null=False, on_delete=models.DO_NOTHING)
+    account = models.ForeignKey(
+        Entity,
+        null=False,
+        on_delete=models.DO_NOTHING,
+        related_name="diary_entries",
+    )
     title = models.CharField(max_length=255, blank=True)
     content = models.TextField()
     entry_date = models.DateField()

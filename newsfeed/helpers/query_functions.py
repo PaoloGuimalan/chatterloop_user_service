@@ -8,6 +8,7 @@ from django.utils.dateparse import parse_datetime
 from django.db import transaction
 from django.db.models import Q, F
 from user.services.connections import ConnectionHelpers
+from user.utils.entity import resolve_user_entity_id
 import uuid
 
 
@@ -157,11 +158,13 @@ def interaction_score_bump(actor_id, receiver_id, action, is_decrease):
     }
 
     weight = INTERACTION_WEIGHTS.get(action, 0.0)
+    actor_entity_id = resolve_user_entity_id(actor_id)
+    receiver_entity_id = resolve_user_entity_id(receiver_id)
 
     with transaction.atomic():
         existing_connection_query = Connection.objects.filter(
-            Q(action_by__id=actor_id, involved_user__id=receiver_id)
-            | Q(action_by__id=receiver_id, involved_user__id=actor_id)
+            Q(action_by_id=actor_entity_id, involved_user_id=receiver_entity_id)
+            | Q(action_by_id=receiver_entity_id, involved_user_id=actor_entity_id)
         )
 
         connection_ids = []
@@ -258,7 +261,7 @@ def get_latest_mutual_engagements(mutual_friend_ids, candidate_pids):
 def backfill_new_friend_feed(viewer_id, new_friend_id):
     user = Account.objects.get(id=viewer_id)
 
-    candidate_posts = Post.objects.filter(user__id=str(new_friend_id))[:50]
+    candidate_posts = Post.objects.filter(user__source_id=str(new_friend_id))[:50]
     candidate_pids = [str(p.post_id) for p in candidate_posts]
 
     view_logs = UserEngagementLog.objects.filter(

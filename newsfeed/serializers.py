@@ -13,12 +13,55 @@ from .models import (
     PostScore,
     PostSave,
 )
-from user.serializers import AccountPreviewSerializer
+from user.models import Account
 from community.models import Realm
 
 
+def serialize_user_entity_preview(entity):
+    if not entity:
+        return None
+    if entity.entity_type != "user" or entity.source_type != "user.account":
+        return {
+            "id": entity.id,
+            "username": entity.entity_id,
+            "first_name": "",
+            "middle_name": "",
+            "last_name": "",
+            "profile": "none",
+            "gender": None,
+            "is_badged": False,
+        }
+
+    account = Account.objects.filter(id=entity.source_id).first()
+    if not account:
+        return {
+            "id": entity.source_id,
+            "username": "",
+            "first_name": "",
+            "middle_name": "",
+            "last_name": "",
+            "profile": "none",
+            "gender": None,
+            "is_badged": False,
+        }
+
+    return {
+        "id": account.id,
+        "username": account.username,
+        "first_name": account.first_name,
+        "middle_name": account.middle_name,
+        "last_name": account.last_name,
+        "profile": account.profile,
+        "gender": account.gender,
+        "is_badged": account.is_badged,
+    }
+
+
 class PostTagSerializer(serializers.ModelSerializer):
-    user = AccountPreviewSerializer(read_only=True)
+    user = serializers.SerializerMethodField()
+
+    def get_user(self, obj):
+        return serialize_user_entity_preview(obj.user)
 
     class Meta:
         model = PostTag
@@ -88,11 +131,14 @@ class PostSerializer(serializers.ModelSerializer):
     map_info = MapInfoSerializer(read_only=True)
     preview = PreviewCountSerializer(read_only=True, many=True)
     user_reaction = serializers.CharField()
-    user = AccountPreviewSerializer(read_only=True)
+    user = serializers.SerializerMethodField()
     author_realm = RealmPreviewSerializer(read_only=True)
     # activity_counts = ActivityCountSerializer(read_only=True, many=True)
     score = PostScoreSerializer(read_only=True)
     is_saved = serializers.BooleanField(read_only=True)
+
+    def get_user(self, obj):
+        return serialize_user_entity_preview(obj.user)
 
     class Meta:
         model = Post
@@ -106,7 +152,10 @@ class EmojiSerializer(serializers.ModelSerializer):
 
 
 class CommentSerializer(serializers.ModelSerializer):
-    user = AccountPreviewSerializer(read_only=True)
+    user = serializers.SerializerMethodField()
+
+    def get_user(self, obj):
+        return serialize_user_entity_preview(obj.user)
 
     class Meta:
         model = Comment
@@ -114,8 +163,11 @@ class CommentSerializer(serializers.ModelSerializer):
 
 
 class PostBasicSerializer(serializers.ModelSerializer):
-    user = AccountPreviewSerializer(read_only=True)
+    user = serializers.SerializerMethodField()
     author_realm = RealmPreviewSerializer(read_only=True)
+
+    def get_user(self, obj):
+        return serialize_user_entity_preview(obj.user)
 
     class Meta:
         model = Post

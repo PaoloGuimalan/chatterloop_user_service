@@ -10,6 +10,7 @@ import requests
 from django.core.mail import get_connection
 from django.conf import settings
 
+from .entity import resolve_user_entity
 
 class PersistentEmailSender:
     def __init__(self):
@@ -62,7 +63,7 @@ Your registration was successful! Here is your verification code for the account
             )
 
             Verification.objects.create(
-                user=Account.objects.get(username=user_id),
+                user=resolve_user_entity(Account.objects.get(username=user_id)),
                 ver_code=generated_code,
                 date_generated=now(),
                 is_used=False,

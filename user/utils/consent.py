@@ -1,6 +1,7 @@
 from django.utils.timezone import now
 from core.models import PolicyDocument
 from ..models import UserConsent
+from .entity import resolve_user_entity
 
 
 def get_current_policy_documents():
@@ -19,9 +20,10 @@ def get_pending_consents(account):
     if not current_docs:
         return []
 
+    account_entity = resolve_user_entity(account)
     accepted = set(
         UserConsent.objects.filter(
-            user=account, document_type__in=current_docs.keys()
+            user=account_entity, document_type__in=current_docs.keys()
         ).values_list("document_type", "version")
     )
 
@@ -34,18 +36,19 @@ def get_pending_consents(account):
 
 def record_consent_acceptance(account, document_types, ip_address=None, user_agent=None):
     current_docs = get_current_policy_documents()
+    account_entity = resolve_user_entity(account)
     created = []
     for document_type in document_types:
         doc = current_docs.get(document_type)
         if not doc:
             continue
         already_accepted = UserConsent.objects.filter(
-            user=account, document_type=document_type, version=doc.version
+            user=account_entity, document_type=document_type, version=doc.version
         ).exists()
         if already_accepted:
             continue
         consent = UserConsent.objects.create(
-            user=account,
+            user=account_entity,
             document_type=document_type,
             version=doc.version,
             ip_address=ip_address,

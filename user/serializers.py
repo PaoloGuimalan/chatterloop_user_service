@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import Account, Connection
 from .utils.consent import get_pending_consents
+from .utils.entity import resolve_account_from_entity
 
 
 class AccountSerializer(serializers.ModelSerializer):
@@ -73,8 +74,20 @@ class AccountPreviewSerializer(serializers.ModelSerializer):
 
 
 class ConnectionSerializer(serializers.ModelSerializer):
-    action_by = AccountPreviewSerializer(read_only=True)
-    involved_user = AccountPreviewSerializer(read_only=True)
+    action_by = serializers.SerializerMethodField()
+    involved_user = serializers.SerializerMethodField()
+
+    def _serialize_entity_account(self, entity):
+        account = resolve_account_from_entity(entity)
+        if not account:
+            return None
+        return AccountPreviewSerializer(account).data
+
+    def get_action_by(self, obj):
+        return self._serialize_entity_account(obj.action_by)
+
+    def get_involved_user(self, obj):
+        return self._serialize_entity_account(obj.involved_user)
 
     class Meta:
         model = Connection

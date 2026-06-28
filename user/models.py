@@ -8,6 +8,7 @@ from django.utils.timezone import now
 from cassandra.cqlengine import columns
 from django_cassandra_engine.models import DjangoCassandraModel
 from core.models import PolicyDocument
+from entity.models import Entity
 
 MINIMUM_AGE = 13
 
@@ -112,7 +113,12 @@ class Verification(models.Model):
     ver_id = models.CharField(
         max_length=150, default=uuid.uuid4, unique=True, primary_key=True
     )
-    user = models.ForeignKey(Account, null=False, on_delete=models.DO_NOTHING)
+    user = models.ForeignKey(
+        Entity,
+        null=False,
+        on_delete=models.DO_NOTHING,
+        related_name="user_verifications",
+    )
     ver_code = models.CharField(
         max_length=6, default=generate_random_digit(5), null=False
     )
@@ -131,7 +137,7 @@ class Connection(models.Model):
     )
     connection_id = models.CharField(max_length=150, default=generate_random_digit(20))
     action_by = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="connections_as_action_by",
@@ -139,7 +145,7 @@ class Connection(models.Model):
     nickname = models.CharField(max_length=150, null=True, blank=True)
     status = models.BooleanField(default=True)
     involved_user = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="connections_as_involved_user",
@@ -206,13 +212,13 @@ class Block(models.Model):
         max_length=150, default=uuid.uuid4, unique=True, primary_key=True
     )
     blocker = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="blocks_made",
     )
     blocked = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="blocked_by",
@@ -258,13 +264,13 @@ class Report(models.Model):
         max_length=150, default=uuid.uuid4, unique=True, primary_key=True
     )
     reporter = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="reports_filed",
     )
     reported_user = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="reports_received",
@@ -279,7 +285,7 @@ class Report(models.Model):
     created_at = models.DateTimeField(default=now)
     reviewed_at = models.DateTimeField(null=True, blank=True)
     reviewed_by = models.ForeignKey(
-        Account,
+        Entity,
         null=True,
         blank=True,
         on_delete=models.DO_NOTHING,
@@ -316,7 +322,7 @@ class UserConsent(models.Model):
         max_length=150, default=uuid.uuid4, unique=True, primary_key=True
     )
     user = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="consents",

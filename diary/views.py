@@ -8,6 +8,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.pagination import PageNumberPagination
 from .models import Entry, Tag, Mood, Attachment
 from user.models import Account
+from entity.models import Entity
 from django.shortcuts import get_object_or_404
 from .serializers import EntrySerializer, TagSerializer, MoodSerializer
 from django.utils import timezone
@@ -17,6 +18,15 @@ from datetime import datetime
 class Pagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
+
+
+def resolve_user_entity(account: Account) -> Entity:
+    entity, _ = Entity.get_or_create_from_source(
+        entity_type="user",
+        source_type="user.account",
+        source_id=str(account.id),
+    )
+    return entity
 
 
 class DiaryTotalView(APIView):
@@ -41,9 +51,10 @@ class DiaryTotalView(APIView):
 
         try:
             current_user = Account.objects.get(username=username)
+            current_user_entity = resolve_user_entity(current_user)
 
             limit_tags = 3
-            query_set = Entry.objects.filter(account=current_user)
+            query_set = Entry.objects.filter(account=current_user_entity)
 
             # Pull just the latest entry's date with a single LIMIT 1 query
             # (only the date column) instead of serializing every entry — the
@@ -56,7 +67,7 @@ class DiaryTotalView(APIView):
             )
 
             top_tags = (
-                Tag.objects.filter(entries__account=current_user)
+                Tag.objects.filter(entries__account=current_user_entity)
                 .annotate(entry_count=Count("entries"))
                 .order_by("-entry_count")[:limit_tags]
             )
@@ -84,10 +95,11 @@ class DiaryListView(APIView):
         user = self.request.user
 
         try:
+            user_entity = resolve_user_entity(user)
             queryset = (
                 Entry.objects.select_related("entry_map_info", "mood")
                 .prefetch_related("attachments")
-                .filter(account=user)
+                .filter(account=user_entity)
                 .order_by("-created_at")
             )
 
@@ -182,11 +194,12 @@ class DiaryCRUDView(APIView):
         user = self.request.user
 
         try:
+            user_entity = resolve_user_entity(user)
             queryset = Entry.objects.select_related("entry_map_info").prefetch_related(
                 "attachments"
             )
             final_query = get_object_or_404(
-                queryset, Q(account=user) | Q(is_private=False), id=entry_id
+                queryset, Q(account=user_entity) | Q(is_private=False), id=entry_id
             )
 
             serialized_response = EntrySerializer(final_query)
@@ -199,6 +212,7 @@ class DiaryCRUDView(APIView):
         user = self.request.user
 
         try:
+            user_entity = resolve_user_entity(user)
             title = request.data.get("title")
             content = request.data.get("content")
             mood = request.data.get("mood")
@@ -243,7 +257,7 @@ class DiaryCRUDView(APIView):
                     mood=entry_mood,
                     entry_date=formatted_entry_date,
                     is_private=is_private,
-                    account=user,
+                    account=user_entity,
                 )
 
                 queryset.tags.set(combined_tags)
@@ -255,7 +269,7 @@ class DiaryCRUDView(APIView):
                 ).prefetch_related("attachments")
                 final_query = get_object_or_404(
                     created_entry_queryset,
-                    Q(account=user) | Q(is_private=False),
+                    Q(account=user_entity) | Q(is_private=False),
                     id=final_id,
                 )
 

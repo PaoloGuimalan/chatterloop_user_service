@@ -136,6 +136,7 @@ INSTALLED_APPS = [
     "newsfeed",
     "core",
     "diary",
+    "entity",
     # Silk
     "silk",
 ]

@@ -13,11 +13,12 @@ from .serializers import (
     InviteSerializer,
 )
 from django.shortcuts import get_object_or_404
-from django.db.models import Q, Exists, OuterRef, Count
+from django.db.models import Q, Exists, OuterRef, Count, Subquery
 from django.db import transaction
 from django.utils.timezone import now
 from datetime import datetime
 from user.models import Account
+from entity.models import Entity
 from user.utils.external_requests import emailer
 from user_service.services.redis import RedisPubSubClient
 
@@ -25,6 +26,41 @@ from user_service.services.redis import RedisPubSubClient
 class Pagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
+
+
+def resolve_user_entity(account: Account) -> Entity:
+    entity, _ = Entity.get_or_create_from_source(
+        entity_type="user",
+        source_type="user.account",
+        source_id=str(account.id),
+    )
+    return entity
+
+
+def searched_user_entity_ids(search: str):
+    if not search:
+        return Entity.objects.none().values("id")
+
+    normalized = search.strip()
+    if normalized.startswith("@"):
+        account_qs = Account.objects.filter(
+            username__icontains=normalized.strip("@"),
+            is_active=True,
+            is_verified=True,
+        ).values("id")
+    else:
+        account_qs = Account.objects.filter(
+            Q(first_name__icontains=normalized)
+            | Q(middle_name__icontains=normalized)
+            | Q(last_name__icontains=normalized),
+            is_active=True,
+            is_verified=True,
+        ).values("id")
+
+    return Entity.objects.filter(
+        source_type="user.account",
+        source_id__in=Subquery(account_qs),
+    ).values("id")
 
 
 class TopRealms(APIView):
@@ -35,6 +71,7 @@ class TopRealms(APIView):
         user = self.request.user
 
         try:
+            user_entity = resolve_user_entity(user)
             search = request.query_params.get("search", None)
             type = request.query_params.get("type", None)
 
@@ -43,14 +80,17 @@ class TopRealms(APIView):
                 members=Count("member", distinct=True),
                 is_admin=Exists(
                     Member.objects.filter(
-                        realm=OuterRef("pk"), account=user, role="admin"
+                        realm=OuterRef("pk"), account=user_entity, role="admin"
                     )
                 ),
                 is_member=Exists(
-                    Member.objects.filter(realm=OuterRef("pk"), account=user)
+                    Member.objects.filter(realm=OuterRef("pk"), account=user_entity)
                 ),
                 is_follower=Exists(
-                    RealmFollow.objects.filter(realm=OuterRef("pk"), follower=user)
+                    RealmFollow.objects.filter(
+                        realm=OuterRef("pk"),
+                        follower=user_entity,
+                    )
                 ),
             ).filter(type=type, is_private=False)
 
@@ -80,6 +120,7 @@ class MyRealms(APIView):
         user = self.request.user
 
         try:
+            user_entity = resolve_user_entity(user)
             search = request.query_params.get("search", None)
             type = request.query_params.get("type", None)
 
@@ -88,14 +129,17 @@ class MyRealms(APIView):
                 members=Count("member", distinct=True),
                 is_admin=Exists(
                     Member.objects.filter(
-                        realm=OuterRef("pk"), account=user, role="admin"
+                        realm=OuterRef("pk"), account=user_entity, role="admin"
                     )
                 ),
                 is_member=Exists(
-                    Member.objects.filter(realm=OuterRef("pk"), account=user)
+                    Member.objects.filter(realm=OuterRef("pk"), account=user_entity)
                 ),
                 is_follower=Exists(
-                    RealmFollow.objects.filter(realm=OuterRef("pk"), follower=user)
+                    RealmFollow.objects.filter(
+                        realm=OuterRef("pk"),
+                        follower=user_entity,
+                    )
                 ),
             ).filter(is_member=True, type=type)
 
@@ -119,14 +163,15 @@ class MyRealms(APIView):
     def put(self, request):
         user = self.request.user
         try:
+            user_entity = resolve_user_entity(user)
             realm_id = request.data.get("realm_id")
             fields = request.data.get("fields")
 
-            is_admin = Exists(
-                Member.objects.filter(
-                    realm__realm_id=realm_id, account=user, role="admin"
-                )
-            )
+            is_admin = Member.objects.filter(
+                realm__realm_id=realm_id,
+                account=user_entity,
+                role="admin",
+            ).exists()
 
             if not is_admin:
                 return Response(
@@ -160,6 +205,7 @@ class FollowRealmView(APIView):
         user = self.request.user
 
         try:
+            user_entity = resolve_user_entity(user)
             search = request.query_params.get("search", None)
             type = request.query_params.get("type", None)
 
@@ -169,14 +215,20 @@ class FollowRealmView(APIView):
                     members=Count("member", distinct=True),
                     is_admin=Exists(
                         Member.objects.filter(
-                            realm=OuterRef("pk"), account=user, role="admin"
+                            realm=OuterRef("pk"), account=user_entity, role="admin"
                         )
                     ),
                     is_member=Exists(
-                        Member.objects.filter(realm=OuterRef("pk"), account=user)
+                        Member.objects.filter(
+                            realm=OuterRef("pk"),
+                            account=user_entity,
+                        )
                     ),
                     is_follower=Exists(
-                        RealmFollow.objects.filter(realm=OuterRef("pk"), follower=user)
+                        RealmFollow.objects.filter(
+                            realm=OuterRef("pk"),
+                            follower=user_entity,
+                        )
                     ),
                 )
                 .filter(is_follower=True, type=type)
@@ -204,11 +256,12 @@ class FollowRealmView(APIView):
         user = self.request.user
 
         try:
+            user_entity = resolve_user_entity(user)
             realm_id = request.data.get("realm_id")
 
             realm = get_object_or_404(Realm, id=realm_id)
             follow_realm_queryset = RealmFollow.objects.create(
-                follower=user, realm=realm
+                follower=user_entity, realm=realm
             )
 
             if follow_realm_queryset is None:
@@ -228,11 +281,12 @@ class FollowRealmView(APIView):
         user = self.request.user
 
         try:
+            user_entity = resolve_user_entity(user)
             realm_id = request.data.get("realm_id")
 
             realm = get_object_or_404(Realm, id=realm_id)
             unfollow_realm_queryset = RealmFollow.objects.get(
-                follower=user, realm=realm
+                follower=user_entity, realm=realm
             )
 
             if unfollow_realm_queryset is None:
@@ -259,12 +313,14 @@ class RealmMembersView(APIView):
         user = self.request.user
 
         try:
+            user_entity = resolve_user_entity(user)
             realm_id = request.query_params.get("realm_id")
             search = request.query_params.get("search", None)
 
-            is_member = Exists(Member.objects.filter(realm__id=realm_id, account=user))
-
-            if not is_member:
+            if not Member.objects.filter(
+                realm__id=realm_id,
+                account=user_entity,
+            ).exists():
                 return Response(
                     {
                         "status": False,
@@ -280,18 +336,9 @@ class RealmMembersView(APIView):
             )
 
             if search:
-                if search.startswith("@"):
-                    realm_members_query_set = realm_members_query_set.filter(
-                        Q(account__username__icontains=search)
-                    )
-                else:
-                    realm_members_query_set = realm_members_query_set.filter(
-                        Q(
-                            Q(account__first_name__icontains=search)
-                            | Q(account__middle_name__icontains=search)
-                            | Q(account__last_name__icontains=search)
-                        )
-                    )
+                realm_members_query_set = realm_members_query_set.filter(
+                    account_id__in=Subquery(searched_user_entity_ids(search))
+                )
 
             paginator = self.pagination_class()
             paginated_queryset = paginator.paginate_queryset(
@@ -314,6 +361,7 @@ class RealmFollowersView(APIView):
         user = self.request.user
 
         try:
+            user_entity = resolve_user_entity(user)
             realm_id = request.query_params.get("realm_id")
             search = request.query_params.get("search", None)
 
@@ -324,18 +372,9 @@ class RealmFollowersView(APIView):
             )
 
             if search:
-                if search.startswith("@"):
-                    realm_followers_query_set = realm_followers_query_set.filter(
-                        Q(follower__username__icontains=search)
-                    )
-                else:
-                    realm_followers_query_set = realm_followers_query_set.filter(
-                        Q(
-                            Q(follower__first_name__icontains=search)
-                            | Q(follower__middle_name__icontains=search)
-                            | Q(follower__last_name__icontains=search)
-                        )
-                    )
+                realm_followers_query_set = realm_followers_query_set.filter(
+                    follower_id__in=Subquery(searched_user_entity_ids(search))
+                )
 
             paginator = self.pagination_class()
             paginated_queryset = paginator.paginate_queryset(
@@ -380,11 +419,11 @@ class InviteView(APIView):
     def _realm_admin_recipient_ids(self, realm):
         recipient_ids = set(
             Member.objects.filter(realm=realm, role="admin").values_list(
-                "account__id", flat=True
+                "account__source_id", flat=True
             )
         )
-        if realm.created_by_id:
-            recipient_ids.add(realm.created_by_id)
+        if realm.created_by and realm.created_by.source_id:
+            recipient_ids.add(realm.created_by.source_id)
         return recipient_ids
 
     def _notify_requests_changed(self, realm):
@@ -394,10 +433,13 @@ class InviteView(APIView):
 
     def _notify_members_changed(self, realm):
         recipient_ids = set(
-            Member.objects.filter(realm=realm).values_list("account__id", flat=True)
+            Member.objects.filter(realm=realm).values_list(
+                "account__source_id",
+                flat=True,
+            )
         )
-        if realm.created_by_id:
-            recipient_ids.add(realm.created_by_id)
+        if realm.created_by and realm.created_by.source_id:
+            recipient_ids.add(realm.created_by.source_id)
         message = {"status": True, "auth": True, "realm_id": realm.realm_id}
         for recipient_id in recipient_ids:
             self._publish_event(recipient_id, "conference_members_changed", message)
@@ -433,6 +475,7 @@ class InviteView(APIView):
         user = self.request.user
 
         try:
+            user_entity = resolve_user_entity(user)
             realm_id = request.data.get("realm_id")
             target_email = request.data.get("target_email")
             kind = request.data.get("kind", "invite")
@@ -449,7 +492,7 @@ class InviteView(APIView):
             realm = get_object_or_404(Realm, realm_id=realm_id)
             normalized_kind = "request" if kind == "request" else "invite"
             is_admin = Member.objects.filter(
-                realm=realm, account=user, role="admin"
+                realm=realm, account=user_entity, role="admin"
             ).exists()
 
             if normalized_kind != "request" and not is_admin:
@@ -459,7 +502,10 @@ class InviteView(APIView):
                 )
 
             normalized_email = str(target_email).strip().lower()
-            target_user = Account.objects.filter(email__iexact=normalized_email).first()
+            target_account = Account.objects.filter(email__iexact=normalized_email).first()
+            target_user = (
+                resolve_user_entity(target_account) if target_account else None
+            )
 
             existing_pending_invite = (
                 Invite.objects.filter(
@@ -474,7 +520,7 @@ class InviteView(APIView):
             if existing_pending_invite:
                 existing_pending_invite.kind = normalized_kind
                 existing_pending_invite.target_user = target_user
-                existing_pending_invite.created_by = user
+                existing_pending_invite.created_by = user_entity
                 existing_pending_invite.created_at = now()
                 existing_pending_invite.resolved_at = None
                 if normalized_kind == "invite":
@@ -488,7 +534,7 @@ class InviteView(APIView):
                     status="pending",
                     target_email=normalized_email,
                     target_user=target_user,
-                    created_by=user,
+                    created_by=user_entity,
                 )
 
             if normalized_kind == "invite":
@@ -567,11 +613,12 @@ class InviteView(APIView):
 
             if realm_id:
                 realm = get_object_or_404(Realm, realm_id=realm_id)
+                user_entity = resolve_user_entity(request.user)
                 is_admin = Member.objects.filter(
-                    realm=realm, account=request.user, role="admin"
+                    realm=realm, account=user_entity, role="admin"
                 ).exists()
 
-                if not is_admin and realm.created_by != request.user:
+                if not is_admin and realm.created_by != user_entity:
                     return Response(
                         {
                             "status": False,
@@ -599,7 +646,8 @@ class InviteView(APIView):
                     status=status.HTTP_200_OK,
                 )
 
-            invites = Invite.objects.filter(created_by=request.user).order_by("-created_at")
+            user_entity = resolve_user_entity(request.user)
+            invites = Invite.objects.filter(created_by=user_entity).order_by("-created_at")
             return Response(
                 {
                     "status": True,
@@ -614,6 +662,7 @@ class InviteView(APIView):
         user = self.request.user
 
         try:
+            user_entity = resolve_user_entity(user)
             invite_token = request.data.get("invite_token")
             status_value = request.data.get("status")
 
@@ -640,9 +689,9 @@ class InviteView(APIView):
 
             is_realm_admin = (
                 Member.objects.filter(
-                    realm=invite.realm, account=user, role="admin"
+                    realm=invite.realm, account=user_entity, role="admin"
                 ).exists()
-                or invite.realm.created_by == user
+                or invite.realm.created_by == user_entity
             )
 
             if normalized_status == "accepted":
@@ -666,7 +715,10 @@ class InviteView(APIView):
                             status=status.HTTP_401_UNAUTHORIZED,
                         )
 
-                    if invite.target_user and invite.target_user != user:
+                    if (
+                        invite.target_user
+                        and invite.target_user.source_id != str(user.id)
+                    ):
                         return Response(
                             {
                                 "status": False,
@@ -677,7 +729,7 @@ class InviteView(APIView):
 
             if normalized_status == "declined" and invite.kind == "request":
                 # Only a host/admin can decline an incoming join request.
-                if not is_realm_admin and invite.created_by != user:
+                if not is_realm_admin and invite.created_by != user_entity:
                     return Response(
                         {
                             "status": False,
@@ -688,10 +740,10 @@ class InviteView(APIView):
 
             if normalized_status == "revoked":
                 is_admin = Member.objects.filter(
-                    realm=invite.realm, account=user, role="admin"
+                    realm=invite.realm, account=user_entity, role="admin"
                 ).exists()
 
-                if not is_admin and invite.created_by != user:
+                if not is_admin and invite.created_by != user_entity:
                     return Response(
                         {
                             "status": False,
@@ -704,11 +756,11 @@ class InviteView(APIView):
                 invite.status = normalized_status
                 invite.resolved_at = now()
                 if normalized_status == "accepted":
-                    invite.accepted_by_user = user
+                    invite.accepted_by_user = user_entity
                 invite.save()
 
                 if normalized_status == "accepted":
-                    self._add_member_if_missing(invite, user)
+                    self._add_member_if_missing(invite, user_entity)
 
             # Accepting adds a member, so the participants list changed.
             if normalized_status == "accepted":
@@ -721,7 +773,10 @@ class InviteView(APIView):
                 "declined",
             }:
                 self._notify_requests_changed(invite.realm)
-                self._notify_access_changed(invite.target_user_id, invite.realm)
+                self._notify_access_changed(
+                    invite.target_user.source_id if invite.target_user else None,
+                    invite.realm,
+                )
 
             return Response(
                 {
@@ -738,12 +793,15 @@ class InviteView(APIView):
         user = self.request.user
 
         try:
+            user_entity = resolve_user_entity(user)
             realm_id = request.data.get("realm_id")
             follow_id = request.data.get("follow_id")
 
-            is_admin = Exists(
-                Member.objects.filter(realm__id=realm_id, account=user, role="admin")
-            )
+            is_admin = Member.objects.filter(
+                realm__id=realm_id,
+                account=user_entity,
+                role="admin",
+            ).exists()
 
             if not is_admin:
                 return Response(

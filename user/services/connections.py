@@ -1,6 +1,7 @@
 from user.serializers import ConnectionSerializer
 from ..models import Connection, Account
 from django.db.models import Q, F
+from ..utils.entity import resolve_user_entity
 
 
 class ConnectionHelpers:
@@ -9,19 +10,18 @@ class ConnectionHelpers:
 
     def get_connections(self):
         user = self.user
+        user_entity = resolve_user_entity(user)
         connections_queryset = (
             Connection.objects.filter(
-                Q(Q(action_by=user) | Q(involved_user=user)),
+                Q(Q(action_by=user_entity) | Q(involved_user=user_entity)),
                 ~Q(action_by=F("involved_user")),
-                Q(action_by__is_active=True),
-                Q(action_by__is_verified=True),
-                Q(involved_user__is_active=True),
-                Q(involved_user__is_verified=True),
+                Q(action_by__source_type="user.account"),
+                Q(involved_user__source_type="user.account"),
                 status=True,
             )
             .distinct("connection_id")
             .order_by("connection_id", "-action_date")
-            .values_list("action_by_id", "involved_user_id")
+            .values_list("action_by__source_id", "involved_user__source_id")
         )
 
         result_list = [
@@ -29,27 +29,32 @@ class ConnectionHelpers:
             for ab_id, iu_id in connections_queryset
         ]
         flat_values = [v for d in result_list for v in d.values()]
-        unique_values = list(set([v for v in flat_values if v != user.id]))
+        unique_values = list(set([v for v in flat_values if str(v) != str(user.id)]))
 
-        return unique_values
+        valid_account_ids = set(
+            Account.objects.filter(
+                id__in=unique_values, is_active=True, is_verified=True
+            ).values_list("id", flat=True)
+        )
+
+        return [account_id for account_id in unique_values if account_id in valid_account_ids]
 
     def get_ranked_connections(self, limit=500):
         user = self.user
+        user_entity = resolve_user_entity(user)
         connections_queryset = (
             Connection.objects.filter(
-                Q(Q(action_by=user) | Q(involved_user=user)),
+                Q(Q(action_by=user_entity) | Q(involved_user=user_entity)),
                 ~Q(action_by=F("involved_user")),
-                Q(action_by__is_active=True),
-                Q(action_by__is_verified=True),
-                Q(involved_user__is_active=True),
-                Q(involved_user__is_verified=True),
+                Q(action_by__source_type="user.account"),
+                Q(involved_user__source_type="user.account"),
                 status=True,
             )
             .distinct("connection_id")
             .order_by("connection_id", "-interaction_score", "-last_interaction_at")
             .values_list(
-                "action_by_id",
-                "involved_user_id",
+                "action_by__source_id",
+                "involved_user__source_id",
                 "interaction_score",
                 "last_interaction_at",
             )
@@ -71,11 +76,21 @@ class ConnectionHelpers:
         for d in result_list:
             # Check both sides of the connection
             for v in d.values():
-                if v != user.id and v not in seen:
+                if str(v) != str(user.id) and v not in seen:
                     unique_values.append(v)
                     seen.add(v)
 
-        return unique_values[:limit]
+        valid_account_ids = set(
+            Account.objects.filter(
+                id__in=unique_values, is_active=True, is_verified=True
+            ).values_list("id", flat=True)
+        )
+
+        return [
+            account_id
+            for account_id in unique_values
+            if account_id in valid_account_ids
+        ][:limit]
 
     def get_mutual_connections(self, friend_id):
         friend = Account.objects.get(id=friend_id)

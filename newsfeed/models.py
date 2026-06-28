@@ -3,7 +3,7 @@ import random
 from django.db import models
 from django.db.models import Q
 from django.utils.timezone import now
-from user.models import Account
+from entity.models import Entity
 from community.models import Realm
 
 from cassandra.cqlengine import columns
@@ -33,9 +33,10 @@ class Post(models.Model):
         primary_key=True,
     )
     user = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
+        related_name="newsfeed_posts",
     )
     author_realm = models.ForeignKey(
         Realm,
@@ -60,7 +61,7 @@ class Post(models.Model):
     from_system = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(null=True, blank=True, default=None)
     deleted_by = models.ForeignKey(
-        Account,
+        Entity,
         null=True,
         blank=True,
         default=None,
@@ -75,9 +76,10 @@ class PostTag(models.Model):
     )
     post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="tagging")
     user = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
+        related_name="newsfeed_post_tags",
     )
 
 
@@ -89,9 +91,10 @@ class PostPrivacy(models.Model):
         Post, on_delete=models.CASCADE, related_name="privacy_users"
     )
     allowed_user = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
+        related_name="newsfeed_post_privacy",
     )
 
 
@@ -131,14 +134,22 @@ class Emoji(models.Model):
     animated_preview = models.CharField(default=None, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    updated_by = models.ForeignKey(Account, on_delete=models.DO_NOTHING)
+    updated_by = models.ForeignKey(
+        Entity,
+        on_delete=models.DO_NOTHING,
+        related_name="newsfeed_emoji_updated",
+    )
     deleted_at = models.DateTimeField(blank=True, null=True)
 
 
 class Reaction(models.Model):
     reaction_id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
     post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="reactions")
-    user = models.ForeignKey(Account, on_delete=models.DO_NOTHING)
+    user = models.ForeignKey(
+        Entity,
+        on_delete=models.DO_NOTHING,
+        related_name="newsfeed_reactions",
+    )
     emoji = models.ForeignKey(Emoji, on_delete=models.DO_NOTHING, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -154,11 +165,15 @@ class Comment(models.Model):
     post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="comments")
     text = models.TextField(blank=True, null=True)
     attachment = models.TextField(null=True, blank=True)
-    user = models.ForeignKey(Account, on_delete=models.DO_NOTHING)
+    user = models.ForeignKey(
+        Entity,
+        on_delete=models.DO_NOTHING,
+        related_name="newsfeed_comments",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(blank=True, null=True)
     deleted_by = models.ForeignKey(
-        Account,
+        Entity,
         on_delete=models.DO_NOTHING,
         related_name="deleted_by_account",
         blank=True,
@@ -246,9 +261,10 @@ class PostSave(models.Model):
     id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
     post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="saved_post")
     user = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
+        related_name="newsfeed_saved_posts",
     )
     saved_at = models.DateTimeField(auto_now_add=True, db_index=True)
 

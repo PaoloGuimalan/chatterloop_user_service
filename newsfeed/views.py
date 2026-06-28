@@ -30,6 +30,7 @@ from .models import (
     NewsfeedIndex,
 )
 from user.models import Account
+from entity.models import Entity
 from .serializers import (
     PostSerializer,
     EmojiSerializer,
@@ -65,6 +66,41 @@ class Pagination(PageNumberPagination):
     page_size_query_param = "page_size"
 
 
+def resolve_user_entity(account):
+    if not isinstance(account, Account):
+        return None
+    entity, _ = Entity.get_or_create_from_source(
+        entity_type="user",
+        source_type="user.account",
+        source_id=str(account.id),
+    )
+    return entity
+
+
+def resolve_user_entity_ids(account_ids):
+    normalized_ids = [str(account_id) for account_id in account_ids if account_id]
+    if not normalized_ids:
+        return []
+
+    existing = Entity.objects.filter(
+        entity_type="user",
+        source_type="user.account",
+        source_id__in=normalized_ids,
+    )
+    mapped = {str(entity.source_id): str(entity.id) for entity in existing}
+
+    unresolved = [account_id for account_id in normalized_ids if account_id not in mapped]
+    for account_id in unresolved:
+        entity, _ = Entity.get_or_create_from_source(
+            entity_type="user",
+            source_type="user.account",
+            source_id=account_id,
+        )
+        mapped[account_id] = str(entity.id)
+
+    return [mapped[account_id] for account_id in normalized_ids if account_id in mapped]
+
+
 class NewsfeedView(APIView):
     permission_classes = [IsAuthenticated]
     pagination_class = Pagination
@@ -72,16 +108,19 @@ class NewsfeedView(APIView):
     def post(self, request):
         user = self.request.user
         try:
+            user_entity = resolve_user_entity(user)
             page_size = request.query_params.get("page_size", 10)
 
             connections = ConnectionHelpers(user)
             connections_list = connections.get_connections()
+            connection_entity_ids = resolve_user_entity_ids(connections_list)
             followed_realm_ids = list(
-                RealmFollow.objects.filter(follower=user).values_list(
+                RealmFollow.objects.filter(follower=user_entity).values_list(
                     "realm_id", flat=True
                 )
             )
             blocked_account_ids = get_blocked_account_ids(user)
+            blocked_entity_ids = resolve_user_entity_ids(blocked_account_ids)
 
             current_mode = RedisPubSubClient.get_and_toggle_feed_mode(user.id)
 
@@ -119,7 +158,7 @@ class NewsfeedView(APIView):
                 .annotate(
                     is_friend=Case(
                         When(
-                            Q(user_id__in=connections_list)
+                            Q(user_id__in=connection_entity_ids)
                             | Q(author_realm_id__in=followed_realm_ids),
                             then=Value(0.8),
                         ),
@@ -127,17 +166,20 @@ class NewsfeedView(APIView):
                         output_field=IntegerField(),
                     ),
                     is_friend_tagged=Case(
-                        When(tagging__user_id__in=connections_list, then=Value(0.5)),
+                        When(
+                            tagging__user_id__in=connection_entity_ids,
+                            then=Value(0.5),
+                        ),
                         default=Value(0),
                         output_field=IntegerField(),
                     ),
                     is_saved=Exists(
-                        PostSave.objects.filter(post=OuterRef("pk"), user=user)
+                        PostSave.objects.filter(post=OuterRef("pk"), user=user_entity)
                     ),
                     user_reaction=Coalesce(
                         Subquery(
                             Reaction.objects.filter(
-                                post=OuterRef("pk"), user=user
+                                post=OuterRef("pk"), user=user_entity
                             ).values("emoji_id")[:1]
                         ),
                         Value(None),
@@ -146,7 +188,7 @@ class NewsfeedView(APIView):
                 .filter(
                     post_id__in=candidate_post_ids, deleted_at=None, is_archived=False
                 )
-                .exclude(user_id__in=blocked_account_ids)
+                .exclude(user_id__in=blocked_entity_ids)
                 .order_by(
                     "-is_friend",
                     "-is_friend_tagged",
@@ -194,11 +236,12 @@ class NewsfeedView(APIView):
     def delete(self, request):
         user = self.request.user
         try:
+            user_entity = resolve_user_entity(user)
             post_ids = request.data.get("post_ids")
 
             if len(post_ids) > 0:
                 Post.objects.filter(post_id__in=post_ids).update(
-                    deleted_at=now(), deleted_by=user
+                    deleted_at=now(), deleted_by=user_entity
                 )
 
             return Response(
@@ -233,11 +276,12 @@ class NewsfeedProfileView(APIView):
     def post(self, request, username):
         user = self.request.user
         try:
+            user_entity = resolve_user_entity(user)
             archive_param = request.query_params.get("archive", False)
             archive = True if archive_param == "true" else False
 
             user_reaction_subquery = Reaction.objects.filter(
-                post=OuterRef("pk"), user=user
+                post=OuterRef("pk"), user=user_entity
             ).values("emoji_id")[:1]
 
             viewcache = request.data.get("viewcache", [])
@@ -258,13 +302,20 @@ class NewsfeedProfileView(APIView):
                         PostSerializer(empty_page, many=True).data
                     )
 
-            profile_filter = Q(
-                Q(user__username=username) | Q(tagging__user__username=username)
-            ) & Q(author_realm=None)
+            target_entity = None
+            target_account = Account.objects.filter(username=username).first()
+            if target_account:
+                target_entity = resolve_user_entity(target_account)
+
+            profile_filter = Q(user=target_entity) & Q(author_realm=None)
+            if target_entity:
+                profile_filter = Q(
+                    Q(user=target_entity) | Q(tagging__user=target_entity)
+                ) & Q(author_realm=None)
             if realm_match:
                 profile_filter = Q(author_realm=realm_match)
             elif archive:
-                profile_filter = Q(user=user) & Q(author_realm=None)
+                profile_filter = Q(user=user_entity) & Q(author_realm=None)
 
             queryset = (
                 Post.objects.select_related("user", "score", "author_realm")
@@ -278,7 +329,10 @@ class NewsfeedProfileView(APIView):
                 .filter(profile_filter)
                 .annotate(
                     is_saved=Exists(
-                        PostSave.objects.filter(post=OuterRef("pk"), user=user)
+                        PostSave.objects.filter(
+                            post=OuterRef("pk"),
+                            user=user_entity,
+                        )
                     ),
                     user_reaction=Coalesce(
                         Subquery(user_reaction_subquery), Value(None)
@@ -319,8 +373,9 @@ class NewsfeedPostPreviewView(APIView):
     def get(self, request, post_id):
         user = self.request.user
         try:
+            user_entity = resolve_user_entity(user)
             user_reaction_subquery = Reaction.objects.filter(
-                post=OuterRef("pk"), user=user
+                post=OuterRef("pk"), user=user_entity
             ).values("emoji_id")[:1]
 
             queryset = (
@@ -334,7 +389,10 @@ class NewsfeedPostPreviewView(APIView):
                 )
                 .annotate(
                     is_saved=Exists(
-                        PostSave.objects.filter(post=OuterRef("pk"), user=user)
+                        PostSave.objects.filter(
+                            post=OuterRef("pk"),
+                            user=user_entity,
+                        )
                     ),
                     user_reaction=Coalesce(
                         Subquery(user_reaction_subquery), Value(None)
@@ -392,6 +450,7 @@ class PostReactionsView(APIView):
     def post(self, request, *args, **kwargs):
         try:
             user = self.request.user
+            user_entity = resolve_user_entity(user)
             post_id = request.data.get("post_id")
             emoji_id = request.data.get("emoji_id")
 
@@ -404,7 +463,7 @@ class PostReactionsView(APIView):
                 Reaction.objects.create(
                     reaction_id=new_reaction_id,
                     post=post,
-                    user=user,
+                    user=user_entity,
                     emoji=emoji,
                 )
 
@@ -417,18 +476,23 @@ class PostReactionsView(APIView):
                 reaction_ranking.save()
 
                 update_ranking_score(post_id, "react", False)
-                interaction_score_bump(user.id, post.user.id, "LIKE", False)
+                interaction_score_bump(
+                    user.id,
+                    post.user.source_id,
+                    "LIKE",
+                    False,
+                )
                 if post.author_realm:
                     follower_interaction_score_bump(
                         user.id, post.author_realm.realm_id, "LIKE", False
                     )
 
-                if post.user.id != user.id:
+                if str(post.user.source_id) != str(user.id):
                     service = NotificationService()
                     service.add_notification(
                         referenceID=new_reaction_id,
                         referenceStatus=True,
-                        toUserID=post.user.id,
+                        toUserID=post.user.source_id,
                         fromUserID=user.id,
                         content_headline="Post Reaction",
                         content_details=f"@{user.username} reacted {emoji.emoji_content} to your post.",
@@ -436,7 +500,7 @@ class PostReactionsView(APIView):
                         isRead=False,
                     )
 
-                    sse_sendToUser = post.user.id
+                    sse_sendToUser = post.user.source_id
                     sse_sendToDetails = (
                         f"@{user.username} reacted {emoji.emoji_content} to your post."
                     )
@@ -466,6 +530,7 @@ class PostReactionsView(APIView):
     def put(self, request, *args, **kwargs):
         try:
             user = self.request.user
+            user_entity = resolve_user_entity(user)
             post_id = request.data.get("post_id")
             emoji_id = request.data.get("emoji_id")
 
@@ -473,7 +538,7 @@ class PostReactionsView(APIView):
             new_emoji = Emoji.objects.get(emoji_id=emoji_id)
 
             with transaction.atomic():
-                reaction = Reaction.objects.get(post_id=post, user=user)
+                reaction = Reaction.objects.get(post_id=post, user=user_entity)
                 old_emoji = reaction.emoji
                 reaction.emoji = new_emoji
                 reaction.save()
@@ -486,14 +551,14 @@ class PostReactionsView(APIView):
                 new_preview.count += 1
                 new_preview.save()
 
-                if post.user.id != user.id:
+                if str(post.user.source_id) != str(user.id):
                     service = NotificationService()
                     service.update_content(
                         reaction_id=reaction.reaction_id,
                         new_content=f"@{user.username} reacted {new_emoji.emoji_content} to your post.",
                     )
 
-                    sse_sendToUser = post.user.id
+                    sse_sendToUser = post.user.source_id
                     sse_sendToDetails = f"@{user.username} reacted {new_emoji.emoji_content} to your post."
 
                     now = datetime.now()
@@ -521,11 +586,12 @@ class PostReactionsView(APIView):
     def delete(self, request, *args, **kwargs):
         try:
             user = self.request.user
+            user_entity = resolve_user_entity(user)
             post_id = request.data.get("post_id")
             post = Post.objects.get(post_id=post_id)
 
             with transaction.atomic():
-                reaction = Reaction.objects.get(post=post, user=user)
+                reaction = Reaction.objects.get(post=post, user=user_entity)
 
                 service = NotificationService()
                 service.delete_notification_by_reference_id(
@@ -537,7 +603,12 @@ class PostReactionsView(APIView):
                 reaction_ranking.save()
 
                 update_ranking_score(post_id, "react", True)
-                interaction_score_bump(user.id, post.user.id, "LIKE", True)
+                interaction_score_bump(
+                    user.id,
+                    post.user.source_id,
+                    "LIKE",
+                    True,
+                )
                 if post.author_realm:
                     follower_interaction_score_bump(
                         user.id, post.author_realm.realm_id, "LIKE", True
@@ -654,6 +725,7 @@ class CommentsView(APIView):
     def post(self, request):
         try:
             user = self.request.user
+            user_entity = resolve_user_entity(user)
             post_id = request.data.get("post_id")
             parent_id = request.data.get("parent_id")
             new_comment = request.data.get("new_comment")
@@ -675,7 +747,7 @@ class CommentsView(APIView):
                         post=post,
                         text=new_comment,
                         attachment=new_attachment,
-                        user=user,
+                        user=user_entity,
                     )
 
                     # activity_count_obj = ActivityCount.objects.get(
@@ -696,12 +768,15 @@ class CommentsView(APIView):
                         else parent_comment.text
                     )
 
-                    if parent_comment.user != user and post.user != user:
+                    if (
+                        str(parent_comment.user.source_id) != str(user.id)
+                        and str(post.user.source_id) != str(user.id)
+                    ):
                         service = NotificationService()
                         service.add_notification(
                             referenceID=new_comment_id,
                             referenceStatus=True,
-                            toUserID=parent_comment.user.id,
+                            toUserID=parent_comment.user.source_id,
                             fromUserID=user.id,
                             content_headline="Replied Comment",
                             content_details=f'@{user.username} replied to your comment "{truncated_comment}"',
@@ -724,7 +799,8 @@ class CommentsView(APIView):
                         }
 
                         RedisPubSubClient.publish_json(
-                            f"events_{parent_comment.user.id}", data
+                            f"events_{parent_comment.user.source_id}",
+                            data,
                         )
 
                 else:
@@ -735,7 +811,7 @@ class CommentsView(APIView):
                         post=post,
                         text=new_comment,
                         attachment=new_attachment,
-                        user=user,
+                        user=user_entity,
                     )
 
                     # activity_count_obj = ActivityCount.objects.get(
@@ -750,12 +826,12 @@ class CommentsView(APIView):
 
                     update_ranking_score(post_id, "comment", False)
 
-                    if post.user != user:
+                    if str(post.user.source_id) != str(user.id):
                         service = NotificationService()
                         service.add_notification(
                             referenceID=new_comment_id,
                             referenceStatus=True,
-                            toUserID=post.user.id,
+                            toUserID=post.user.source_id,
                             fromUserID=user.id,
                             content_headline="Post Comment",
                             content_details=f"@{user.username} commented on your post.",
@@ -777,7 +853,10 @@ class CommentsView(APIView):
                             "dateTime": now.isoformat(),
                         }
 
-                        RedisPubSubClient.publish_json(f"events_{post.user.id}", data)
+                        RedisPubSubClient.publish_json(
+                            f"events_{post.user.source_id}",
+                            data,
+                        )
 
             return Response("OK", status=status.HTTP_200_OK)
         except Exception as e:
@@ -806,12 +885,13 @@ class CommentsView(APIView):
     def delete(self, request):
         try:
             user = self.request.user
+            user_entity = resolve_user_entity(user)
             comment_id = request.data.get("comment_id")
 
             with transaction.atomic():
                 current_comment = Comment.objects.get(comment_id=comment_id)
                 current_comment.deleted_at = now()
-                current_comment.deleted_by = user
+                current_comment.deleted_by = user_entity
                 current_comment.save()
 
             return Response("OK", status=status.HTTP_200_OK)
@@ -826,10 +906,11 @@ class PostSaveView(APIView):
     def get(self, request):
         try:
             user = self.request.user
+            user_entity = resolve_user_entity(user)
 
             post_save_query = (
                 PostSave.objects.select_related("post")
-                .filter(user=user, post__deleted_at=None)
+                .filter(user=user_entity, post__deleted_at=None)
                 .order_by("-saved_at")
             )
 
@@ -848,10 +929,14 @@ class PostSaveView(APIView):
     def post(self, request):
         try:
             user = self.request.user
+            user_entity = resolve_user_entity(user)
             post_id = request.data.get("post_id")
 
             current_post = get_object_or_404(Post, post_id=post_id)
-            new_save_query = PostSave.objects.create(post=current_post, user=user)
+            new_save_query = PostSave.objects.create(
+                post=current_post,
+                user=user_entity,
+            )
 
             return Response(
                 {
@@ -867,10 +952,11 @@ class PostSaveView(APIView):
     def delete(self, request):
         try:
             user = self.request.user
+            user_entity = resolve_user_entity(user)
             post_id = request.data.get("post_id")
 
             current_post = get_object_or_404(Post, post_id=post_id)
-            PostSave.objects.filter(post=current_post, user=user).delete()
+            PostSave.objects.filter(post=current_post, user=user_entity).delete()
 
             return Response(
                 {"status": True, "message": "Post has been unsaved"},

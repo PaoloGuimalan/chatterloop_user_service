@@ -1,11 +1,57 @@
 from rest_framework import serializers
 from .models import Realm, Member, RealmFollow, Invite
-from user.serializers import AccountPreviewSerializer
+from user.models import Account
+
+
+def serialize_user_entity_preview(entity):
+    if not entity:
+        return None
+    if entity.entity_type != "user" or entity.source_type != "user.account":
+        return {
+            "id": entity.id,
+            "username": entity.entity_id,
+            "first_name": "",
+            "middle_name": "",
+            "last_name": "",
+            "profile": "none",
+            "gender": None,
+            "is_badged": False,
+        }
+
+    account = Account.objects.filter(id=entity.source_id).first()
+    if not account:
+        return {
+            "id": entity.source_id,
+            "username": "",
+            "first_name": "",
+            "middle_name": "",
+            "last_name": "",
+            "profile": "none",
+            "gender": None,
+            "is_badged": False,
+        }
+
+    return {
+        "id": account.id,
+        "username": account.username,
+        "first_name": account.first_name,
+        "middle_name": account.middle_name,
+        "last_name": account.last_name,
+        "profile": account.profile,
+        "gender": account.gender,
+        "is_badged": account.is_badged,
+    }
 
 
 class RealmMemberSerializer(serializers.ModelSerializer):
-    account = AccountPreviewSerializer()
-    added_by = AccountPreviewSerializer()
+    account = serializers.SerializerMethodField()
+    added_by = serializers.SerializerMethodField()
+
+    def get_account(self, obj):
+        return serialize_user_entity_preview(obj.account)
+
+    def get_added_by(self, obj):
+        return serialize_user_entity_preview(obj.added_by)
 
     class Meta:
         model = Member
@@ -13,7 +59,10 @@ class RealmMemberSerializer(serializers.ModelSerializer):
 
 
 class RealmFollowSerializer(serializers.ModelSerializer):
-    follower = AccountPreviewSerializer()
+    follower = serializers.SerializerMethodField()
+
+    def get_follower(self, obj):
+        return serialize_user_entity_preview(obj.follower)
 
     class Meta:
         model = RealmFollow
@@ -29,13 +78,13 @@ class InviteSerializer(serializers.ModelSerializer):
     created_by_id = serializers.SerializerMethodField()
 
     def get_target_user_id(self, obj):
-        return obj.target_user.id if obj.target_user else None
+        return obj.target_user.source_id if obj.target_user else None
 
     def get_accepted_by_user_id(self, obj):
-        return obj.accepted_by_user.id if obj.accepted_by_user else None
+        return obj.accepted_by_user.source_id if obj.accepted_by_user else None
 
     def get_created_by_id(self, obj):
-        return obj.created_by.id if obj.created_by else None
+        return obj.created_by.source_id if obj.created_by else None
 
     class Meta:
         model = Invite

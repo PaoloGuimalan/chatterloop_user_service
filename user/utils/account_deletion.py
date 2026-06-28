@@ -5,6 +5,7 @@ from django.utils.timezone import now
 
 from ..models import Connection, Verification
 from ..ext_models.mongomodels import Message, Notification, Session
+from .entity import resolve_user_entity
 
 
 def delete_account(account):
@@ -21,32 +22,34 @@ def delete_account(account):
     from newsfeed.models import Post, Comment, Reaction, PostSave, PostTag, PostPrivacy
 
     account_id = account.id
+    account_entity = resolve_user_entity(account)
+    account_entity_id = account_entity.id
 
     with transaction.atomic():
-        Post.objects.filter(user=account, deleted_at__isnull=True).update(
-            deleted_at=now(), deleted_by=account
+        Post.objects.filter(user_id=account_entity_id, deleted_at__isnull=True).update(
+            deleted_at=now(), deleted_by_id=account_entity_id
         )
-        Comment.objects.filter(user=account, deleted_at__isnull=True).update(
-            deleted_at=now(), deleted_by=account
+        Comment.objects.filter(user_id=account_entity_id, deleted_at__isnull=True).update(
+            deleted_at=now(), deleted_by_id=account_entity_id
         )
-        Reaction.objects.filter(user=account).delete()
-        PostSave.objects.filter(user=account).delete()
-        PostTag.objects.filter(user=account).delete()
-        PostPrivacy.objects.filter(allowed_user=account).delete()
+        Reaction.objects.filter(user_id=account_entity_id).delete()
+        PostSave.objects.filter(user_id=account_entity_id).delete()
+        PostTag.objects.filter(user_id=account_entity_id).delete()
+        PostPrivacy.objects.filter(allowed_user_id=account_entity_id).delete()
 
         # Diary entries are private, non-shared content; safe to hard-delete
         # (cascades to Attachment/MapView).
-        Entry.objects.filter(account=account).delete()
+        Entry.objects.filter(account_id=account_entity_id).delete()
 
-        Member.objects.filter(account=account).delete()
-        RealmFollow.objects.filter(follower=account).delete()
-        Invite.objects.filter(target_user=account).delete()
-        Invite.objects.filter(created_by=account).delete()
+        Member.objects.filter(account_id=account_entity_id).delete()
+        RealmFollow.objects.filter(follower_id=account_entity_id).delete()
+        Invite.objects.filter(target_user_id=account_entity_id).delete()
+        Invite.objects.filter(created_by_id=account_entity_id).delete()
 
-        Connection.objects.filter(action_by=account).delete()
-        Connection.objects.filter(involved_user=account).delete()
+        Connection.objects.filter(action_by=account_entity).delete()
+        Connection.objects.filter(involved_user=account_entity).delete()
 
-        Verification.objects.filter(user=account).delete()
+        Verification.objects.filter(user=account_entity).delete()
 
         anon_suffix = secrets.token_hex(8)
         account.username = f"deleted_{anon_suffix}"

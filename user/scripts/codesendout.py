@@ -1,16 +1,17 @@
 from ..utils.external_requests import emailer
 from ..models import Account
+from ..models import Verification
+from ..utils.entity import resolve_user_entity
 
 
 def run():
 
-    unverified_users = Account.objects.filter(is_verified=False).prefetch_related(
-        "verification_set"
-    )
+    unverified_users = Account.objects.filter(is_verified=False)
 
     for account in unverified_users:
-        # This won't hit the DB again because of prefetch_related
-        verifications = account.verification_set.all()
+        entity = resolve_user_entity(account)
+
+        verifications = Verification.objects.filter(user=entity)
 
         # Example: Get the most recent code
         latest = verifications.filter(is_used=False).order_by("-date_generated").first()

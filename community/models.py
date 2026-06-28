@@ -2,7 +2,7 @@ import uuid
 import random
 import secrets
 from django.db import models
-from user.models import Account
+from entity.models import Entity
 from django.utils.timezone import now
 
 
@@ -48,7 +48,7 @@ class Realm(models.Model):
         unique=True,
     )
     created_by = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="realm_as_created_by",
@@ -77,7 +77,7 @@ class Member(models.Model):
         max_length=150, default=uuid.uuid4, unique=True, blank=True, primary_key=True
     )
     account = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="user_as_member",
@@ -89,7 +89,7 @@ class Member(models.Model):
         on_delete=models.DO_NOTHING,
     )
     added_by = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="user_as_added_by",
@@ -106,7 +106,7 @@ class RealmFollow(models.Model):
         max_length=150, default=uuid.uuid4, unique=True, primary_key=True
     )
     follower = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.CASCADE,
         related_name="realm_follows",
@@ -157,14 +157,14 @@ class Invite(models.Model):
     )
     target_email = models.EmailField(db_index=True)
     target_user = models.ForeignKey(
-        Account,
+        Entity,
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
         related_name="realm_invites_targeted",
     )
     accepted_by_user = models.ForeignKey(
-        Account,
+        Entity,
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
@@ -174,7 +174,7 @@ class Invite(models.Model):
         max_length=255, unique=True, default=generate_invite_token
     )
     created_by = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="realm_invites_created",

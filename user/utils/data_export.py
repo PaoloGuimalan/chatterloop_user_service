@@ -2,6 +2,7 @@ from django.db.models import Q
 
 from ..models import Connection, UserConsent
 from ..ext_models.mongomodels import Message, Notification, Session
+from .entity import resolve_user_entity
 
 
 def export_account_data(account):
@@ -10,6 +11,8 @@ def export_account_data(account):
     from newsfeed.models import Post, Comment, PostSave
 
     account_id = str(account.id)
+    account_entity = resolve_user_entity(account)
+    account_entity_id = str(account_entity.id)
 
     return {
         "profile": {
@@ -28,7 +31,7 @@ def export_account_data(account):
         },
         "connections": list(
             Connection.objects.filter(
-                Q(action_by=account) | Q(involved_user=account)
+                Q(action_by=account_entity) | Q(involved_user=account_entity)
             ).values(
                 "id",
                 "connection_id",
@@ -41,32 +44,32 @@ def export_account_data(account):
             )
         ),
         "consents": list(
-            UserConsent.objects.filter(user=account).values(
+            UserConsent.objects.filter(user=account_entity).values(
                 "document_type", "version", "accepted_at", "ip_address", "user_agent"
             )
         ),
         "realms_created": list(
-            Realm.objects.filter(created_by=account).values(
+            Realm.objects.filter(created_by_id=account_entity_id).values(
                 "realm_id", "name", "type", "is_private", "created_at"
             )
         ),
         "realm_memberships": list(
-            Member.objects.filter(account=account).values(
+            Member.objects.filter(account_id=account_entity_id).values(
                 "realm__realm_id", "realm__name", "role", "nickname", "date_joined"
             )
         ),
         "realm_follows": list(
-            RealmFollow.objects.filter(follower=account).values(
+            RealmFollow.objects.filter(follower_id=account_entity_id).values(
                 "realm__realm_id", "realm__name", "created_at"
             )
         ),
         "realm_invites_sent": list(
-            Invite.objects.filter(created_by=account).values(
+            Invite.objects.filter(created_by_id=account_entity_id).values(
                 "realm__realm_id", "target_email", "kind", "status", "created_at"
             )
         ),
         "diary_entries": list(
-            Entry.objects.filter(account=account).values(
+            Entry.objects.filter(account_id=account_entity_id).values(
                 "id",
                 "title",
                 "content",
@@ -77,7 +80,7 @@ def export_account_data(account):
             )
         ),
         "posts": list(
-            Post.objects.filter(user=account).values(
+            Post.objects.filter(user_id=account_entity_id).values(
                 "post_id",
                 "caption",
                 "content_type",
@@ -88,12 +91,15 @@ def export_account_data(account):
             )
         ),
         "comments": list(
-            Comment.objects.filter(user=account).values(
+            Comment.objects.filter(user_id=account_entity_id).values(
                 "comment_id", "post_id", "text", "created_at", "deleted_at"
             )
         ),
         "post_saves": list(
-            PostSave.objects.filter(user=account).values("post_id", "saved_at")
+            PostSave.objects.filter(user_id=account_entity_id).values(
+                "post_id",
+                "saved_at",
+            )
         ),
         "messages_sent": [
             {

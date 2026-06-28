@@ -54,6 +54,7 @@ from .utils.consent import (
 from .utils.account_deletion import delete_account
 from .utils.data_export import export_account_data
 from .utils.blocking import get_blocked_account_ids, is_blocked
+from .utils.entity import resolve_user_entity, resolve_account_from_entity
 from newsfeed.helpers.query_functions import (
     interaction_score_bump,
     follower_interaction_score_bump,
@@ -62,6 +63,7 @@ from newsfeed.helpers.query_functions import (
 )
 from community.models import Realm, Member, RealmFollow, Invite
 from community.serializers import RealmSerializer
+from entity.models import Entity
 import bcrypt
 
 jwt = JWTTools
@@ -70,6 +72,30 @@ jwt = JWTTools
 class Pagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
+
+
+def active_verified_user_entity_ids_qs():
+    active_verified_accounts = Account.objects.filter(
+        is_active=True,
+        is_verified=True,
+    ).values("id")
+    return Entity.objects.filter(
+        source_type="user.account",
+        source_id__in=Subquery(active_verified_accounts),
+    ).values("id")
+
+
+def get_user_connection_queryset(account: Account, *, status_filter=None):
+    account_entity = resolve_user_entity(account)
+    queryset = Connection.objects.filter(
+        Q(action_by=account_entity) | Q(involved_user=account_entity),
+        ~Q(action_by=F("involved_user")),
+        action_by_id__in=Subquery(active_verified_user_entity_ids_qs()),
+        involved_user_id__in=Subquery(active_verified_user_entity_ids_qs()),
+    )
+    if status_filter is not None:
+        queryset = queryset.filter(status=status_filter)
+    return queryset
 
 
 class UserAuthentication(APIView):
@@ -101,6 +127,7 @@ class UserAuthentication(APIView):
 
     def get(self, request, username=None):
         me = self.request.user
+        me_entity = resolve_user_entity(me) if isinstance(me, Account) else None
         # user = get_object_or_404(Account, username=username)
         user_queryset = Account.objects.filter(
             username=username, is_active=True, is_verified=True, user_type="user"
@@ -117,15 +144,13 @@ class UserAuthentication(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
+            user_entity = resolve_user_entity(user)
             connection_exists = Connection.objects.filter(
-                Q(action_by=user, involved_user=self.request.user)
-                | Q(action_by=self.request.user, involved_user=user),
+                Q(action_by=user_entity, involved_user=me_entity)
+                | Q(action_by=me_entity, involved_user=user_entity),
                 ~Q(action_by=F("involved_user")),
-                Q(action_by__is_active=True),
-                Q(action_by__is_verified=True),
-                Q(involved_user__is_active=True),
-                Q(involved_user__is_verified=True),
-                # status=True,
+                action_by_id__in=Subquery(active_verified_user_entity_ids_qs()),
+                involved_user_id__in=Subquery(active_verified_user_entity_ids_qs()),
             ).distinct("connection_id")
 
             is_connection_present = (
@@ -143,7 +168,7 @@ class UserAuthentication(APIView):
                 is_connection_handshaked = connection_exists[0].status
                 is_user_connection_initiator = (
                     True
-                    if connection_exists[0].action_by.username == username
+                    if connection_exists[0].action_by.source_id == str(user.id)
                     else False
                 )
 
@@ -220,14 +245,17 @@ class UserAuthentication(APIView):
                     followers_count=Count("followers"),
                     is_admin=Exists(
                         Member.objects.filter(
-                            realm=OuterRef("pk"), account=me, role="admin"
+                            realm=OuterRef("pk"), account=me_entity, role="admin"
                         )
                     ),
                     is_member=Exists(
-                        Member.objects.filter(realm=OuterRef("pk"), account=me)
+                        Member.objects.filter(realm=OuterRef("pk"), account=me_entity)
                     ),
                     is_follower=Exists(
-                        RealmFollow.objects.filter(realm=OuterRef("pk"), follower=me)
+                        RealmFollow.objects.filter(
+                            realm=OuterRef("pk"),
+                            follower=me_entity,
+                        )
                     ),
                 ),
                 query_filter,
@@ -450,17 +478,11 @@ class UserContacts(APIView):
         try:
             search = request.query_params.get("search", None)
             paginated_header = request.headers.get("paginated", "true")
+            user_entity = resolve_user_entity(user)
 
             queryset = (
-                Connection.objects.select_related("action_by", "involved_user").filter(
-                    Q(Q(action_by=user) | Q(involved_user=user)),
-                    ~Q(action_by=F("involved_user")),
-                    Q(action_by__is_active=True),
-                    Q(action_by__is_verified=True),
-                    Q(involved_user__is_active=True),
-                    Q(involved_user__is_verified=True),
-                    status=True,
-                )
+                get_user_connection_queryset(user, status_filter=True)
+                .select_related("action_by", "involved_user")
                 # .distinct("connection_id")
                 # .order_by("connection_id", "-action_date")
                 .order_by("-action_date", "connection_id")
@@ -468,17 +490,35 @@ class UserContacts(APIView):
 
             if search:
                 if search.startswith("@"):
+                    searched_accounts = Account.objects.filter(
+                        username__icontains=search.replace("@", "")
+                    ).values("id")
+                else:
+                    searched_accounts = Account.objects.filter(
+                        Q(first_name__icontains=search)
+                        | Q(middle_name__icontains=search)
+                        | Q(last_name__icontains=search)
+                    ).values("id")
+
+                searched_entity_ids = Entity.objects.filter(
+                    source_type="user.account",
+                    source_id__in=Subquery(searched_accounts),
+                ).exclude(source_id=str(user.id)).values("id")
+
+                if search.startswith("@"):
                     queryset = queryset.filter(
-                        Q(involved_user__username__icontains=search)
+                        Q(action_by_id__in=Subquery(searched_entity_ids))
+                        | Q(involved_user_id__in=Subquery(searched_entity_ids))
                     )
                 else:
                     queryset = queryset.filter(
-                        Q(
-                            Q(involved_user__first_name__icontains=search)
-                            | Q(involved_user__middle_name__icontains=search)
-                            | Q(involved_user__last_name__icontains=search)
-                        )
+                        Q(action_by_id__in=Subquery(searched_entity_ids))
+                        | Q(involved_user_id__in=Subquery(searched_entity_ids))
                     )
+
+                queryset = queryset.exclude(
+                    Q(action_by=user_entity) & Q(involved_user=user_entity)
+                )
 
             if paginated_header == "true":
                 paginator = self.pagination_class()
@@ -500,6 +540,7 @@ class UserContacts(APIView):
         user = self.request.user
         try:
             addUsername = request.data.get("addUsername")
+            user_entity = resolve_user_entity(user)
 
             users = [addUsername, user.id]
             pipeline = [
@@ -520,6 +561,7 @@ class UserContacts(APIView):
             )
 
             pending_involved_user = Account.objects.get(id=addUsername)
+            pending_involved_entity = resolve_user_entity(pending_involved_user)
 
             if is_blocked(user, pending_involved_user):
                 return Response(
@@ -531,8 +573,8 @@ class UserContacts(APIView):
                 # Create first connection row
                 conn1 = Connection(
                     connection_id=new_connection_id,
-                    action_by=user,
-                    involved_user=user,
+                    action_by=user_entity,
+                    involved_user=user_entity,
                     nickname=None,
                     type="single",
                     status=False,
@@ -542,8 +584,8 @@ class UserContacts(APIView):
                 # Create reciprocal connection row
                 conn2 = Connection(
                     connection_id=new_connection_id,
-                    action_by=user,
-                    involved_user=pending_involved_user,
+                    action_by=user_entity,
+                    involved_user=pending_involved_entity,
                     nickname=None,
                     type="single",
                     status=False,
@@ -601,11 +643,12 @@ class UserContacts(APIView):
         try:
             connection_id = request.data.get("connection_id")
             to_user_id = request.data.get("to_user_id")
+            user_entity = resolve_user_entity(user)
             now = datetime.now()
 
             with transaction.atomic():
                 existing_connection_query = Connection.objects.filter(
-                    Q(~Q(action_by=user), involved_user=user),
+                    Q(~Q(action_by=user_entity), involved_user=user_entity),
                     connection_id=connection_id,
                 )
 
@@ -617,13 +660,15 @@ class UserContacts(APIView):
                     )
 
                     for conn in existing_connection_query:
-                        if conn.action_by != user:
-                            other_users.append(conn.action_by)
-                        if conn.involved_user != user:
-                            other_users.append(conn.involved_user)
+                        action_by_account = resolve_account_from_entity(conn.action_by)
+                        involved_account = resolve_account_from_entity(conn.involved_user)
+                        if action_by_account and action_by_account.id != user.id:
+                            other_users.append(action_by_account)
+                        if involved_account and involved_account.id != user.id:
+                            other_users.append(involved_account)
 
                     # Remove duplicates if needed
-                    other_users = list(set(other_users))
+                    other_users = list({str(acc.id): acc for acc in other_users}.values())
 
                     to_update_query.update(status=True)
 
@@ -728,12 +773,13 @@ class UserContacts(APIView):
         try:
             connection_id = request.data.get("connection_id")
             to_user_id = request.data.get("to_user_id")
+            user_entity = resolve_user_entity(user)
             action = request.headers.get("action")
             now = datetime.now()
 
             with transaction.atomic():
                 existing_connection_query = Connection.objects.filter(
-                    Q(Q(action_by=user) | Q(involved_user=user)),
+                    Q(Q(action_by=user_entity) | Q(involved_user=user_entity)),
                     type="single",
                     connection_id=connection_id,
                 )
@@ -742,15 +788,17 @@ class UserContacts(APIView):
 
                 if existing_connection_query.exists():
                     for conn in existing_connection_query:
-                        if conn.action_by != user:
-                            other_users.append(conn.action_by)
-                            to_user_id = conn.action_by.id
-                        if conn.involved_user != user:
-                            other_users.append(conn.involved_user)
-                            to_user_id = conn.involved_user.id
+                        action_by_account = resolve_account_from_entity(conn.action_by)
+                        involved_account = resolve_account_from_entity(conn.involved_user)
+                        if action_by_account and action_by_account.id != user.id:
+                            other_users.append(action_by_account)
+                            to_user_id = action_by_account.id
+                        if involved_account and involved_account.id != user.id:
+                            other_users.append(involved_account)
+                            to_user_id = involved_account.id
 
                     # Remove duplicates if needed
-                    other_users = list(set(other_users))
+                    other_users = list({str(acc.id): acc for acc in other_users}.values())
                     delete_query = Connection.objects.filter(
                         type="single",
                         connection_id=connection_id,
@@ -866,21 +914,8 @@ class UserSearch(APIView):
     def get(self, request, query):
         user = self.request.user
         try:
-            connection_exists = Connection.objects.filter(
-                Q(action_by=user, involved_user=OuterRef("pk"))
-                | Q(action_by=OuterRef("pk"), involved_user=user),
-                ~Q(action_by=F("involved_user")),
-                Q(action_by__is_active=True),
-                Q(action_by__is_verified=True),
-                Q(involved_user__is_active=True),
-                Q(involved_user__is_verified=True),
-                # status=True,
-            ).distinct("connection_id")
-
-            connection_action_by = connection_exists.filter(action_by=OuterRef("pk"))
-            connection_active = connection_exists.filter(status=True)
-            connection_id_subquery = connection_exists.values("connection_id")[:1]
             blocked_account_ids = get_blocked_account_ids(user)
+            user_entity = resolve_user_entity(user)
 
             if query.startswith("@"):
                 domain = query.split("@")[1]
@@ -890,22 +925,6 @@ class UserSearch(APIView):
                     is_active=True,
                     is_verified=True,
                     username__icontains=domain,  # case-insensitive contains
-                ).annotate(
-                    has_connection=Exists(connection_exists),
-                    connection_accomplished=Case(
-                        When(Exists(connection_active), then=Value(True)),
-                        default=Value(False),
-                        output_field=BooleanField(),
-                    ),
-                    connection_id=Subquery(connection_id_subquery),
-                    is_action_by_user=Case(
-                        When(
-                            Exists(connection_action_by),
-                            then=Value(True),
-                        ),
-                        default=Value(False),
-                        output_field=BooleanField(),
-                    ),
                 )
             else:
                 users_qs = (
@@ -920,29 +939,64 @@ class UserSearch(APIView):
                         | Q(middle_name__icontains=query)
                         | Q(last_name__icontains=query)
                     )
-                    .annotate(
-                        has_connection=Exists(connection_exists),
-                        connection_accomplished=Case(
-                            When(Exists(connection_active), then=Value(True)),
-                            default=Value(False),
-                            output_field=BooleanField(),
-                        ),
-                        connection_id=Subquery(connection_id_subquery),
-                        is_action_by_user=Case(
-                            When(
-                                Exists(connection_action_by),
-                                then=Value(True),
-                            ),
-                            default=Value(False),
-                            output_field=BooleanField(),
-                        ),
-                    )
                 )
 
             paginator = self.pagination_class()
             paginated_queryset = paginator.paginate_queryset(
                 users_qs, request, view=self
             )
+
+            paginated_account_ids = [str(account.id) for account in paginated_queryset]
+            paginated_entity_rows = Entity.objects.filter(
+                source_type="user.account",
+                source_id__in=paginated_account_ids,
+            ).values("id", "source_id")
+            entity_id_to_account_id = {
+                str(row["id"]): str(row["source_id"]) for row in paginated_entity_rows
+            }
+            account_id_to_entity_id = {
+                str(row["source_id"]): str(row["id"]) for row in paginated_entity_rows
+            }
+
+            connection_rows = Connection.objects.filter(
+                Q(action_by=user_entity, involved_user_id__in=account_id_to_entity_id.values())
+                | Q(action_by_id__in=account_id_to_entity_id.values(), involved_user=user_entity),
+                ~Q(action_by=F("involved_user")),
+                action_by_id__in=Subquery(active_verified_user_entity_ids_qs()),
+                involved_user_id__in=Subquery(active_verified_user_entity_ids_qs()),
+            ).values("connection_id", "status", "action_by_id", "involved_user_id")
+
+            connection_info_by_account_id = {}
+            for row in connection_rows:
+                action_by_id = str(row["action_by_id"])
+                involved_id = str(row["involved_user_id"])
+
+                counterpart_entity_id = (
+                    involved_id if action_by_id == str(user_entity.id) else action_by_id
+                )
+                counterpart_account_id = entity_id_to_account_id.get(counterpart_entity_id)
+                if not counterpart_account_id:
+                    continue
+
+                existing = connection_info_by_account_id.get(counterpart_account_id)
+                if not existing:
+                    connection_info_by_account_id[counterpart_account_id] = {
+                        "has_connection": True,
+                        "connection_accomplished": bool(row["status"]),
+                        "connection_id": row["connection_id"],
+                        "is_action_by_user": action_by_id == str(user_entity.id),
+                    }
+                elif existing["connection_accomplished"] is False and row["status"] is True:
+                    existing["connection_accomplished"] = True
+
+            for account in paginated_queryset:
+                info = connection_info_by_account_id.get(str(account.id), {})
+                account.has_connection = bool(info.get("has_connection", False))
+                account.connection_accomplished = bool(
+                    info.get("connection_accomplished", False)
+                )
+                account.connection_id = info.get("connection_id")
+                account.is_action_by_user = bool(info.get("is_action_by_user", False))
 
             serialized_result = AccountSearchSerializer(paginated_queryset, many=True)
             data = paginator.get_paginated_response(serialized_result.data)
@@ -1050,6 +1104,7 @@ class UserAccountManagement(APIView):
                 is_superuser=False,
             )
             new_user.save()
+            resolve_user_entity(new_user)
 
             record_consent_acceptance(
                 new_user,
@@ -1255,16 +1310,23 @@ class CodeVerification(APIView):
             )
 
         try:
+            user_entity = resolve_user_entity(user)
             ver = Verification.objects.filter(
-                user=user, ver_code=verification_code, is_used=False
+                user=user_entity, ver_code=verification_code, is_used=False
             ).first()
             if ver:
                 ver.is_used = True
                 ver.save()
 
-                user = ver.user
-                user.is_verified = True
-                user.save()
+                verified_account = resolve_account_from_entity(ver.user)
+                if not verified_account:
+                    return Response(
+                        {"status": False, "message": "Verification target not found"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                verified_account.is_verified = True
+                verified_account.save()
 
                 return Response(
                     {"status": True, "message": "Account has been verified"},
@@ -1291,18 +1353,23 @@ class BlockedUserList(APIView):
     def get(self, request):
         try:
             account = self.request.user
-            blocks = Block.objects.filter(blocker=account).select_related("blocked")
-            data = [
-                {
-                    "id": block.blocked.id,
-                    "username": block.blocked.username,
-                    "first_name": block.blocked.first_name,
-                    "last_name": block.blocked.last_name,
-                    "profile": block.blocked.profile,
-                    "created_at": block.created_at,
-                }
-                for block in blocks
-            ]
+            account_entity = resolve_user_entity(account)
+            blocks = Block.objects.filter(blocker=account_entity).select_related("blocked")
+            data = []
+            for block in blocks:
+                blocked_account = resolve_account_from_entity(block.blocked)
+                if not blocked_account:
+                    continue
+                data.append(
+                    {
+                        "id": blocked_account.id,
+                        "username": blocked_account.username,
+                        "first_name": blocked_account.first_name,
+                        "last_name": blocked_account.last_name,
+                        "profile": blocked_account.profile,
+                        "created_at": block.created_at,
+                    }
+                )
             return Response({"status": True, "data": data}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response(
@@ -1328,18 +1395,20 @@ class BlockedUserList(APIView):
                 )
 
             target = get_object_or_404(Account, id=target_id)
+            account_entity = resolve_user_entity(account)
+            target_entity = resolve_user_entity(target)
 
             with transaction.atomic():
-                Block.objects.get_or_create(blocker=account, blocked=target)
+                Block.objects.get_or_create(blocker=account_entity, blocked=target_entity)
 
                 Connection.objects.filter(
-                    Q(action_by=account, involved_user=target)
-                    | Q(action_by=target, involved_user=account)
+                    Q(action_by=account_entity, involved_user=target_entity)
+                    | Q(action_by=target_entity, involved_user=account_entity)
                 ).delete()
 
                 Invite.objects.filter(
-                    Q(created_by=account, target_user=target)
-                    | Q(created_by=target, target_user=account)
+                    Q(created_by=account_entity, target_user=target_entity)
+                    | Q(created_by=target_entity, target_user=account_entity)
                 ).delete()
 
             return Response(
@@ -1363,7 +1432,9 @@ class BlockedUserList(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            Block.objects.filter(blocker=account, blocked_id=target_id).delete()
+            account_entity = resolve_user_entity(account)
+            target_entity = resolve_user_entity(target_id)
+            Block.objects.filter(blocker=account_entity, blocked=target_entity).delete()
 
             return Response(
                 {"status": True, "message": "User unblocked"},
@@ -1382,6 +1453,7 @@ class ReportCreate(APIView):
     def post(self, request):
         try:
             account = self.request.user
+            account_entity = resolve_user_entity(account)
             data = request.data
 
             target_type = data.get("target_type")
@@ -1404,7 +1476,7 @@ class ReportCreate(APIView):
                 )
 
             if target_type == "user":
-                reported_user = get_object_or_404(Account, id=target_id)
+                reported_user = resolve_user_entity(get_object_or_404(Account, id=target_id))
                 target_id = None
             elif target_type == "post":
                 from newsfeed.models import Post
@@ -1425,16 +1497,28 @@ class ReportCreate(APIView):
                         {"status": False, "message": "Message not found"},
                         status=status.HTTP_404_NOT_FOUND,
                     )
-                reported_user = get_object_or_404(Account, id=message_doc["sender"])
+                sender_id = str(message_doc["sender"])
+                reported_user = (
+                    Entity.objects.filter(
+                        Q(id=sender_id)
+                        | Q(entity_id=sender_id)
+                        | Q(source_type="user.account", source_id=sender_id)
+                    ).first()
+                )
+                if not reported_user:
+                    return Response(
+                        {"status": False, "message": "Message sender not found"},
+                        status=status.HTTP_404_NOT_FOUND,
+                    )
 
-            if reported_user.id == account.id:
+            if str(reported_user.id) == str(account_entity.id):
                 return Response(
                     {"status": False, "message": "You cannot report yourself"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
             report = Report.objects.create(
-                reporter=account,
+                reporter=account_entity,
                 reported_user=reported_user,
                 target_type=target_type,
                 target_id=target_id,

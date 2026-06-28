@@ -105,7 +105,7 @@ def log_comment_action(sender, instance, created, **kwargs):
         # )
 
         log = UserEngagementLog(
-            user_id=str(instance.user.id),
+            user_id=str(instance.user.source_id),
             activity_time=now(),
             time_spent=float(0),
             activity_type="comment",
@@ -116,14 +116,20 @@ def log_comment_action(sender, instance, created, **kwargs):
 
         # bump interaction_score
 
-        if instance.user != instance.post.user:
+        if instance.user_id != instance.post.user_id:
             interaction_score_bump(
-                instance.user.id, instance.post.user.id, "COMMENT", False
+                instance.user.source_id,
+                instance.post.user.source_id,
+                "COMMENT",
+                False,
             )
 
         if instance.post.author_realm:
             follower_interaction_score_bump(
-                instance.user.id, instance.post.author_realm.realm_id, "COMMENT", False
+                instance.user.source_id,
+                instance.post.author_realm.realm_id,
+                "COMMENT",
+                False,
             )
 
         # fan-out to timelines
@@ -131,14 +137,22 @@ def log_comment_action(sender, instance, created, **kwargs):
         author_id = (
             instance.post.author_realm.id
             if instance.post.author_realm
-            else instance.post.user.id
+            else instance.post.user.source_id
         )
         current_user = instance.user
 
-        lock_key = f"chatterloop:bump_lock:{str(instance.post.post_id)}:{str(instance.user.id)}:comment"
+        lock_key = (
+            f"chatterloop:bump_lock:{str(instance.post.post_id)}:"
+            f"{str(instance.user.source_id)}:comment"
+        )
 
         if cache.add(lock_key, "active", timeout=1800):
-            connections = ConnectionHelpers(current_user)
+            from user.models import Account
+
+            account = Account.objects.filter(id=str(current_user.source_id)).first()
+            if not account:
+                return
+            connections = ConnectionHelpers(account)
             connections_list = connections.get_ranked_connections(limit=500)
 
             bulk_fanout_to_cache(
@@ -154,7 +168,7 @@ def remove_comment_log(sender, instance, **kwargs):
     # ).delete()
 
     logs = UserEngagementLog.objects.filter(
-        user_id=str(instance.user.id),
+        user_id=str(instance.user.source_id),
         activity_type="comment",
         target_type="post",
         target_id=str(instance.comment_id),
@@ -179,7 +193,7 @@ def log_reaction_action(sender, instance, created, **kwargs):
         # )
 
         log = UserEngagementLog(
-            user_id=str(instance.user.id),
+            user_id=str(instance.user.source_id),
             activity_time=now(),
             time_spent=float(0),
             activity_type="react",
@@ -196,7 +210,7 @@ def remove_reaction_log(sender, instance, **kwargs):
     # ).delete()
 
     logs = UserEngagementLog.objects.filter(
-        user_id=str(instance.user.id),
+        user_id=str(instance.user.source_id),
         activity_type="react",
         target_type="post",
         target_id=str(instance.reaction_id),
