@@ -51,12 +51,12 @@ def export_account_data(account):
             )
         ),
         "realm_memberships": list(
-            Member.objects.filter(account=account).values(
+            Member.objects.filter(actor_entity__account=account).values(
                 "realm__realm_id", "realm__name", "role", "nickname", "date_joined"
             )
         ),
         "realm_follows": list(
-            RealmFollow.objects.filter(follower=account).values(
+            RealmFollow.objects.filter(actor_entity__account=account).values(
                 "realm__realm_id", "realm__name", "created_at"
             )
         ),

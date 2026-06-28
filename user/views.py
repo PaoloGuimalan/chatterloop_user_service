@@ -40,6 +40,7 @@ from django.utils.timezone import now
 from .ext_models.mongomodels import Message
 from .services.mongohelpers import NotificationService, SessionService
 from core.models import TPAuthentication
+from entity.services import get_active_actor
 from .utils.bcrypt_tools import hash_password
 from .utils.generators import generate_unique_username
 from .utils.external_requests import emailer
@@ -215,19 +216,29 @@ class UserAuthentication(APIView):
             else:
                 query_filter = Q(slug=username)
 
+            # is_admin stays user-based (management is the human's right), but
+            # is_member/is_follower reflect the ACTIVE actor so a page sees its
+            # own membership/follow state on other realms.
+            actor = get_active_actor(request)
             realm_queryset = get_object_or_404(
                 Realm.objects.annotate(
                     followers_count=Count("followers"),
                     is_admin=Exists(
                         Member.objects.filter(
-                            realm=OuterRef("pk"), account=me, role="admin"
+                            realm=OuterRef("pk"),
+                            actor_entity__account=me,
+                            role="admin",
                         )
                     ),
                     is_member=Exists(
-                        Member.objects.filter(realm=OuterRef("pk"), account=me)
+                        Member.objects.filter(
+                            realm=OuterRef("pk"), actor_entity=actor
+                        )
                     ),
                     is_follower=Exists(
-                        RealmFollow.objects.filter(realm=OuterRef("pk"), follower=me)
+                        RealmFollow.objects.filter(
+                            realm=OuterRef("pk"), actor_entity=actor
+                        )
                     ),
                 ),
                 query_filter,
@@ -1338,8 +1349,8 @@ class BlockedUserList(APIView):
                 ).delete()
 
                 Invite.objects.filter(
-                    Q(created_by=account, target_user=target)
-                    | Q(created_by=target, target_user=account)
+                    Q(created_by=account, target_entity__account=target)
+                    | Q(created_by=target, target_entity__account=account)
                 ).delete()
 
             return Response(
@@ -1443,7 +1454,11 @@ class ReportCreate(APIView):
             )
 
             return Response(
-                {"status": True, "message": "Report submitted", "data": {"id": report.id}},
+                {
+                    "status": True,
+                    "message": "Report submitted",
+                    "data": {"id": report.id},
+                },
                 status=status.HTTP_201_CREATED,
             )
         except Exception as e:

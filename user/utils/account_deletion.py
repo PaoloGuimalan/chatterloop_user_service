@@ -38,9 +38,9 @@ def delete_account(account):
         # (cascades to Attachment/MapView).
         Entry.objects.filter(account=account).delete()
 
-        Member.objects.filter(account=account).delete()
-        RealmFollow.objects.filter(follower=account).delete()
-        Invite.objects.filter(target_user=account).delete()
+        Member.objects.filter(actor_entity__account=account).delete()
+        RealmFollow.objects.filter(actor_entity__account=account).delete()
+        Invite.objects.filter(target_entity__account=account).delete()
         Invite.objects.filter(created_by=account).delete()
 
         Connection.objects.filter(action_by=account).delete()

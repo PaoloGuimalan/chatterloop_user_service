@@ -21,6 +21,30 @@ from django.core.cache import cache
 import uuid
 
 
+def acting_human(instance):
+    """The human Account behind an interaction.
+
+    When a user acts as a realm, ``acted_by_user`` holds the operator; for plain
+    user actions it equals the actor. Falls back to the legacy ``user`` FK so
+    this keeps working before the deploy-last migration drops that column.
+    """
+    return getattr(instance, "acted_by_user", None) or getattr(instance, "user", None)
+
+
+def post_author_human(post):
+    """The human Account credited as a post's author (operator for realm posts)."""
+    return getattr(post, "acted_by_user", None) or getattr(post, "user", None)
+
+
+def post_actor_realm(post):
+    """The realm a post belongs to when its author is a realm (via actor_entity,
+    which replaced the dropped author_realm FK); None for user posts."""
+    entity = getattr(post, "actor_entity", None)
+    if entity is not None and entity.entity_type == "realm":
+        return entity.realm
+    return None
+
+
 @receiver(post_save, sender=Emoji)
 def create_post_preview_counts(sender, instance, created, **kwargs):
     if created:
@@ -104,8 +128,11 @@ def log_comment_action(sender, instance, created, **kwargs):
         #     reference_id=instance.comment_id,
         # )
 
+        commenter = acting_human(instance)
+        post_author = post_author_human(instance.post)
+
         log = UserEngagementLog(
-            user_id=str(instance.user.id),
+            user_id=str(commenter.id),
             activity_time=now(),
             time_spent=float(0),
             activity_type="comment",
@@ -116,26 +143,23 @@ def log_comment_action(sender, instance, created, **kwargs):
 
         # bump interaction_score
 
-        if instance.user != instance.post.user:
+        if commenter != post_author:
             interaction_score_bump(
-                instance.user.id, instance.post.user.id, "COMMENT", False
+                commenter.id, post_author.id, "COMMENT", False
             )
 
-        if instance.post.author_realm:
+        post_realm = post_actor_realm(instance.post)
+        if post_realm:
             follower_interaction_score_bump(
-                instance.user.id, instance.post.author_realm.realm_id, "COMMENT", False
+                commenter.id, post_realm.realm_id, "COMMENT", False
             )
 
-        # fan-out to timelines
+        # fan-out to timelines. author_id is the post's actor *entity* id so each
+        # identity (user or realm) keeps its own personalized feed.
+        author_id = instance.post.actor_entity_id
+        current_user = commenter
 
-        author_id = (
-            instance.post.author_realm.id
-            if instance.post.author_realm
-            else instance.post.user.id
-        )
-        current_user = instance.user
-
-        lock_key = f"chatterloop:bump_lock:{str(instance.post.post_id)}:{str(instance.user.id)}:comment"
+        lock_key = f"chatterloop:bump_lock:{str(instance.post.post_id)}:{str(commenter.id)}:comment"
 
         if cache.add(lock_key, "active", timeout=1800):
             connections = ConnectionHelpers(current_user)
@@ -154,7 +178,7 @@ def remove_comment_log(sender, instance, **kwargs):
     # ).delete()
 
     logs = UserEngagementLog.objects.filter(
-        user_id=str(instance.user.id),
+        user_id=str(acting_human(instance).id),
         activity_type="comment",
         target_type="post",
         target_id=str(instance.comment_id),
@@ -179,7 +203,7 @@ def log_reaction_action(sender, instance, created, **kwargs):
         # )
 
         log = UserEngagementLog(
-            user_id=str(instance.user.id),
+            user_id=str(acting_human(instance).id),
             activity_time=now(),
             time_spent=float(0),
             activity_type="react",
@@ -196,7 +220,7 @@ def remove_reaction_log(sender, instance, **kwargs):
     # ).delete()
 
     logs = UserEngagementLog.objects.filter(
-        user_id=str(instance.user.id),
+        user_id=str(acting_human(instance).id),
         activity_type="react",
         target_type="post",
         target_id=str(instance.reaction_id),

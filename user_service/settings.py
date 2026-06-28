@@ -74,6 +74,11 @@ REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = os.getenv("REDIS_PORT")
 REDIS_USERNAME = os.getenv("REDIS_USERNAME")
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
+# Local-dev override: set REDIS_URL (e.g. redis://localhost:6379/0, no auth).
+# Falls back to the credentialed cloud URL.
+REDIS_URL = os.getenv("REDIS_URL") or (
+    f"redis://{REDIS_USERNAME}:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
+)
 
 MONGODB_CLUSTER_USER = os.getenv("MONGODB_CLUSTER_USER")
 MONGODB_CLUSTER_PASS = os.getenv("MONGODB_CLUSTER_PASS")
@@ -104,7 +109,7 @@ CSRF_TRUSTED_ORIGINS = ["https://*.chatterloop.app", "https://*.neonsystems.net"
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": f"redis://{REDIS_USERNAME}:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0",  # Change if needed
+        "LOCATION": REDIS_URL,  # Change if needed
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
         },
@@ -133,6 +138,7 @@ INSTALLED_APPS = [
     # Added apps
     "user",
     "community",
+    "entity",
     "newsfeed",
     "core",
     "diary",
@@ -154,12 +160,8 @@ MIDDLEWARE = [
     "silk.middleware.SilkyMiddleware",
 ]
 
-CELERY_BROKER_URL = (
-    f"redis://{REDIS_USERNAME}:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
-)
-CELERY_RESULT_BACKEND = (
-    f"redis://{REDIS_USERNAME}:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
-)
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_BROKER_POOL_LIMIT = 4
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_WORKER_MAX_TASKS_PER_CHILD = 1
@@ -187,6 +189,7 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     "action",
     "x-nonce",
     "device-token",
+    "x-acting-as",
 ]
 
 ROOT_URLCONF = "user_service.urls"

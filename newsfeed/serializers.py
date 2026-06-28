@@ -15,6 +15,7 @@ from .models import (
 )
 from user.serializers import AccountPreviewSerializer
 from community.models import Realm
+from entity.services import build_entity_id, parse_entity_id, resolve_entity
 
 
 class PostTagSerializer(serializers.ModelSerializer):
@@ -81,6 +82,45 @@ class RealmPreviewSerializer(serializers.ModelSerializer):
         ]
 
 
+def build_actor_payload(obj):
+    """Unified ``actor`` representation, resolved through the entity's concrete
+    account/realm link (use ``select_related('actor_entity__account',
+    'actor_entity__realm')`` to avoid N+1). Falls back to the legacy ``user``.
+    """
+    entity = getattr(obj, "actor_entity", None)
+    if entity is not None:
+        if entity.entity_type == "realm" and entity.realm_id:
+            return {
+                "entity_id": entity.entity_id,
+                "entity_type": "realm",
+                "display": RealmPreviewSerializer(entity.realm).data,
+            }
+        if entity.account_id:
+            return {
+                "entity_id": entity.entity_id,
+                "entity_type": "user",
+                "display": AccountPreviewSerializer(entity.account).data,
+            }
+
+    account = getattr(obj, "user", None)
+    if account is not None:
+        return {
+            "entity_id": build_entity_id("user", str(account.id)),
+            "entity_type": "user",
+            "display": AccountPreviewSerializer(account).data,
+        }
+    return None
+
+
+def author_realm_payload(obj):
+    """Back-compat ``author_realm``: the realm only when the actor is a realm
+    (derived from actor_entity, which replaced the dropped author_realm FK)."""
+    entity = getattr(obj, "actor_entity", None)
+    if entity is not None and entity.entity_type == "realm" and entity.realm_id:
+        return RealmPreviewSerializer(entity.realm).data
+    return None
+
+
 class PostSerializer(serializers.ModelSerializer):
     tagging = PostTagSerializer(many=True, read_only=True)
     privacy_users = PostPrivacySerializer(many=True, read_only=True)
@@ -89,7 +129,8 @@ class PostSerializer(serializers.ModelSerializer):
     preview = PreviewCountSerializer(read_only=True, many=True)
     user_reaction = serializers.CharField()
     user = AccountPreviewSerializer(read_only=True)
-    author_realm = RealmPreviewSerializer(read_only=True)
+    author_realm = serializers.SerializerMethodField()
+    actor = serializers.SerializerMethodField()
     # activity_counts = ActivityCountSerializer(read_only=True, many=True)
     score = PostScoreSerializer(read_only=True)
     is_saved = serializers.BooleanField(read_only=True)
@@ -97,6 +138,12 @@ class PostSerializer(serializers.ModelSerializer):
     class Meta:
         model = Post
         fields = "__all__"
+
+    def get_actor(self, obj):
+        return build_actor_payload(obj)
+
+    def get_author_realm(self, obj):
+        return author_realm_payload(obj)
 
 
 class EmojiSerializer(serializers.ModelSerializer):
@@ -107,19 +154,30 @@ class EmojiSerializer(serializers.ModelSerializer):
 
 class CommentSerializer(serializers.ModelSerializer):
     user = AccountPreviewSerializer(read_only=True)
+    actor = serializers.SerializerMethodField()
 
     class Meta:
         model = Comment
         fields = "__all__"
 
+    def get_actor(self, obj):
+        return build_actor_payload(obj)
+
 
 class PostBasicSerializer(serializers.ModelSerializer):
     user = AccountPreviewSerializer(read_only=True)
-    author_realm = RealmPreviewSerializer(read_only=True)
+    author_realm = serializers.SerializerMethodField()
+    actor = serializers.SerializerMethodField()
+
+    def get_author_realm(self, obj):
+        return author_realm_payload(obj)
 
     class Meta:
         model = Post
         fields = "__all__"
+
+    def get_actor(self, obj):
+        return build_actor_payload(obj)
 
 
 class PostSaveSerializer(serializers.ModelSerializer):

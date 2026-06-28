@@ -58,6 +58,8 @@ import uuid
 from community.models import RealmFollow, Realm
 from django.shortcuts import get_object_or_404
 from user.utils.blocking import get_blocked_account_ids, is_blocked
+from entity.mixins import ActingAsMixin
+from entity.services import entity_for_account, get_active_actor
 
 
 class Pagination(PageNumberPagination):
@@ -74,10 +76,17 @@ class NewsfeedView(APIView):
         try:
             page_size = request.query_params.get("page_size", 10)
 
+            # The feed is read from the ACTIVE identity's bucket, so switching to
+            # a page shows that page's own personalized feed.
+            actor = get_active_actor(request)
+            feed_bucket = (
+                actor.entity_id if actor else "entity:user:" + str(user.id)
+            )
+
             connections = ConnectionHelpers(user)
             connections_list = connections.get_connections()
             followed_realm_ids = list(
-                RealmFollow.objects.filter(follower=user).values_list(
+                RealmFollow.objects.filter(actor_entity__account=user).values_list(
                     "realm_id", flat=True
                 )
             )
@@ -89,7 +98,7 @@ class NewsfeedView(APIView):
             save_viewcache_engagements(user, viewcache)
 
             if current_mode == "friends":
-                candidate_post_ids = fetch_friends_posts(user.id, page_size)
+                candidate_post_ids = fetch_friends_posts(feed_bucket, page_size)
 
                 if not candidate_post_ids:
                     candidate_post_ids = fetch_trending_posts(
@@ -103,12 +112,12 @@ class NewsfeedView(APIView):
                 )
 
                 if not candidate_post_ids:
-                    candidate_post_ids = fetch_friends_posts(user.id, page_size)
+                    candidate_post_ids = fetch_friends_posts(feed_bucket, page_size)
                     current_mode = "friends"
                     RedisPubSubClient.update_feed_mode(user.id, current_mode)
 
             hydrated_posts = (
-                Post.objects.select_related("user", "score", "author_realm")
+                Post.objects.select_related("user", "score", "actor_entity__account", "actor_entity__realm")
                 .prefetch_related(
                     "tagging",
                     "privacy_users",
@@ -120,7 +129,7 @@ class NewsfeedView(APIView):
                     is_friend=Case(
                         When(
                             Q(user_id__in=connections_list)
-                            | Q(author_realm_id__in=followed_realm_ids),
+                            | Q(actor_entity__realm__realm_id__in=followed_realm_ids),
                             then=Value(0.8),
                         ),
                         default=Value(0),
@@ -260,14 +269,14 @@ class NewsfeedProfileView(APIView):
 
             profile_filter = Q(
                 Q(user__username=username) | Q(tagging__user__username=username)
-            ) & Q(author_realm=None)
+            ) & Q(actor_entity__realm__isnull=True)
             if realm_match:
-                profile_filter = Q(author_realm=realm_match)
+                profile_filter = Q(actor_entity__realm=realm_match)
             elif archive:
-                profile_filter = Q(user=user) & Q(author_realm=None)
+                profile_filter = Q(user=user) & Q(actor_entity__realm__isnull=True)
 
             queryset = (
-                Post.objects.select_related("user", "score", "author_realm")
+                Post.objects.select_related("user", "score", "actor_entity__account", "actor_entity__realm")
                 .prefetch_related(
                     "tagging",
                     "privacy_users",
@@ -324,7 +333,7 @@ class NewsfeedPostPreviewView(APIView):
             ).values("emoji_id")[:1]
 
             queryset = (
-                Post.objects.select_related("user", "score", "author_realm")
+                Post.objects.select_related("user", "score", "actor_entity__account", "actor_entity__realm")
                 .prefetch_related(
                     "tagging",
                     "privacy_users",
@@ -386,12 +395,13 @@ class EmojisView(APIView):
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class PostReactionsView(APIView):
+class PostReactionsView(ActingAsMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
         try:
             user = self.request.user
+            actor = request.active_actor
             post_id = request.data.get("post_id")
             emoji_id = request.data.get("emoji_id")
 
@@ -405,6 +415,8 @@ class PostReactionsView(APIView):
                     reaction_id=new_reaction_id,
                     post=post,
                     user=user,
+                    actor_entity=actor,
+                    acted_by_user=user,
                     emoji=emoji,
                 )
 
@@ -418,9 +430,14 @@ class PostReactionsView(APIView):
 
                 update_ranking_score(post_id, "react", False)
                 interaction_score_bump(user.id, post.user.id, "LIKE", False)
-                if post.author_realm:
+                post_realm = (
+                    post.actor_entity.realm
+                    if post.actor_entity and post.actor_entity.entity_type == "realm"
+                    else None
+                )
+                if post_realm:
                     follower_interaction_score_bump(
-                        user.id, post.author_realm.realm_id, "LIKE", False
+                        user.id, post_realm.realm_id, "LIKE", False
                     )
 
                 if post.user.id != user.id:
@@ -466,6 +483,7 @@ class PostReactionsView(APIView):
     def put(self, request, *args, **kwargs):
         try:
             user = self.request.user
+            actor = request.active_actor
             post_id = request.data.get("post_id")
             emoji_id = request.data.get("emoji_id")
 
@@ -473,7 +491,7 @@ class PostReactionsView(APIView):
             new_emoji = Emoji.objects.get(emoji_id=emoji_id)
 
             with transaction.atomic():
-                reaction = Reaction.objects.get(post_id=post, user=user)
+                reaction = Reaction.objects.get(post_id=post, actor_entity=actor)
                 old_emoji = reaction.emoji
                 reaction.emoji = new_emoji
                 reaction.save()
@@ -521,11 +539,12 @@ class PostReactionsView(APIView):
     def delete(self, request, *args, **kwargs):
         try:
             user = self.request.user
+            actor = request.active_actor
             post_id = request.data.get("post_id")
             post = Post.objects.get(post_id=post_id)
 
             with transaction.atomic():
-                reaction = Reaction.objects.get(post=post, user=user)
+                reaction = Reaction.objects.get(post=post, actor_entity=actor)
 
                 service = NotificationService()
                 service.delete_notification_by_reference_id(
@@ -538,9 +557,14 @@ class PostReactionsView(APIView):
 
                 update_ranking_score(post_id, "react", True)
                 interaction_score_bump(user.id, post.user.id, "LIKE", True)
-                if post.author_realm:
+                post_realm = (
+                    post.actor_entity.realm
+                    if post.actor_entity and post.actor_entity.entity_type == "realm"
+                    else None
+                )
+                if post_realm:
                     follower_interaction_score_bump(
-                        user.id, post.author_realm.realm_id, "LIKE", True
+                        user.id, post_realm.realm_id, "LIKE", True
                     )
 
                 emoji = reaction.emoji
@@ -591,7 +615,7 @@ class ActivityCountView(APIView):
             return Response({"error": str(e)}, status=500)
 
 
-class CommentsView(APIView):
+class CommentsView(ActingAsMixin, APIView):
     # permission_classes = [IsAuthenticated]
     pagination_class = Pagination
 
@@ -654,6 +678,7 @@ class CommentsView(APIView):
     def post(self, request):
         try:
             user = self.request.user
+            actor = self.request.active_actor
             post_id = request.data.get("post_id")
             parent_id = request.data.get("parent_id")
             new_comment = request.data.get("new_comment")
@@ -676,6 +701,8 @@ class CommentsView(APIView):
                         text=new_comment,
                         attachment=new_attachment,
                         user=user,
+                        actor_entity=actor,
+                        acted_by_user=user,
                     )
 
                     # activity_count_obj = ActivityCount.objects.get(
@@ -736,6 +763,8 @@ class CommentsView(APIView):
                         text=new_comment,
                         attachment=new_attachment,
                         user=user,
+                        actor_entity=actor,
+                        acted_by_user=user,
                     )
 
                     # activity_count_obj = ActivityCount.objects.get(
@@ -851,7 +880,9 @@ class PostSaveView(APIView):
             post_id = request.data.get("post_id")
 
             current_post = get_object_or_404(Post, post_id=post_id)
-            new_save_query = PostSave.objects.create(post=current_post, user=user)
+            new_save_query = PostSave.objects.create(
+                post=current_post, user=user, actor_entity=entity_for_account(user)
+            )
 
             return Response(
                 {

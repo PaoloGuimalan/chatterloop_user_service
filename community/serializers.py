@@ -4,7 +4,9 @@ from user.serializers import AccountPreviewSerializer
 
 
 class RealmMemberSerializer(serializers.ModelSerializer):
-    account = AccountPreviewSerializer()
+    # The member is the actor_entity; resolve its linked account for display
+    # (kept under the `account` key for frontend back-compat).
+    account = AccountPreviewSerializer(source="actor_entity.account", read_only=True)
     added_by = AccountPreviewSerializer()
 
     class Meta:
@@ -13,7 +15,9 @@ class RealmMemberSerializer(serializers.ModelSerializer):
 
 
 class RealmFollowSerializer(serializers.ModelSerializer):
-    follower = AccountPreviewSerializer()
+    follower = AccountPreviewSerializer(
+        source="actor_entity.account", read_only=True
+    )
 
     class Meta:
         model = RealmFollow
@@ -29,10 +33,11 @@ class InviteSerializer(serializers.ModelSerializer):
     created_by_id = serializers.SerializerMethodField()
 
     def get_target_user_id(self, obj):
-        return obj.target_user.id if obj.target_user else None
+        # Back-compat: the invited user's account id (via the target entity).
+        return obj.target_entity.account_id if obj.target_entity else None
 
     def get_accepted_by_user_id(self, obj):
-        return obj.accepted_by_user.id if obj.accepted_by_user else None
+        return obj.accepted_by_entity.account_id if obj.accepted_by_entity else None
 
     def get_created_by_id(self, obj):
         return obj.created_by.id if obj.created_by else None
@@ -48,9 +53,9 @@ class InviteSerializer(serializers.ModelSerializer):
             "kind",
             "status",
             "target_email",
-            "target_user",
+            "target_entity",
             "target_user_id",
-            "accepted_by_user",
+            "accepted_by_entity",
             "accepted_by_user_id",
             "invite_token",
             "created_by",

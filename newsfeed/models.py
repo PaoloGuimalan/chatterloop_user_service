@@ -5,6 +5,7 @@ from django.db.models import Q
 from django.utils.timezone import now
 from user.models import Account
 from community.models import Realm
+from entity.models import Entity
 
 from cassandra.cqlengine import columns
 from django_cassandra_engine.models import DjangoCassandraModel
@@ -37,12 +38,24 @@ class Post(models.Model):
         null=False,
         on_delete=models.DO_NOTHING,
     )
-    author_realm = models.ForeignKey(
-        Realm,
+    # Unified actor (the post's author: a user or a realm). When it's a realm,
+    # actor_entity IS the "author realm" — no separate author_realm needed.
+    actor_entity = models.ForeignKey(
+        Entity,
         null=True,
         blank=True,
         on_delete=models.DO_NOTHING,
+        db_index=True,
         related_name="posts",
+    )
+    # The human who performed the action (set when acting as a realm) — for
+    # moderation/audit and human<->human engagement scoring.
+    acted_by_user = models.ForeignKey(
+        Account,
+        null=True,
+        blank=True,
+        on_delete=models.DO_NOTHING,
+        related_name="posts_acted_by",
     )
     is_shared = models.BooleanField(default=False)
     file_type = models.CharField(max_length=50)
@@ -139,10 +152,26 @@ class Reaction(models.Model):
     reaction_id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
     post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="reactions")
     user = models.ForeignKey(Account, on_delete=models.DO_NOTHING)
+    actor_entity = models.ForeignKey(
+        Entity,
+        null=True,
+        blank=True,
+        on_delete=models.DO_NOTHING,
+        db_index=True,
+        related_name="reactions",
+    )
+    acted_by_user = models.ForeignKey(
+        Account,
+        null=True,
+        blank=True,
+        on_delete=models.DO_NOTHING,
+        related_name="reactions_acted_by",
+    )
     emoji = models.ForeignKey(Emoji, on_delete=models.DO_NOTHING, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        # The deploy-last migration swaps this to ("post", "actor_entity").
         unique_together = ("post", "user")
 
 
@@ -155,6 +184,21 @@ class Comment(models.Model):
     text = models.TextField(blank=True, null=True)
     attachment = models.TextField(null=True, blank=True)
     user = models.ForeignKey(Account, on_delete=models.DO_NOTHING)
+    actor_entity = models.ForeignKey(
+        Entity,
+        null=True,
+        blank=True,
+        on_delete=models.DO_NOTHING,
+        db_index=True,
+        related_name="comments",
+    )
+    acted_by_user = models.ForeignKey(
+        Account,
+        null=True,
+        blank=True,
+        on_delete=models.DO_NOTHING,
+        related_name="comments_acted_by",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(blank=True, null=True)
     deleted_by = models.ForeignKey(
@@ -250,9 +294,21 @@ class PostSave(models.Model):
         null=False,
         on_delete=models.DO_NOTHING,
     )
+    # A save is intrinsically performed by a human, so actor_entity is always a
+    # user entity (the identity switcher never targets saves). Repointed for
+    # schema uniformity only.
+    actor_entity = models.ForeignKey(
+        Entity,
+        null=True,
+        blank=True,
+        on_delete=models.DO_NOTHING,
+        db_index=True,
+        related_name="saved_posts",
+    )
     saved_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:
+        # The deploy-last migration swaps this to ("post", "actor_entity").
         unique_together = ("post", "user")
 
 

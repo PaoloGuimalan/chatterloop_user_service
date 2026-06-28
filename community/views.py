@@ -6,6 +6,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from .models import RealmFollow, Realm, Member, Invite, generate_invite_token
+from entity.services import entity_for_account
+from entity.mixins import ActingAsMixin
 from .serializers import (
     RealmSerializer,
     RealmMemberSerializer,
@@ -43,14 +45,18 @@ class TopRealms(APIView):
                 members=Count("member", distinct=True),
                 is_admin=Exists(
                     Member.objects.filter(
-                        realm=OuterRef("pk"), account=user, role="admin"
+                        realm=OuterRef("pk"), actor_entity=entity_for_account(user), role="admin"
                     )
                 ),
                 is_member=Exists(
-                    Member.objects.filter(realm=OuterRef("pk"), account=user)
+                    Member.objects.filter(
+                        realm=OuterRef("pk"), actor_entity=entity_for_account(user)
+                    )
                 ),
                 is_follower=Exists(
-                    RealmFollow.objects.filter(realm=OuterRef("pk"), follower=user)
+                    RealmFollow.objects.filter(
+                        realm=OuterRef("pk"), actor_entity=entity_for_account(user)
+                    )
                 ),
             ).filter(type=type, is_private=False)
 
@@ -88,14 +94,18 @@ class MyRealms(APIView):
                 members=Count("member", distinct=True),
                 is_admin=Exists(
                     Member.objects.filter(
-                        realm=OuterRef("pk"), account=user, role="admin"
+                        realm=OuterRef("pk"), actor_entity=entity_for_account(user), role="admin"
                     )
                 ),
                 is_member=Exists(
-                    Member.objects.filter(realm=OuterRef("pk"), account=user)
+                    Member.objects.filter(
+                        realm=OuterRef("pk"), actor_entity=entity_for_account(user)
+                    )
                 ),
                 is_follower=Exists(
-                    RealmFollow.objects.filter(realm=OuterRef("pk"), follower=user)
+                    RealmFollow.objects.filter(
+                        realm=OuterRef("pk"), actor_entity=entity_for_account(user)
+                    )
                 ),
             ).filter(is_member=True, type=type)
 
@@ -124,7 +134,7 @@ class MyRealms(APIView):
 
             is_admin = Exists(
                 Member.objects.filter(
-                    realm__realm_id=realm_id, account=user, role="admin"
+                    realm__realm_id=realm_id, actor_entity=entity_for_account(user), role="admin"
                 )
             )
 
@@ -152,12 +162,13 @@ class MyRealms(APIView):
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class FollowRealmView(APIView):
+class FollowRealmView(ActingAsMixin, APIView):
     permission_classes = [IsAuthenticated]
     pagination_class = Pagination
 
     def get(self, request):
         user = self.request.user
+        actor = request.active_actor
 
         try:
             search = request.query_params.get("search", None)
@@ -169,14 +180,20 @@ class FollowRealmView(APIView):
                     members=Count("member", distinct=True),
                     is_admin=Exists(
                         Member.objects.filter(
-                            realm=OuterRef("pk"), account=user, role="admin"
+                            realm=OuterRef("pk"), actor_entity=entity_for_account(user), role="admin"
                         )
                     ),
+                    # Membership/follow reflect the ACTIVE actor (the page when
+                    # acting as a page), so a page sees the realms it follows.
                     is_member=Exists(
-                        Member.objects.filter(realm=OuterRef("pk"), account=user)
+                        Member.objects.filter(
+                            realm=OuterRef("pk"), actor_entity=actor
+                        )
                     ),
                     is_follower=Exists(
-                        RealmFollow.objects.filter(realm=OuterRef("pk"), follower=user)
+                        RealmFollow.objects.filter(
+                            realm=OuterRef("pk"), actor_entity=actor
+                        )
                     ),
                 )
                 .filter(is_follower=True, type=type)
@@ -202,13 +219,25 @@ class FollowRealmView(APIView):
 
     def post(self, request):
         user = self.request.user
+        actor = request.active_actor
 
         try:
             realm_id = request.data.get("realm_id")
 
             realm = get_object_or_404(Realm, id=realm_id)
+
+            # A realm cannot follow itself.
+            if actor.entity_type == "realm" and str(actor.source_id) == str(
+                realm.realm_id
+            ):
+                return Response(
+                    {"status": False, "message": "A page cannot follow itself"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Follow AS the active actor (the page when acting as a page).
             follow_realm_queryset = RealmFollow.objects.create(
-                follower=user, realm=realm
+                realm=realm, actor_entity=actor
             )
 
             if follow_realm_queryset is None:
@@ -226,13 +255,14 @@ class FollowRealmView(APIView):
 
     def delete(self, request):
         user = self.request.user
+        actor = request.active_actor
 
         try:
             realm_id = request.data.get("realm_id")
 
             realm = get_object_or_404(Realm, id=realm_id)
             unfollow_realm_queryset = RealmFollow.objects.get(
-                follower=user, realm=realm
+                actor_entity=actor, realm=realm
             )
 
             if unfollow_realm_queryset is None:
@@ -262,7 +292,11 @@ class RealmMembersView(APIView):
             realm_id = request.query_params.get("realm_id")
             search = request.query_params.get("search", None)
 
-            is_member = Exists(Member.objects.filter(realm__id=realm_id, account=user))
+            is_member = Exists(
+                Member.objects.filter(
+                    realm__id=realm_id, actor_entity=entity_for_account(user)
+                )
+            )
 
             if not is_member:
                 return Response(
@@ -274,7 +308,7 @@ class RealmMembersView(APIView):
                 )
 
             realm_members_query_set = (
-                Member.objects.prefetch_related("account", "added_by")
+                Member.objects.prefetch_related("actor_entity__account", "added_by")
                 .filter(realm__id=realm_id)
                 .order_by("-date_joined")
             )
@@ -282,14 +316,14 @@ class RealmMembersView(APIView):
             if search:
                 if search.startswith("@"):
                     realm_members_query_set = realm_members_query_set.filter(
-                        Q(account__username__icontains=search)
+                        Q(actor_entity__account__username__icontains=search)
                     )
                 else:
                     realm_members_query_set = realm_members_query_set.filter(
                         Q(
-                            Q(account__first_name__icontains=search)
-                            | Q(account__middle_name__icontains=search)
-                            | Q(account__last_name__icontains=search)
+                            Q(actor_entity__account__first_name__icontains=search)
+                            | Q(actor_entity__account__middle_name__icontains=search)
+                            | Q(actor_entity__account__last_name__icontains=search)
                         )
                     )
 
@@ -318,7 +352,7 @@ class RealmFollowersView(APIView):
             search = request.query_params.get("search", None)
 
             realm_followers_query_set = (
-                RealmFollow.objects.prefetch_related("follower")
+                RealmFollow.objects.prefetch_related("actor_entity__account")
                 .filter(realm__id=str(realm_id))
                 .order_by("-created_at")
             )
@@ -326,14 +360,14 @@ class RealmFollowersView(APIView):
             if search:
                 if search.startswith("@"):
                     realm_followers_query_set = realm_followers_query_set.filter(
-                        Q(follower__username__icontains=search)
+                        Q(actor_entity__account__username__icontains=search)
                     )
                 else:
                     realm_followers_query_set = realm_followers_query_set.filter(
                         Q(
-                            Q(follower__first_name__icontains=search)
-                            | Q(follower__middle_name__icontains=search)
-                            | Q(follower__last_name__icontains=search)
+                            Q(actor_entity__account__first_name__icontains=search)
+                            | Q(actor_entity__account__middle_name__icontains=search)
+                            | Q(actor_entity__account__last_name__icontains=search)
                         )
                     )
 
@@ -394,7 +428,7 @@ class InviteView(APIView):
 
     def _notify_members_changed(self, realm):
         recipient_ids = set(
-            Member.objects.filter(realm=realm).values_list("account__id", flat=True)
+            Member.objects.filter(realm=realm).values_list("actor_entity__source_id", flat=True)
         )
         if realm.created_by_id:
             recipient_ids.add(realm.created_by_id)
@@ -415,12 +449,14 @@ class InviteView(APIView):
         # target_user (the requester) is set and rightly takes precedence over
         # the admin acting on it. Without this, accepted invitees never become
         # members and are forced to re-request access on every rejoin.
-        account = invite.target_user or actor
-        if not account:
+        member_entity = invite.target_entity or (
+            entity_for_account(actor) if actor else None
+        )
+        if not member_entity:
             return
 
         Member.objects.get_or_create(
-            account=account,
+            actor_entity=member_entity,
             realm=invite.realm,
             defaults={
                 "added_by": actor,
@@ -449,7 +485,7 @@ class InviteView(APIView):
             realm = get_object_or_404(Realm, realm_id=realm_id)
             normalized_kind = "request" if kind == "request" else "invite"
             is_admin = Member.objects.filter(
-                realm=realm, account=user, role="admin"
+                realm=realm, actor_entity=entity_for_account(user), role="admin"
             ).exists()
 
             if normalized_kind != "request" and not is_admin:
@@ -473,7 +509,9 @@ class InviteView(APIView):
 
             if existing_pending_invite:
                 existing_pending_invite.kind = normalized_kind
-                existing_pending_invite.target_user = target_user
+                existing_pending_invite.target_entity = (
+                    entity_for_account(target_user) if target_user else None
+                )
                 existing_pending_invite.created_by = user
                 existing_pending_invite.created_at = now()
                 existing_pending_invite.resolved_at = None
@@ -487,7 +525,9 @@ class InviteView(APIView):
                     kind=normalized_kind,
                     status="pending",
                     target_email=normalized_email,
-                    target_user=target_user,
+                    target_entity=(
+                        entity_for_account(target_user) if target_user else None
+                    ),
                     created_by=user,
                 )
 
@@ -568,7 +608,9 @@ class InviteView(APIView):
             if realm_id:
                 realm = get_object_or_404(Realm, realm_id=realm_id)
                 is_admin = Member.objects.filter(
-                    realm=realm, account=request.user, role="admin"
+                    realm=realm,
+                    actor_entity=entity_for_account(request.user),
+                    role="admin",
                 ).exists()
 
                 if not is_admin and realm.created_by != request.user:
@@ -640,7 +682,7 @@ class InviteView(APIView):
 
             is_realm_admin = (
                 Member.objects.filter(
-                    realm=invite.realm, account=user, role="admin"
+                    realm=invite.realm, actor_entity=entity_for_account(user), role="admin"
                 ).exists()
                 or invite.realm.created_by == user
             )
@@ -666,7 +708,10 @@ class InviteView(APIView):
                             status=status.HTTP_401_UNAUTHORIZED,
                         )
 
-                    if invite.target_user and invite.target_user != user:
+                    if (
+                        invite.target_entity
+                        and str(invite.target_entity.account_id) != str(user.id)
+                    ):
                         return Response(
                             {
                                 "status": False,
@@ -688,7 +733,7 @@ class InviteView(APIView):
 
             if normalized_status == "revoked":
                 is_admin = Member.objects.filter(
-                    realm=invite.realm, account=user, role="admin"
+                    realm=invite.realm, actor_entity=entity_for_account(user), role="admin"
                 ).exists()
 
                 if not is_admin and invite.created_by != user:
@@ -704,7 +749,7 @@ class InviteView(APIView):
                 invite.status = normalized_status
                 invite.resolved_at = now()
                 if normalized_status == "accepted":
-                    invite.accepted_by_user = user
+                    invite.accepted_by_entity = entity_for_account(user)
                 invite.save()
 
                 if normalized_status == "accepted":
@@ -742,7 +787,7 @@ class InviteView(APIView):
             follow_id = request.data.get("follow_id")
 
             is_admin = Exists(
-                Member.objects.filter(realm__id=realm_id, account=user, role="admin")
+                Member.objects.filter(realm__id=realm_id, actor_entity=entity_for_account(user), role="admin")
             )
 
             if not is_admin:

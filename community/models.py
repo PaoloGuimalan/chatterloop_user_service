@@ -3,6 +3,7 @@ import random
 import secrets
 from django.db import models
 from user.models import Account
+from entity.models import Entity
 from django.utils.timezone import now
 
 
@@ -76,11 +77,14 @@ class Member(models.Model):
     member_id = models.CharField(
         max_length=150, default=uuid.uuid4, unique=True, blank=True, primary_key=True
     )
-    account = models.ForeignKey(
-        Account,
+    # The member IS an entity (user today; realms can be members of realms).
+    # The entity table holds the connection to the underlying account.
+    actor_entity = models.ForeignKey(
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
-        related_name="user_as_member",
+        db_index=True,
+        related_name="memberships",
     )
     nickname = models.CharField(max_length=150, null=True, blank=True)
     realm = models.ForeignKey(
@@ -88,6 +92,7 @@ class Member(models.Model):
         null=False,
         on_delete=models.DO_NOTHING,
     )
+    # added_by stays an account: it audits which human performed the add.
     added_by = models.ForeignKey(
         Account,
         null=False,
@@ -98,17 +103,20 @@ class Member(models.Model):
     date_joined = models.DateTimeField(null=True)
 
     class Meta:
-        unique_together = ("account", "realm")
+        unique_together = ("actor_entity", "realm")
 
 
 class RealmFollow(models.Model):
     follow_id = models.CharField(
         max_length=150, default=uuid.uuid4, unique=True, primary_key=True
     )
-    follower = models.ForeignKey(
-        Account,
+    # The follower IS an entity (a user, or a realm following another realm).
+    # The entity table holds the connection to the underlying account.
+    actor_entity = models.ForeignKey(
+        Entity,
         null=False,
-        on_delete=models.CASCADE,
+        on_delete=models.DO_NOTHING,
+        db_index=True,
         related_name="realm_follows",
     )
     realm = models.ForeignKey(
@@ -123,7 +131,7 @@ class RealmFollow(models.Model):
     last_interaction_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = ("follower", "realm")
+        unique_together = ("actor_entity", "realm")
 
 
 class Invite(models.Model):
@@ -156,15 +164,16 @@ class Invite(models.Model):
         max_length=150, choices=INVITE_STATUS_CHOICES, default="pending"
     )
     target_email = models.EmailField(db_index=True)
-    target_user = models.ForeignKey(
-        Account,
+    # Who is invited / who accepted, as entities (a user, or a realm).
+    target_entity = models.ForeignKey(
+        Entity,
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
         related_name="realm_invites_targeted",
     )
-    accepted_by_user = models.ForeignKey(
-        Account,
+    accepted_by_entity = models.ForeignKey(
+        Entity,
         null=True,
         blank=True,
         on_delete=models.SET_NULL,

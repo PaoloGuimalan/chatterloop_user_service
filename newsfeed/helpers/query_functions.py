@@ -120,7 +120,7 @@ def save_viewcache_engagements(user, viewcache):
 
             if post_ids_to_clean:
                 rows_to_delete = NewsfeedIndex.objects.filter(
-                    bucket=str(user_id), post_id__in=post_ids_to_clean
+                    bucket="entity:user:" + str(user_id), post_id__in=post_ids_to_clean
                 )
                 for row in rows_to_delete:
                     row.batch(b).delete()
@@ -132,10 +132,13 @@ def save_viewcache_engagements(user, viewcache):
 
 
 def bulk_fanout_to_cache(connections_list, post_data):
+    # bucket and author_id are entity ids so each identity (user/realm) keeps a
+    # separate personalized feed. connections are users -> user entity buckets;
+    # author_id is the post's actor entity id (passed in already entity-shaped).
     with BatchQuery() as b:
         for follower_id in connections_list:
             NewsfeedIndex.batch(b).create(
-                bucket=str(follower_id),
+                bucket="entity:user:" + str(follower_id),
                 post_id=str(post_data["id"]),
                 created_at=now(),
                 author_id=str(post_data["author_id"]),
@@ -212,7 +215,7 @@ def follower_interaction_score_bump(actor_id, receiver_id, action, is_decrease):
 
     with transaction.atomic():
         follower_log = RealmFollow.objects.select_for_update().filter(
-            follower_id=actor_id, realm_id=receiver_id
+            actor_entity__account_id=actor_id, realm_id=receiver_id
         )
 
         follower_log.update(
@@ -227,7 +230,9 @@ def follower_interaction_score_bump(actor_id, receiver_id, action, is_decrease):
 
 def remove_feed_on_unfriend(actor_id, author_id):
     rows = NewsfeedIndex.objects.filter(
-        bucket=str(actor_id), author_id=author_id, type="fanout"
+        bucket="entity:user:" + str(actor_id),
+        author_id="entity:user:" + str(author_id),
+        type="fanout",
     )
 
     for row in rows:
@@ -299,10 +304,10 @@ def backfill_new_friend_feed(viewer_id, new_friend_id):
 
         if should_insert:
             NewsfeedIndex.batch(b).create(
-                bucket=str(viewer_id),
+                bucket="entity:user:" + str(viewer_id),
                 post_id=pid,
                 created_at=now(),
-                author_id=str(new_friend_id),
+                author_id="entity:user:" + str(new_friend_id),
             )
             inserted_count += 1
 
@@ -313,9 +318,11 @@ def backfill_new_friend_feed(viewer_id, new_friend_id):
         )
 
 
-def fetch_friends_posts(user_id, page_size=10):
+def fetch_friends_posts(feed_bucket, page_size=10):
+    # feed_bucket is the viewer's entity id (entity:user:<id> or entity:realm:<id>)
+    # so switching identity reads a different personalized feed.
     newsfeed_queryset = (
-        NewsfeedIndex.objects.filter(bucket=str(user_id))
+        NewsfeedIndex.objects.filter(bucket=str(feed_bucket))
         .limit(int(page_size))
         .values_list("post_id", flat=True)
     )
