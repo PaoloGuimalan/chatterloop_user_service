@@ -80,21 +80,21 @@ class SessionService:
             cls._instance = super(SessionService, cls).__new__(cls)
         return cls._instance
 
-    def exists(self, device_token, user_id):
+    def exists(self, device_token, entity_id):
         """Check if a session exists by its deviceToken."""
         return (
             Session._get_collection().find_one(
-                {"deviceToken": device_token, "userID": str(user_id)}
+                {"deviceToken": device_token, "entityID": str(entity_id)}
             )
             is not None
         )
 
-    def add_session(self, request, userID, device_token):
+    def add_session(self, request, entity_id, device_token):
         """Extracts all client parameters and user metadata straight from the Django request."""
         current_time = datetime.now().astimezone()
 
         # Extract values directly from the request object
-        user_id = str(userID)
+        entity_id = str(entity_id)
         session_id = str(uuid.uuid4())
         user_agent = request.META.get("HTTP_USER_AGENT", "Unknown")
 
@@ -143,7 +143,7 @@ class SessionService:
         # Build and save the document
         session = Session(
             sessionID=session_id,
-            userID=user_id,
+            entityID=entity_id,
             userAgent=user_agent,
             deviceType=device_type,
             deviceToken=device_token,

@@ -14,14 +14,14 @@ def get_current_policy_documents():
     return current
 
 
-def get_pending_consents(account):
+def get_pending_consents(entity):
     current_docs = get_current_policy_documents()
     if not current_docs:
         return []
 
     accepted = set(
         UserConsent.objects.filter(
-            user=account, document_type__in=current_docs.keys()
+            entity=entity, document_type__in=current_docs.keys()
         ).values_list("document_type", "version")
     )
 
@@ -32,7 +32,7 @@ def get_pending_consents(account):
     return pending
 
 
-def record_consent_acceptance(account, document_types, ip_address=None, user_agent=None):
+def record_consent_acceptance(entity, document_types, ip_address=None, user_agent=None):
     current_docs = get_current_policy_documents()
     created = []
     for document_type in document_types:
@@ -40,12 +40,12 @@ def record_consent_acceptance(account, document_types, ip_address=None, user_age
         if not doc:
             continue
         already_accepted = UserConsent.objects.filter(
-            user=account, document_type=document_type, version=doc.version
+            entity=entity, document_type=document_type, version=doc.version
         ).exists()
         if already_accepted:
             continue
         consent = UserConsent.objects.create(
-            user=account,
+            entity=entity,
             document_type=document_type,
             version=doc.version,
             ip_address=ip_address,

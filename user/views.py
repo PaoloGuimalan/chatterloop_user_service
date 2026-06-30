@@ -63,6 +63,7 @@ from newsfeed.helpers.query_functions import (
 from community.models import Realm, Member, RealmFollow, Invite
 from community.serializers import RealmSerializer
 import bcrypt
+import uuid
 
 jwt = JWTTools
 
@@ -284,7 +285,7 @@ class UserAuthentication(APIView):
                     session = SessionService()
 
                     if not session.exists(device_token, user.id):
-                        session.add_session(request, user.id, device_token)
+                        session.add_session(request, user.entity.id, device_token)
 
                     return Response(
                         {
@@ -292,7 +293,11 @@ class UserAuthentication(APIView):
                             "result": {
                                 "usertoken": jwt.encoder(serialized_user.data),
                                 "authtoken": jwt.encoder(
-                                    {"userID": str(user.id), "username": user.username}
+                                    {
+                                        "userID": str(user.id),
+                                        "username": user.username,
+                                        "entity": str(user.entity.id),
+                                    }
                                 ),
                             },
                         },
@@ -354,14 +359,14 @@ class ThirdPartyAuthentication(APIView):
                     email = decoded_token["email"]
                     user = Account.objects.filter(email=email)
 
+                    session = SessionService()
+
                     if len(user) > 0:
                         user = user[0]
                         serialized_user = AccountSerializer(user)
 
-                        session = SessionService()
-
-                        if not session.exists(device_token, user.id):
-                            session.add_session(request, user.id, device_token)
+                        if not session.exists(device_token, user.entity.id):
+                            session.add_session(request, user.entity.id, device_token)
 
                         return Response(
                             {
@@ -372,6 +377,7 @@ class ThirdPartyAuthentication(APIView):
                                         {
                                             "userID": str(user.id),
                                             "username": user.username,
+                                            "entity": str(user.entity.id),
                                         }
                                     ),
                                 },
@@ -408,6 +414,13 @@ class ThirdPartyAuthentication(APIView):
                         if create_user_query:
                             serialized_user = AccountSerializer(create_user_query)
 
+                            if not session.exists(
+                                device_token, create_user_query.entity.id
+                            ):
+                                session.add_session(
+                                    request, create_user_query.entity.id, device_token
+                                )
+
                             return Response(
                                 {
                                     "status": True,
@@ -417,6 +430,9 @@ class ThirdPartyAuthentication(APIView):
                                             {
                                                 "userID": str(create_user_query.id),
                                                 "username": create_user_query.username,
+                                                "entity": str(
+                                                    create_user_query.entity.id
+                                                ),
                                             }
                                         ),
                                     },
@@ -434,10 +450,10 @@ class ThirdPartyAuthentication(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         except Exception as e:
-            print(str(e))
+            print(e)
             return Response(
                 {"status": False, "message": f"{e}"},
-                status=status.HTTP_401_UNAUTHORIZED,
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
 
@@ -447,18 +463,21 @@ class UserContacts(APIView):
 
     def get(self, request):
         user = self.request.user
+        entity = self.request.entity
         try:
             search = request.query_params.get("search", None)
             paginated_header = request.headers.get("paginated", "true")
 
             queryset = (
-                Connection.objects.select_related("action_by", "involved_user").filter(
-                    Q(Q(action_by=user) | Q(involved_user=user)),
-                    ~Q(action_by=F("involved_user")),
-                    Q(action_by__is_active=True),
-                    Q(action_by__is_verified=True),
-                    Q(involved_user__is_active=True),
-                    Q(involved_user__is_verified=True),
+                Connection.objects.select_related(
+                    "action_by", "involved_entity"
+                ).filter(
+                    Q(Q(action_by=entity) | Q(involved_entity=entity)),
+                    ~Q(action_by=F("involved_entity")),
+                    action_by__users__is_active=True,
+                    action_by__users__is_verified=True,
+                    involved_entity__users__is_active=True,
+                    involved_entity__users__is_verified=True,
                     status=True,
                 )
                 # .distinct("connection_id")
@@ -468,16 +487,15 @@ class UserContacts(APIView):
 
             if search:
                 if search.startswith("@"):
+                    domain = search.split("@")[-1]  # Safely handle the @ prefix
                     queryset = queryset.filter(
-                        Q(involved_user__username__icontains=search)
+                        involved_entity__users__username__icontains=domain
                     )
                 else:
                     queryset = queryset.filter(
-                        Q(
-                            Q(involved_user__first_name__icontains=search)
-                            | Q(involved_user__middle_name__icontains=search)
-                            | Q(involved_user__last_name__icontains=search)
-                        )
+                        Q(involved_entity__users__first_name__icontains=search)
+                        | Q(involved_entity__users__middle_name__icontains=search)
+                        | Q(involved_entity__users__last_name__icontains=search)
                     )
 
             if paginated_header == "true":
@@ -497,53 +515,67 @@ class UserContacts(APIView):
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def post(self, request):
-        user = self.request.user
-        try:
-            addUsername = request.data.get("addUsername")
+        user = self.request.user  # This is an Account
+        entity = self.request.entity  # This is the current user's Entity
 
-            users = [addUsername, user.id]
+        try:
+            addUsername = request.data.get("addUsername")  # Target Account ID
+            if not addUsername:
+                return Response(
+                    {"status": False, "message": "Target user ID required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            adduser = Account.objects.get(id=uuid.UUID(addUsername))
+
+            # MongoDB aggregation pipeline for existing conversations
+            users = [adduser.entity.id, entity.id]  # entity based
             pipeline = [
                 {"$match": {"conversationType": "single"}},
                 {"$match": {"$expr": {"$setEquals": ["$receivers", users]}}},
                 {"$group": {"_id": "$conversationID"}},
                 {"$project": {"_id": 0, "conversationID": "$_id"}},
             ]
+
             existing_connection_id = Message._get_collection().aggregate(pipeline)
             conversation_id_list = list(
                 set(doc["conversationID"] for doc in existing_connection_id)
             )
 
+            # Re-use existing ID if it exists, otherwise generate a fresh one correctly
             new_connection_id = (
                 conversation_id_list[0]
                 if len(conversation_id_list) == 1
                 else generate_random_digit(20)
             )
 
+            # Fetch target account and extract its corresponding entity
             pending_involved_user = Account.objects.get(id=addUsername)
+            target_entity = pending_involved_user.entity
 
-            if is_blocked(user, pending_involved_user):
+            if is_blocked(entity, target_entity):
                 return Response(
                     {"status": False, "message": "You cannot contact this user"},
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
             with transaction.atomic():
-                # Create first connection row
+                # First side of the interaction pair: Current User -> Target User
                 conn1 = Connection(
                     connection_id=new_connection_id,
-                    action_by=user,
-                    involved_user=user,
+                    action_by=entity,  # Pass Entity instance
+                    involved_entity=target_entity,  # Pass Target Entity instance
                     nickname=None,
                     type="single",
                     status=False,
                 )
-                conn1.save()  # will call clean() and validate
+                conn1.save()  # Triggers full validation via custom clean()
 
-                # Create reciprocal connection row
+                # Reciprocal side of the interaction pair: Target User -> Current User
                 conn2 = Connection(
                     connection_id=new_connection_id,
-                    action_by=user,
-                    involved_user=pending_involved_user,
+                    action_by=target_entity,  # Target Entity acts as initiator
+                    involved_entity=entity,  # Current user becomes involved
                     nickname=None,
                     type="single",
                     status=False,
@@ -556,15 +588,15 @@ class UserContacts(APIView):
                 service.add_notification(
                     referenceID=new_connection_id,
                     referenceStatus=False,
-                    toUserID=addUsername,
-                    fromUserID=user.id,
+                    toUserID=target_entity.id,
+                    fromUserID=entity.id,
                     content_headline="Contact Request",
                     content_details=f"@{user.username} have sent a contact request for you.",
                     type="contact_request",
                     isRead=False,
                 )
 
-                sse_sendToUser = addUsername
+                sse_sendToUser = target_entity.id
                 sse_sendToDetails = (
                     f"@{user.username} have sent a contact request for you."
                 )
@@ -598,6 +630,7 @@ class UserContacts(APIView):
 
     def put(self, request):
         user = self.request.user
+        entity = self.request.entity
         try:
             connection_id = request.data.get("connection_id")
             to_user_id = request.data.get("to_user_id")
@@ -605,7 +638,7 @@ class UserContacts(APIView):
 
             with transaction.atomic():
                 existing_connection_query = Connection.objects.filter(
-                    Q(~Q(action_by=user), involved_user=user),
+                    Q(~Q(action_by=entity), involved_entity=entity),
                     connection_id=connection_id,
                 )
 
@@ -617,10 +650,12 @@ class UserContacts(APIView):
                     )
 
                     for conn in existing_connection_query:
-                        if conn.action_by != user:
+                        if conn.action_by != entity:
                             other_users.append(conn.action_by)
-                        if conn.involved_user != user:
-                            other_users.append(conn.involved_user)
+                            to_user_id = conn.action_by.id
+                        if conn.involved_entity != entity:
+                            other_users.append(conn.involved_entity)
+                            to_user_id = conn.involved_entity.id
 
                     # Remove duplicates if needed
                     other_users = list(set(other_users))
@@ -633,20 +668,20 @@ class UserContacts(APIView):
                     if updated:
 
                         accepter_update = Account.objects.select_for_update().get(
-                            id=user.id
+                            entity_id=entity.id
                         )
                         accepter_update.connection_count += 1
                         accepter_update.save()
 
                         for other_user in other_users:
                             acceptee_update = Account.objects.select_for_update().get(
-                                id=other_user.id
+                                entity_id=other_user.id
                             )
                             acceptee_update.connection_count += 1
                             acceptee_update.save()
 
-                            backfill_new_friend_feed(user.id, other_user.id)
-                            backfill_new_friend_feed(other_user.id, user.id)
+                            backfill_new_friend_feed(entity.id, other_user.id)
+                            backfill_new_friend_feed(other_user.id, entity.id)
 
                         notifHeadline = "Accepted Request"
                         notifContent = f"@{user.username} accepted your request"
@@ -656,7 +691,7 @@ class UserContacts(APIView):
                             referenceID=connection_id,
                             referenceStatus=True,
                             toUserID=to_user_id,
-                            fromUserID=user.id,
+                            fromUserID=entity.id,
                             content_headline=notifHeadline,
                             content_details=notifContent,
                             type="info_contact_accept",
@@ -689,7 +724,9 @@ class UserContacts(APIView):
                             "dateTime": now.isoformat(),
                         }
 
-                        RedisPubSubClient.publish_json(f"events_{user.id}", data_reload)
+                        RedisPubSubClient.publish_json(
+                            f"events_{entity.id}", data_reload
+                        )
                         RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
                     else:
                         return Response(
@@ -711,10 +748,10 @@ class UserContacts(APIView):
                 }
 
                 RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
-                RedisPubSubClient.publish_json(f"events_{user.username}", data)
+                RedisPubSubClient.publish_json(f"events_{entity.id}", data)
 
                 for other in other_users:
-                    RedisPubSubClient.publish_json(f"events_{other.username}", data)
+                    RedisPubSubClient.publish_json(f"events_{other.id}", data)
 
                 return Response(
                     {"status": True, "message": "Contact has been accepted"},
@@ -725,6 +762,7 @@ class UserContacts(APIView):
 
     def delete(self, request):
         user = self.request.user
+        entity = self.request.entity
         try:
             connection_id = request.data.get("connection_id")
             to_user_id = request.data.get("to_user_id")
@@ -733,7 +771,7 @@ class UserContacts(APIView):
 
             with transaction.atomic():
                 existing_connection_query = Connection.objects.filter(
-                    Q(Q(action_by=user) | Q(involved_user=user)),
+                    Q(Q(action_by=entity) | Q(involved_entity=entity)),
                     type="single",
                     connection_id=connection_id,
                 )
@@ -742,12 +780,12 @@ class UserContacts(APIView):
 
                 if existing_connection_query.exists():
                     for conn in existing_connection_query:
-                        if conn.action_by != user:
+                        if conn.action_by != entity:
                             other_users.append(conn.action_by)
-                            to_user_id = conn.action_by.id
-                        if conn.involved_user != user:
-                            other_users.append(conn.involved_user)
-                            to_user_id = conn.involved_user.id
+                            to_entity_id = conn.action_by.id
+                        if conn.involved_entity != entity:
+                            other_users.append(conn.involved_entity)
+                            to_entity_id = conn.involved_entity.id
 
                     # Remove duplicates if needed
                     other_users = list(set(other_users))
@@ -762,14 +800,14 @@ class UserContacts(APIView):
 
                     if updated and not action == "decline":
                         accepter_update = Account.objects.select_for_update().get(
-                            id=user.id
+                            entity_id=entity.id
                         )
                         accepter_update.connection_count -= 1
                         accepter_update.save()
 
                         for other_user in other_users:
                             acceptee_update = Account.objects.select_for_update().get(
-                                id=other_user.id
+                                entity_id=other_user.id
                             )
                             acceptee_update.connection_count -= 1
                             acceptee_update.save()
@@ -782,8 +820,8 @@ class UserContacts(APIView):
                         service.add_notification(
                             referenceID=connection_id,
                             referenceStatus=True,
-                            toUserID=to_user_id,
-                            fromUserID=user.id,
+                            toUserID=to_entity_id,
+                            fromUserID=entity.id,
                             content_headline=notifHeadline,
                             content_details=notifContent,
                             type="info_contact_decline",
@@ -816,8 +854,10 @@ class UserContacts(APIView):
                             "dateTime": now.isoformat(),
                         }
 
-                        RedisPubSubClient.publish_json(f"events_{user.id}", data_reload)
-                        RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
+                        RedisPubSubClient.publish_json(
+                            f"events_{entity.id}", data_reload
+                        )
+                        RedisPubSubClient.publish_json(f"events_{to_entity_id}", data)
                     else:
                         if action == "decline":
                             return Response(
@@ -838,10 +878,10 @@ class UserContacts(APIView):
                     "dateTime": now.isoformat(),
                 }
 
-                RedisPubSubClient.publish_json(f"events_{user.username}", data)
+                RedisPubSubClient.publish_json(f"events_{entity.id}", data)
 
                 for other in other_users:
-                    RedisPubSubClient.publish_json(f"events_{other.username}", data)
+                    RedisPubSubClient.publish_json(f"events_{other.id}", data)
 
                 message_response = (
                     "You have successfully removed connection"
@@ -849,8 +889,8 @@ class UserContacts(APIView):
                     else "You declined a connection request"
                 )
 
-                remove_feed_on_unfriend(user.id, to_user_id)
-                remove_feed_on_unfriend(to_user_id, user.id)
+                remove_feed_on_unfriend(entity.id, to_entity_id)
+                remove_feed_on_unfriend(to_entity_id, entity.id)
 
                 return Response(
                     {"message": message_response}, status=status.HTTP_200_OK
@@ -865,80 +905,67 @@ class UserSearch(APIView):
 
     def get(self, request, query):
         user = self.request.user
+        entity = self.request.entity
         try:
-            connection_exists = Connection.objects.filter(
-                Q(action_by=user, involved_user=OuterRef("pk"))
-                | Q(action_by=OuterRef("pk"), involved_user=user),
-                ~Q(action_by=F("involved_user")),
-                Q(action_by__is_active=True),
-                Q(action_by__is_verified=True),
-                Q(involved_user__is_active=True),
-                Q(involved_user__is_verified=True),
-                # status=True,
-            ).distinct("connection_id")
+            # 1. Keep this as a standard QuerySet (Do NOT wrap in Exists yet)
+            # 2. Change OuterRef("pk") to OuterRef("entity_id") since Connection uses Entity IDs
+            base_connection_qs = Connection.objects.filter(
+                Q(action_by=entity, involved_entity=OuterRef("entity_id"))
+                | Q(action_by=OuterRef("entity_id"), involved_entity=entity),
+                ~Q(action_by=F("involved_entity")),
+                action_by__users__is_active=True,
+                action_by__users__is_verified=True,
+                involved_entity__users__is_active=True,
+                involved_entity__users__is_verified=True,
+            )
 
-            connection_action_by = connection_exists.filter(action_by=OuterRef("pk"))
-            connection_active = connection_exists.filter(status=True)
-            connection_id_subquery = connection_exists.values("connection_id")[:1]
-            blocked_account_ids = get_blocked_account_ids(user)
+            # Drive specialized sub-filters off the base QuerySet safely
+            connection_active_qs = base_connection_qs.filter(status=True)
+            connection_action_by_qs = base_connection_qs.filter(
+                action_by=entity
+            )  # Checks if current user initiated it
+            connection_id_subquery = base_connection_qs.values("connection_id")[:1]
 
+            blocked_account_ids = get_blocked_account_ids(entity)
+
+            # Determine filter keyword based on prefix
             if query.startswith("@"):
                 domain = query.split("@")[1]
-                users_qs = Account.objects.filter(
-                    ~Q(id=user.id),
-                    ~Q(id__in=blocked_account_ids),
-                    is_active=True,
-                    is_verified=True,
-                    username__icontains=domain,  # case-insensitive contains
-                ).annotate(
-                    has_connection=Exists(connection_exists),
-                    connection_accomplished=Case(
-                        When(Exists(connection_active), then=Value(True)),
-                        default=Value(False),
-                        output_field=BooleanField(),
-                    ),
-                    connection_id=Subquery(connection_id_subquery),
-                    is_action_by_user=Case(
-                        When(
-                            Exists(connection_action_by),
-                            then=Value(True),
-                        ),
-                        default=Value(False),
-                        output_field=BooleanField(),
-                    ),
-                )
+                search_filter = Q(username__icontains=domain)
             else:
-                users_qs = (
-                    Account.objects.filter(
-                        ~Q(id=user.id),
-                        ~Q(id__in=blocked_account_ids),
-                        is_active=True,
-                        is_verified=True,
-                    )
-                    .filter(
-                        Q(first_name__icontains=query)
-                        | Q(middle_name__icontains=query)
-                        | Q(last_name__icontains=query)
-                    )
-                    .annotate(
-                        has_connection=Exists(connection_exists),
-                        connection_accomplished=Case(
-                            When(Exists(connection_active), then=Value(True)),
-                            default=Value(False),
-                            output_field=BooleanField(),
-                        ),
-                        connection_id=Subquery(connection_id_subquery),
-                        is_action_by_user=Case(
-                            When(
-                                Exists(connection_action_by),
-                                then=Value(True),
-                            ),
-                            default=Value(False),
-                            output_field=BooleanField(),
-                        ),
-                    )
+                search_filter = (
+                    Q(first_name__icontains=query)
+                    | Q(middle_name__icontains=query)
+                    | Q(last_name__icontains=query)
                 )
 
+            # Build unified QuerySet execution
+            users_qs = Account.objects.filter(
+                search_filter,
+                ~Q(id=user.id),
+                ~Q(entity_id__in=blocked_account_ids),
+                is_active=True,
+                is_verified=True,
+            ).annotate(
+                has_connection=Exists(base_connection_qs),
+                connection_accomplished=Case(
+                    When(Exists(connection_active_qs), then=Value(True)),
+                    default=Value(False),
+                    output_field=BooleanField(),
+                ),
+                connection_id=Subquery(connection_id_subquery),
+                # CHANGE THIS KEY NAME TO MATCH YOUR SERIALIZER:
+                is_action_by_entity=Case(
+                    When(
+                        Exists(connection_action_by_qs),
+                        then=Value(True),
+                    ),
+                    default=Value(False),
+                    output_field=BooleanField(),
+                ),
+            )
+
+            # Paginate and serialize output records
             paginator = self.pagination_class()
             paginated_queryset = paginator.paginate_queryset(
                 users_qs, request, view=self
@@ -948,6 +975,7 @@ class UserSearch(APIView):
             data = paginator.get_paginated_response(serialized_result.data)
 
             return data
+
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -976,6 +1004,7 @@ class UserAccountManagement(APIView):
             raw_password = data.get("password")
             gender = data.get("gender")
             agreed_to_terms = data.get("agreedToTerms")
+            device_token = request.headers.get("device-token")
 
             if not gender or not str(gender).strip():
                 return Response(
@@ -1033,26 +1062,44 @@ class UserAccountManagement(APIView):
 
             gender = gender.lower()
 
-            new_user = Account(
-                username=username,
+            # new_user = Account(
+            #     username=username,
+            #     first_name=first_name,
+            #     middle_name=middle_name,
+            #     last_name=last_name,
+            #     email=email,
+            #     password=hashed_password,
+            #     birthdate=birthdate,
+            #     gender=gender,
+            #     profile="none",
+            #     date_created=now(),
+            #     is_active=True,
+            #     is_verified=False,
+            #     is_default_user=False,
+            #     is_superuser=False,
+            # )
+            # new_user.save()
+
+            new_user = create_user(
                 first_name=first_name,
                 middle_name=middle_name,
                 last_name=last_name,
                 email=email,
-                password=hashed_password,
-                birthdate=birthdate,
+                raw_password=raw_password,
+                birthday=birthday,
+                birthmonth=birthmonth,
+                birthyear=birthyear,
                 gender=gender,
-                profile="none",
-                date_created=now(),
-                is_active=True,
-                is_verified=False,
-                is_default_user=False,
-                is_superuser=False,
+                join_type="system",
             )
-            new_user.save()
+
+            session = SessionService()
+
+            if not session.exists(device_token, new_user.entity.id):
+                session.add_session(request, new_user.entity.id, device_token)
 
             record_consent_acceptance(
-                new_user,
+                new_user.entity,
                 ["terms", "privacy"],
                 ip_address=request.META.get("REMOTE_ADDR"),
                 user_agent=request.headers.get("User-Agent"),
@@ -1071,7 +1118,11 @@ class UserAccountManagement(APIView):
                     "message": "Account created",
                     "username": username,
                     "authtoken": jwt.encoder(
-                        {"userID": str(new_user.id), "username": username}
+                        {
+                            "userID": str(new_user.id),
+                            "username": username,
+                            "entity": str(new_user.entity.id),
+                        }
                     ),
                     "usertoken": jwt.encoder(AccountSerializer(new_user).data),
                 },
@@ -1211,16 +1262,16 @@ class PolicyConsentAccept(APIView):
     def post(self, request):
         try:
             account = self.request.user
+            entity = self.request.user.entity
             document_types = request.data.get("document_types")
 
             if not document_types:
                 document_types = [
-                    pending["document_type"]
-                    for pending in get_pending_consents(account)
+                    pending["document_type"] for pending in get_pending_consents(entity)
                 ]
 
             record_consent_acceptance(
-                account,
+                entity,
                 document_types,
                 ip_address=request.META.get("REMOTE_ADDR"),
                 user_agent=request.headers.get("User-Agent"),
@@ -1443,7 +1494,11 @@ class ReportCreate(APIView):
             )
 
             return Response(
-                {"status": True, "message": "Report submitted", "data": {"id": report.id}},
+                {
+                    "status": True,
+                    "message": "Report submitted",
+                    "data": {"id": report.id},
+                },
                 status=status.HTTP_201_CREATED,
             )
         except Exception as e:

@@ -102,7 +102,7 @@ class Session(Document):
     meta = {"collection": "sessions"}
 
     sessionID = StringField(required=True)
-    userID = StringField(required=True)
+    entityID = StringField(required=True)
     userAgent = StringField(required=True)
     deviceType = StringField(required=True)
     deviceToken = StringField(required=True)

@@ -14,11 +14,12 @@ from .models import (
     PostSave,
 )
 from user.serializers import AccountPreviewSerializer
+from entity.serializers import EntitySerializer
 from community.models import Realm
 
 
 class PostTagSerializer(serializers.ModelSerializer):
-    user = AccountPreviewSerializer(read_only=True)
+    entity = EntitySerializer(read_only=True)
 
     class Meta:
         model = PostTag
@@ -83,13 +84,13 @@ class RealmPreviewSerializer(serializers.ModelSerializer):
 
 class PostSerializer(serializers.ModelSerializer):
     tagging = PostTagSerializer(many=True, read_only=True)
-    privacy_users = PostPrivacySerializer(many=True, read_only=True)
+    privacy_entity = PostPrivacySerializer(many=True, read_only=True)
     references = PostReferenceSerializer(many=True, read_only=True)
     map_info = MapInfoSerializer(read_only=True)
     preview = PreviewCountSerializer(read_only=True, many=True)
-    user_reaction = serializers.CharField()
-    user = AccountPreviewSerializer(read_only=True)
-    author_realm = RealmPreviewSerializer(read_only=True)
+    entity_reaction = serializers.CharField()
+    entity = EntitySerializer(read_only=True)
+    # author_realm = RealmPreviewSerializer(read_only=True)
     # activity_counts = ActivityCountSerializer(read_only=True, many=True)
     score = PostScoreSerializer(read_only=True)
     is_saved = serializers.BooleanField(read_only=True)
@@ -106,7 +107,7 @@ class EmojiSerializer(serializers.ModelSerializer):
 
 
 class CommentSerializer(serializers.ModelSerializer):
-    user = AccountPreviewSerializer(read_only=True)
+    entity = EntitySerializer(read_only=True)
 
     class Meta:
         model = Comment
@@ -114,8 +115,7 @@ class CommentSerializer(serializers.ModelSerializer):
 
 
 class PostBasicSerializer(serializers.ModelSerializer):
-    user = AccountPreviewSerializer(read_only=True)
-    author_realm = RealmPreviewSerializer(read_only=True)
+    entity = EntitySerializer(read_only=True)
 
     class Meta:
         model = Post

@@ -71,44 +71,45 @@ class NewsfeedView(APIView):
 
     def post(self, request):
         user = self.request.user
+        entity = self.request.entity
         try:
             page_size = request.query_params.get("page_size", 10)
 
-            connections = ConnectionHelpers(user)
+            connections = ConnectionHelpers(entity)
             connections_list = connections.get_connections()
             followed_realm_ids = list(
-                RealmFollow.objects.filter(follower=user).values_list(
-                    "realm_id", flat=True
+                RealmFollow.objects.filter(follower=entity).values_list(
+                    "follower_id", flat=True
                 )
             )
-            blocked_account_ids = get_blocked_account_ids(user)
+            blocked_account_ids = get_blocked_account_ids(entity)
 
-            current_mode = RedisPubSubClient.get_and_toggle_feed_mode(user.id)
+            current_mode = RedisPubSubClient.get_and_toggle_feed_mode(entity.id)
 
             viewcache = request.data.get("viewcache", [])
-            save_viewcache_engagements(user, viewcache)
+            save_viewcache_engagements(entity, viewcache)
 
             if current_mode == "friends":
-                candidate_post_ids = fetch_friends_posts(user.id, page_size)
+                candidate_post_ids = fetch_friends_posts(entity.id, page_size)
 
                 if not candidate_post_ids:
                     candidate_post_ids = fetch_trending_posts(
-                        user.id, page_size, 100, ["global"]
+                        entity.id, page_size, 100, ["global"]
                     )
                     current_mode = "trending"
-                    RedisPubSubClient.update_feed_mode(user.id, current_mode)
+                    RedisPubSubClient.update_feed_mode(entity.id, current_mode)
             else:
                 candidate_post_ids = fetch_trending_posts(
-                    user.id, page_size, 100, ["global"]
+                    entity.id, page_size, 100, ["global"]
                 )
 
                 if not candidate_post_ids:
-                    candidate_post_ids = fetch_friends_posts(user.id, page_size)
+                    candidate_post_ids = fetch_friends_posts(entity.id, page_size)
                     current_mode = "friends"
-                    RedisPubSubClient.update_feed_mode(user.id, current_mode)
+                    RedisPubSubClient.update_feed_mode(entity.id, current_mode)
 
             hydrated_posts = (
-                Post.objects.select_related("user", "score", "author_realm")
+                Post.objects.select_related("entity", "score")
                 .prefetch_related(
                     "tagging",
                     "privacy_users",
@@ -119,25 +120,25 @@ class NewsfeedView(APIView):
                 .annotate(
                     is_friend=Case(
                         When(
-                            Q(user_id__in=connections_list)
-                            | Q(author_realm_id__in=followed_realm_ids),
+                            Q(entity_id__in=connections_list)
+                            | Q(entity_id__in=followed_realm_ids),
                             then=Value(0.8),
                         ),
                         default=Value(0),
                         output_field=IntegerField(),
                     ),
                     is_friend_tagged=Case(
-                        When(tagging__user_id__in=connections_list, then=Value(0.5)),
+                        When(tagging__entity_id__in=connections_list, then=Value(0.5)),
                         default=Value(0),
                         output_field=IntegerField(),
                     ),
                     is_saved=Exists(
-                        PostSave.objects.filter(post=OuterRef("pk"), user=user)
+                        PostSave.objects.filter(post=OuterRef("pk"), entity=entity)
                     ),
                     user_reaction=Coalesce(
                         Subquery(
                             Reaction.objects.filter(
-                                post=OuterRef("pk"), user=user
+                                post=OuterRef("pk"), entity=entity
                             ).values("emoji_id")[:1]
                         ),
                         Value(None),
@@ -146,7 +147,7 @@ class NewsfeedView(APIView):
                 .filter(
                     post_id__in=candidate_post_ids, deleted_at=None, is_archived=False
                 )
-                .exclude(user_id__in=blocked_account_ids)
+                .exclude(entity_id__in=blocked_account_ids)
                 .order_by(
                     "-is_friend",
                     "-is_friend_tagged",

@@ -5,6 +5,7 @@ from django.db.models import Q
 from django.utils.timezone import now
 from user.models import Account
 from community.models import Realm
+from entity.models import Entity
 
 from cassandra.cqlengine import columns
 from django_cassandra_engine.models import DjangoCassandraModel
@@ -32,18 +33,15 @@ class Post(models.Model):
         blank=True,
         primary_key=True,
     )
-    user = models.ForeignKey(
-        Account,
-        null=False,
-        on_delete=models.DO_NOTHING,
-    )
-    author_realm = models.ForeignKey(
-        Realm,
-        null=True,
-        blank=True,
-        on_delete=models.DO_NOTHING,
-        related_name="posts",
-    )
+
+    entity = models.ForeignKey(Entity, on_delete=models.CASCADE, related_name="posts")
+    # author_realm = models.ForeignKey(
+    #     Realm,
+    #     null=True,
+    #     blank=True,
+    #     on_delete=models.DO_NOTHING,
+    #     related_name="posts",
+    # )
     is_shared = models.BooleanField(default=False)
     file_type = models.CharField(max_length=50)
     caption = models.TextField(blank=True, null=True)
@@ -74,8 +72,8 @@ class PostTag(models.Model):
         max_length=150, default=uuid.uuid4, unique=True, primary_key=True
     )
     post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="tagging")
-    user = models.ForeignKey(
-        Account,
+    entity = models.ForeignKey(
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
     )
@@ -88,8 +86,8 @@ class PostPrivacy(models.Model):
     post = models.ForeignKey(
         Post, on_delete=models.CASCADE, related_name="privacy_users"
     )
-    allowed_user = models.ForeignKey(
-        Account,
+    allowed_entity = models.ForeignKey(
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
     )
@@ -138,12 +136,12 @@ class Emoji(models.Model):
 class Reaction(models.Model):
     reaction_id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
     post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="reactions")
-    user = models.ForeignKey(Account, on_delete=models.DO_NOTHING)
+    entity = models.ForeignKey(Entity, on_delete=models.DO_NOTHING)
     emoji = models.ForeignKey(Emoji, on_delete=models.DO_NOTHING, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ("post", "user")
+        unique_together = ("post", "entity")
 
 
 class Comment(models.Model):
@@ -154,11 +152,11 @@ class Comment(models.Model):
     post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="comments")
     text = models.TextField(blank=True, null=True)
     attachment = models.TextField(null=True, blank=True)
-    user = models.ForeignKey(Account, on_delete=models.DO_NOTHING)
+    entity = models.ForeignKey(Entity, on_delete=models.DO_NOTHING)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(blank=True, null=True)
     deleted_by = models.ForeignKey(
-        Account,
+        Entity,
         on_delete=models.DO_NOTHING,
         related_name="deleted_by_account",
         blank=True,
@@ -202,58 +200,18 @@ class PostScore(models.Model):
     ranking_score = models.FloatField(default=0.0, db_index=True)
 
 
-# class EngagementLog(models.Model):
-#     ACTION_CHOICES = [
-#         ("viewed", "Viewed"),
-#         ("commented", "Commented"),
-#         ("reacted", "Reacted"),
-#         ("shared", "Shared"),
-#     ]
-
-#     log_id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
-#     post = models.ForeignKey(
-#         Post, on_delete=models.CASCADE, related_name="engagement_logs"
-#     )
-#     user = models.ForeignKey(Account, on_delete=models.CASCADE)
-#     action = models.CharField(max_length=20, choices=ACTION_CHOICES)
-#     reference_id = models.CharField(
-#         max_length=150, null=True, blank=True, db_index=True
-#     )  # Points to Comment/Reaction ID
-#     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
-#     updated_at = models.DateTimeField(auto_now=True, db_index=True)
-#     duration_seconds = models.FloatField(
-#         null=True, blank=True, default=None
-#     )  # For 'viewed' action
-
-#     class Meta:
-#         indexes = [
-#             models.Index(fields=["post", "user"]),
-#             models.Index(fields=["user", "post", "created_at"]),
-#             models.Index(fields=["post", "reference_id"]),
-#             models.Index(fields=["user", "action", "created_at"]),
-#         ]
-
-#         constraints = [
-#             models.UniqueConstraint(
-#                 fields=["user", "post", "action"],
-#                 condition=Q(action="viewed"),
-#                 name="unique_viewed_engagement",
-#             )
-#         ]
-
-
 class PostSave(models.Model):
     id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
     post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="saved_post")
-    user = models.ForeignKey(
-        Account,
+    entity = models.ForeignKey(
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
     )
     saved_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:
-        unique_together = ("post", "user")
+        unique_together = ("post", "entity")
 
 
 class NewsfeedIndex(DjangoCassandraModel):
@@ -276,22 +234,22 @@ class NewsfeedIndex(DjangoCassandraModel):
 
     def __str__(self):
         return f"{self.bucket} - {self.post_id} at {self.created_at}"
-    
+
+
 class TrendingPool(DjangoCassandraModel):
     # The partition key: "global", "gaming", "fitness", etc.
     # experiment between 100 or 1000 for trending post scores
     category = columns.Text(partition_key=True)
-    
+
     # Unique post identifier for Postgres hydration
     post_id = columns.Text(primary_key=True)
     created_at = columns.DateTime(primary_key=True, clustering_order="DESC")
     author_id = columns.Text()
 
     __options__ = {
-        "default_time_to_live": 259200, # 3 days
+        "default_time_to_live": 259200,  # 3 days
         "gc_grace_seconds": 86400,
     }
 
     class Meta:
         get_pk_field = "post_id"
-

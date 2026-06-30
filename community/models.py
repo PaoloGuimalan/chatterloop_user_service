@@ -3,6 +3,7 @@ import random
 import secrets
 from django.db import models
 from user.models import Account
+from entity.models import Entity
 from django.utils.timezone import now
 
 
@@ -31,6 +32,9 @@ class Realm(models.Model):
     id = models.CharField(
         max_length=150, default=uuid.uuid4, unique=True, blank=True, primary_key=True
     )
+    entity = models.OneToOneField(
+        Entity, unique=True, on_delete=models.CASCADE, related_name="realms"
+    )
     realm_id = models.CharField(
         max_length=150,
         default=f"{generate_random_digit(15)}",
@@ -48,7 +52,7 @@ class Realm(models.Model):
         unique=True,
     )
     created_by = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="realm_as_created_by",
@@ -76,12 +80,13 @@ class Member(models.Model):
     member_id = models.CharField(
         max_length=150, default=uuid.uuid4, unique=True, blank=True, primary_key=True
     )
-    account = models.ForeignKey(
-        Account,
-        null=False,
-        on_delete=models.DO_NOTHING,
-        related_name="user_as_member",
-    )
+    # account = models.ForeignKey(
+    #     Account,
+    #     null=False,
+    #     on_delete=models.DO_NOTHING,
+    #     related_name="user_as_member",
+    # )
+    entity = models.ForeignKey(Entity, on_delete=models.CASCADE)
     nickname = models.CharField(max_length=150, null=True, blank=True)
     realm = models.ForeignKey(
         Realm,
@@ -89,7 +94,7 @@ class Member(models.Model):
         on_delete=models.DO_NOTHING,
     )
     added_by = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="user_as_added_by",
@@ -98,7 +103,7 @@ class Member(models.Model):
     date_joined = models.DateTimeField(null=True)
 
     class Meta:
-        unique_together = ("account", "realm")
+        unique_together = ("entity", "realm")
 
 
 class RealmFollow(models.Model):
@@ -106,7 +111,7 @@ class RealmFollow(models.Model):
         max_length=150, default=uuid.uuid4, unique=True, primary_key=True
     )
     follower = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.CASCADE,
         related_name="realm_follows",
@@ -156,15 +161,15 @@ class Invite(models.Model):
         max_length=150, choices=INVITE_STATUS_CHOICES, default="pending"
     )
     target_email = models.EmailField(db_index=True)
-    target_user = models.ForeignKey(
-        Account,
+    target_entity = models.ForeignKey(
+        Entity,
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
         related_name="realm_invites_targeted",
     )
-    accepted_by_user = models.ForeignKey(
-        Account,
+    accepted_by_entity = models.ForeignKey(
+        Entity,
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
@@ -174,7 +179,7 @@ class Invite(models.Model):
         max_length=255, unique=True, default=generate_invite_token
     )
     created_by = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="realm_invites_created",

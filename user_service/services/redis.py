@@ -41,7 +41,7 @@ class RedisPubSubClient:
         return False
 
     @classmethod
-    def get_and_toggle_feed_mode(cls, user_id, fallback_mode="friends"):
+    def get_and_toggle_feed_mode(cls, entity_id, fallback_mode="friends"):
         """
         Determines the feed mode for the current request by reading the
         previous state from Redis, automatically toggling it, and saving it.
@@ -50,7 +50,7 @@ class RedisPubSubClient:
         if not conn:
             return fallback_mode
 
-        mode_key = f"chatterloop:feed:current_mode:{user_id}"
+        mode_key = f"chatterloop:feed:current_mode:{entity_id}"
 
         # 1. Read the previous mode
         last_mode = conn.get(mode_key)
@@ -71,12 +71,12 @@ class RedisPubSubClient:
         return current_mode
 
     @classmethod
-    def update_feed_mode(cls, user_id, finalized_mode):
+    def update_feed_mode(cls, entity_id, finalized_mode):
         """
         Force-updates the current mode state in Redis. Useful for
         re-aligning the state when the view triggers a fallback path.
         """
         conn = cls.get_redis_connection()
         if conn:
-            mode_key = f"chatterloop:feed:current_mode:{user_id}"
+            mode_key = f"chatterloop:feed:current_mode:{entity_id}"
             conn.setex(mode_key, 1800, finalized_mode)

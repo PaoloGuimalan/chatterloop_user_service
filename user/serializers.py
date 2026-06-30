@@ -1,11 +1,13 @@
 from rest_framework import serializers
 from .models import Account, Connection
+from entity.serializers import EntitySerializer
 from .utils.consent import get_pending_consents
 
 
 class AccountSerializer(serializers.ModelSerializer):
     is_complete = serializers.BooleanField(read_only=True)
     pending_consents = serializers.ListField(read_only=True)
+    # entity = EntitySerializer(read_only=True)
 
     class Meta:
         model = Account
@@ -26,6 +28,7 @@ class AccountSerializer(serializers.ModelSerializer):
             "is_badged",
             "is_complete",
             "pending_consents",
+            # "entity",
         ]
         read_only_fields = ["id", "date_created", "is_complete", "pending_consents"]
 
@@ -49,7 +52,7 @@ class AccountSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         representation = super().to_representation(instance)
 
-        pending_consents = get_pending_consents(instance)
+        pending_consents = get_pending_consents(instance.entity)
         representation["pending_consents"] = pending_consents
         representation["is_complete"] = (
             instance.is_profile_complete() and not pending_consents
@@ -58,6 +61,8 @@ class AccountSerializer(serializers.ModelSerializer):
 
 
 class AccountPreviewSerializer(serializers.ModelSerializer):
+    entity = EntitySerializer(read_only=True)
+
     class Meta:
         model = Account
         fields = [
@@ -69,12 +74,13 @@ class AccountPreviewSerializer(serializers.ModelSerializer):
             "profile",
             "gender",
             "is_badged",
+            "entity",
         ]
 
 
 class ConnectionSerializer(serializers.ModelSerializer):
-    action_by = AccountPreviewSerializer(read_only=True)
-    involved_user = AccountPreviewSerializer(read_only=True)
+    action_by = EntitySerializer(read_only=True)
+    involved_entity = EntitySerializer(read_only=True)
 
     class Meta:
         model = Connection
@@ -85,7 +91,7 @@ class AccountSearchSerializer(serializers.ModelSerializer):
     has_connection = serializers.BooleanField()
     connection_accomplished = serializers.BooleanField()
     connection_id = serializers.CharField()
-    is_action_by_user = serializers.BooleanField()
+    is_action_by_entity = serializers.BooleanField()
 
     class Meta:
         model = Account
@@ -105,6 +111,6 @@ class AccountSearchSerializer(serializers.ModelSerializer):
             "has_connection",
             "connection_accomplished",
             "connection_id",
-            "is_action_by_user",
+            "is_action_by_entity",
         ]
         read_only_fields = ["id", "date_created"]

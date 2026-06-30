@@ -79,12 +79,12 @@ def update_ranking_score(post_id, update_type, is_decrease):
     )
 
 
-def save_viewcache_engagements(user, viewcache):
+def save_viewcache_engagements(entity, viewcache):
     try:
         if not viewcache:
             return []
 
-        user_id = uuid.UUID(user.id) if isinstance(user.id, str) else user.id
+        user_id = uuid.UUID(entity.id) if isinstance(entity.id, str) else entity.id
 
         logs_to_create = []
         post_ids_to_clean = []
@@ -96,7 +96,7 @@ def save_viewcache_engagements(user, viewcache):
 
             post_ids_to_clean.append(str(pid))
 
-            if str(poid) != str(user.id):
+            if str(poid) != str(entity.id):
                 created_at = view.get("created_at")
                 if isinstance(created_at, str):
                     created_at = parse_datetime(created_at)
@@ -256,9 +256,9 @@ def get_latest_mutual_engagements(mutual_friend_ids, candidate_pids):
 
 
 def backfill_new_friend_feed(viewer_id, new_friend_id):
-    user = Account.objects.get(id=viewer_id)
+    user = Account.objects.get(entity_id=viewer_id)
 
-    candidate_posts = Post.objects.filter(user__id=str(new_friend_id))[:50]
+    candidate_posts = Post.objects.filter(entity__id=str(new_friend_id))[:50]
     candidate_pids = [str(p.post_id) for p in candidate_posts]
 
     view_logs = UserEngagementLog.objects.filter(
@@ -268,7 +268,7 @@ def backfill_new_friend_feed(viewer_id, new_friend_id):
         target_id__in=candidate_pids,
     )
 
-    user_connections = ConnectionHelpers(user)
+    user_connections = ConnectionHelpers(user.entity)
     mutual_friends = user_connections.get_mutual_connections(new_friend_id)
 
     mutual_friend_engagements = {}
@@ -313,19 +313,21 @@ def backfill_new_friend_feed(viewer_id, new_friend_id):
         )
 
 
-def fetch_friends_posts(user_id, page_size=10):
+def fetch_friends_posts(entity_id, page_size=10):
     newsfeed_queryset = (
-        NewsfeedIndex.objects.filter(bucket=str(user_id))
+        NewsfeedIndex.objects.filter(bucket=str(entity_id))
         .limit(int(page_size))
         .values_list("post_id", flat=True)
     )
     return list(newsfeed_queryset)
 
 
-def fetch_trending_posts(user_id, page_size=10, candidate_limit=100, user_interests=[]):
+def fetch_trending_posts(
+    entity_id, page_size=10, candidate_limit=100, user_interests=[]
+):
     # change for later when trending pool is widely used, make population pool flexible to seen posts
-    user_uuid = (
-        uuid.UUID(str(user_id)) if not isinstance(user_id, uuid.UUID) else user_id
+    entity_uuid = (
+        uuid.UUID(str(entity_id)) if not isinstance(entity_id, uuid.UUID) else entity_id
     )
 
     trending_queryset = (
@@ -339,7 +341,7 @@ def fetch_trending_posts(user_id, page_size=10, candidate_limit=100, user_intere
         return []
 
     seen_logs = UserEngagementLog.objects.filter(
-        user_id=user_uuid, activity_type="view", target_id__in=trending_pids
+        user_id=entity_uuid, activity_type="view", target_id__in=trending_pids
     )
     seen_pids = {str(log.target_id) for log in seen_logs}
     return [pid for pid in trending_pids if pid not in seen_pids][: int(page_size)]

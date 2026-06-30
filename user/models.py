@@ -8,6 +8,7 @@ from django.utils.timezone import now
 from cassandra.cqlengine import columns
 from django_cassandra_engine.models import DjangoCassandraModel
 from core.models import PolicyDocument
+from entity.models import Entity
 
 MINIMUM_AGE = 13
 
@@ -40,6 +41,9 @@ class Account(models.Model):
 
     id = models.CharField(
         max_length=150, default=uuid.uuid4, unique=True, blank=True, primary_key=True
+    )
+    entity = models.OneToOneField(
+        Entity, unique=True, on_delete=models.CASCADE, related_name="users"
     )
     username = models.CharField(max_length=150, unique=True, blank=True)
     first_name = models.CharField(max_length=150, null=False)
@@ -131,18 +135,18 @@ class Connection(models.Model):
     )
     connection_id = models.CharField(max_length=150, default=generate_random_digit(20))
     action_by = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="connections_as_action_by",
     )
     nickname = models.CharField(max_length=150, null=True, blank=True)
     status = models.BooleanField(default=True)
-    involved_user = models.ForeignKey(
-        Account,
+    involved_entity = models.ForeignKey(
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
-        related_name="connections_as_involved_user",
+        related_name="connections_as_involved_entity",
     )
     action_date = models.DateTimeField(default=now)
     type = models.CharField(max_length=150, null=False, choices=CONNECTION_TYPE_CHOICES)
@@ -164,10 +168,11 @@ class Connection(models.Model):
                     "Single connection can only involve two users total."
                 )
 
+            # Check if this user is already in another distinct connection record under this ID
             user_in_use = Connection.objects.filter(
                 connection_id=self.connection_id,
                 type="single",
-                involved_user=self.involved_user,
+                involved_entity=self.involved_entity,
             ).exclude(pk=self.pk)
 
             if user_in_use.exists():
@@ -175,21 +180,31 @@ class Connection(models.Model):
                     "This involved user is already part of the single connection."
                 )
 
-            if self.action_by != self.involved_user:
-                connection_triggered = Connection.objects.filter(
-                    type="single",
-                    involved_user=self.involved_user,
-                    action_by=self.action_by,  # checking if action already existing
-                ).exclude(pk=self.pk)
+            if self.action_by != self.involved_entity:
+                # FIX: Exclude the current connection_id so reciprocal records don't block each other
+                connection_triggered = (
+                    Connection.objects.filter(
+                        type="single",
+                        involved_entity=self.involved_entity,
+                        action_by=self.action_by,
+                    )
+                    .exclude(connection_id=self.connection_id)
+                    .exclude(pk=self.pk)
+                )
 
                 if connection_triggered.exists():
                     raise ValidationError("Connection is already existing.")
 
-                user_initiated = Connection.objects.filter(
-                    type="single",
-                    involved_user=self.action_by,
-                    action_by=self.involved_user,  # checking if involved_user is action_by
-                ).exclude(pk=self.pk)
+                # FIX: Exclude the current connection_id here as well
+                user_initiated = (
+                    Connection.objects.filter(
+                        type="single",
+                        involved_entity=self.action_by,
+                        action_by=self.involved_entity,
+                    )
+                    .exclude(connection_id=self.connection_id)
+                    .exclude(pk=self.pk)
+                )
 
                 if user_initiated.exists():
                     raise ValidationError(
@@ -206,13 +221,13 @@ class Block(models.Model):
         max_length=150, default=uuid.uuid4, unique=True, primary_key=True
     )
     blocker = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="blocks_made",
     )
     blocked = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="blocked_by",
@@ -258,13 +273,13 @@ class Report(models.Model):
         max_length=150, default=uuid.uuid4, unique=True, primary_key=True
     )
     reporter = models.ForeignKey(
-        Account,
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="reports_filed",
     )
-    reported_user = models.ForeignKey(
-        Account,
+    reported_entity = models.ForeignKey(
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="reports_received",
@@ -273,13 +288,11 @@ class Report(models.Model):
     target_id = models.CharField(max_length=150, null=True, blank=True)
     reason = models.CharField(max_length=20, choices=REASON_CHOICES)
     description = models.TextField(blank=True, default="")
-    status = models.CharField(
-        max_length=20, choices=STATUS_CHOICES, default="pending"
-    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     created_at = models.DateTimeField(default=now)
     reviewed_at = models.DateTimeField(null=True, blank=True)
     reviewed_by = models.ForeignKey(
-        Account,
+        Entity,
         null=True,
         blank=True,
         on_delete=models.DO_NOTHING,
@@ -315,8 +328,8 @@ class UserConsent(models.Model):
     id = models.CharField(
         max_length=150, default=uuid.uuid4, unique=True, primary_key=True
     )
-    user = models.ForeignKey(
-        Account,
+    entity = models.ForeignKey(
+        Entity,
         null=False,
         on_delete=models.DO_NOTHING,
         related_name="consents",
@@ -333,4 +346,4 @@ class UserConsent(models.Model):
         ordering = ["-accepted_at"]
 
     def __str__(self):
-        return f"{self.user_id} accepted {self.document_type} {self.version}"
+        return f"{str(self.entity.id)} accepted {self.document_type} {self.version}"

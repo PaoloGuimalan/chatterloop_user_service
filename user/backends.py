@@ -1,5 +1,6 @@
 from django.contrib.auth.backends import BaseBackend
 from .models import Account
+from entity.models import Entity
 from .utils.jwt_tools import JWTTools
 from .utils.consent import get_pending_consents
 from user_service.utils.crypto import decrypt_nonce
@@ -7,6 +8,7 @@ from user_service.services.redis import RedisPubSubClient
 from .services.mongohelpers import SessionService
 from django.core.exceptions import PermissionDenied
 import time
+import uuid
 
 jwt = JWTTools
 
@@ -43,7 +45,7 @@ class AutheticationBackend(BaseBackend):
                 "PROFILE_INCOMPLETE: birthdate and gender are required"
             )
 
-        if get_pending_consents(user):
+        if get_pending_consents(user.entity):
             raise PermissionDenied(
                 "CONSENT_REQUIRED: latest Terms and Conditions must be accepted"
             )
@@ -93,12 +95,20 @@ class AutheticationBackend(BaseBackend):
                 )
 
             session = SessionService()
-            is_existing = session.exists(device_token, user.id)
+            is_existing = session.exists(device_token, decoded_header["entity"])
 
             if not is_existing:
                 raise PermissionDenied("Device not logged in.")
 
             self._check_compliance(request, user)
+
+            print(decoded_header["entity"])
+
+            if decoded_header["entity"]:
+                entity = Entity.objects.get(id=uuid.UUID(decoded_header["entity"]))
+                request.entity = entity
+
+                print("Entity: ", entity)
 
             return (user, True)
         except Account.DoesNotExist:

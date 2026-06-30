@@ -33,6 +33,7 @@ class TopRealms(APIView):
 
     def get(self, request):
         user = self.request.user
+        entity = self.request.entity
 
         try:
             search = request.query_params.get("search", None)
@@ -43,14 +44,14 @@ class TopRealms(APIView):
                 members=Count("member", distinct=True),
                 is_admin=Exists(
                     Member.objects.filter(
-                        realm=OuterRef("pk"), account=user, role="admin"
+                        realm=OuterRef("pk"), entity=entity, role="admin"
                     )
                 ),
                 is_member=Exists(
-                    Member.objects.filter(realm=OuterRef("pk"), account=user)
+                    Member.objects.filter(realm=OuterRef("pk"), entity=entity)
                 ),
                 is_follower=Exists(
-                    RealmFollow.objects.filter(realm=OuterRef("pk"), follower=user)
+                    RealmFollow.objects.filter(realm=OuterRef("pk"), follower=entity)
                 ),
             ).filter(type=type, is_private=False)
 
@@ -500,9 +501,7 @@ class InviteView(APIView):
                     if realm.type == "conference" and realm.slug
                     else f"/{realm.slug or realm.realm_id}"
                 )
-                invite_link = (
-                    f"{frontend_base_url}{invite_path}?invite_token={invite.invite_token}"
-                )
+                invite_link = f"{frontend_base_url}{invite_path}?invite_token={invite.invite_token}"
                 emailer.send_realm_invite_email(
                     to_email=normalized_email,
                     realm_name=realm.name,
@@ -515,9 +514,11 @@ class InviteView(APIView):
             return Response(
                 {
                     "status": True,
-                    "message": "Invite created"
-                    if normalized_kind == "invite"
-                    else "Access request submitted",
+                    "message": (
+                        "Invite created"
+                        if normalized_kind == "invite"
+                        else "Access request submitted"
+                    ),
                     "result": self._serialize_invite(invite),
                 },
                 status=status.HTTP_201_CREATED,
@@ -599,7 +600,9 @@ class InviteView(APIView):
                     status=status.HTTP_200_OK,
                 )
 
-            invites = Invite.objects.filter(created_by=request.user).order_by("-created_at")
+            invites = Invite.objects.filter(created_by=request.user).order_by(
+                "-created_at"
+            )
             return Response(
                 {
                     "status": True,
@@ -657,7 +660,10 @@ class InviteView(APIView):
                             status=status.HTTP_401_UNAUTHORIZED,
                         )
                 else:
-                    if invite.target_email and invite.target_email != user.email.lower():
+                    if (
+                        invite.target_email
+                        and invite.target_email != user.email.lower()
+                    ):
                         return Response(
                             {
                                 "status": False,

@@ -1,4 +1,5 @@
 from ..models import Account, MINIMUM_AGE, calculate_age
+from entity.models import Entity
 from datetime import datetime
 from django.utils.timezone import make_aware
 from django.utils.timezone import now
@@ -8,6 +9,14 @@ from ..models import UserEngagementLog
 from django.utils.timezone import now, is_naive, make_aware, get_current_timezone
 from django.utils.dateparse import parse_datetime
 import uuid
+
+
+def create_entity(type):
+
+    new_entity = Entity(type=type)
+    new_entity.save()
+
+    return new_entity
 
 
 def create_user(
@@ -48,6 +57,8 @@ def create_user(
 
         hashed_password = hash_password(raw_password)
 
+        new_entity = create_entity("user")
+
         new_user = Account(
             username=username,
             first_name=first_name,
@@ -64,6 +75,7 @@ def create_user(
             is_default_user=True,
             is_superuser=False,
             join_type=join_type,
+            entity=new_entity,
         )
         new_user.save()
 

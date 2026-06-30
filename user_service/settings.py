@@ -136,6 +136,7 @@ INSTALLED_APPS = [
     "newsfeed",
     "core",
     "diary",
+    "entity",
     # Silk
     "silk",
 ]
@@ -187,6 +188,7 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
     "action",
     "x-nonce",
     "device-token",
+    "x-entity",
 ]
 
 ROOT_URLCONF = "user_service.urls"
