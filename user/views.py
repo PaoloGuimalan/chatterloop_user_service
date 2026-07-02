@@ -102,6 +102,7 @@ class UserAuthentication(APIView):
 
     def get(self, request, username=None):
         me = self.request.user
+        entity = self.request.entity
         # user = get_object_or_404(Account, username=username)
         user_queryset = Account.objects.filter(
             username=username, is_active=True, is_verified=True, user_type="user"
@@ -118,16 +119,20 @@ class UserAuthentication(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            connection_exists = Connection.objects.filter(
-                Q(action_by=user, involved_user=self.request.user)
-                | Q(action_by=self.request.user, involved_user=user),
-                ~Q(action_by=F("involved_user")),
-                Q(action_by__is_active=True),
-                Q(action_by__is_verified=True),
-                Q(involved_user__is_active=True),
-                Q(involved_user__is_verified=True),
-                # status=True,
-            ).distinct("connection_id")
+            connection_exists = (
+                Connection.objects.select_related("action_by", "involved_entity")
+                .filter(
+                    Q(action_by=user.entity, involved_entity=entity)
+                    | Q(action_by=entity, involved_entity=user.entity),
+                    ~Q(action_by=F("involved_entity")),
+                    Q(action_by__is_active=True),
+                    Q(action_by__is_verified=True),
+                    Q(involved_entity__users__is_active=True),
+                    Q(involved_entity__users__is_verified=True),
+                    # status=True,
+                )
+                .distinct("connection_id")
+            )
 
             is_connection_present = (
                 None
@@ -140,13 +145,20 @@ class UserAuthentication(APIView):
             connection_id = None
 
             if connection_exists:
-                connection_id = connection_exists[0].connection_id
-                is_connection_handshaked = connection_exists[0].status
-                is_user_connection_initiator = (
-                    True
-                    if connection_exists[0].action_by.username == username
-                    else False
-                )
+                # 1. Fetch the first connection record from the queryset
+                connection_record = connection_exists[0]
+
+                connection_id = connection_record.connection_id
+                is_connection_handshaked = connection_record.status
+
+                # 2. FIX: Check if the 'users' (Account) relation exists on the Entity to prevent attribute crashes
+                if hasattr(connection_record.action_by, "users"):
+                    is_user_connection_initiator = (
+                        connection_record.action_by.users.username == username
+                    )
+                else:
+                    # Fallback if the entity doesn't have an associated Account record
+                    is_user_connection_initiator = False
 
             # Format birthdate parts
             birthdate = user.birthdate
@@ -221,22 +233,24 @@ class UserAuthentication(APIView):
                     followers_count=Count("followers"),
                     is_admin=Exists(
                         Member.objects.filter(
-                            realm=OuterRef("pk"), account=me, role="admin"
+                            realm=OuterRef("pk"), entity=entity, role="admin"
                         )
                     ),
                     is_member=Exists(
-                        Member.objects.filter(realm=OuterRef("pk"), account=me)
+                        Member.objects.filter(realm=OuterRef("pk"), entity=entity)
                     ),
                     is_follower=Exists(
-                        RealmFollow.objects.filter(realm=OuterRef("pk"), follower=me)
+                        RealmFollow.objects.filter(
+                            realm=OuterRef("pk"), follower=entity
+                        )
                     ),
                 ),
                 query_filter,
             )
 
-            save_profile_visit(me, realm_queryset.realm_id, "realm")
+            save_profile_visit(entity, realm_queryset.entity.id, "realm")
             follower_interaction_score_bump(
-                me.id, realm_queryset.realm_id, "PROFILE_VISIT", False
+                entity.id, realm_queryset.entity.id, "PROFILE_VISIT", False
             )
 
             serialized_realm = RealmSerializer(realm_queryset)

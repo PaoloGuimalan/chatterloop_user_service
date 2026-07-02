@@ -79,6 +79,7 @@ class MyRealms(APIView):
 
     def get(self, request):
         user = self.request.user
+        entity = self.request.entity
 
         try:
             search = request.query_params.get("search", None)
@@ -89,14 +90,14 @@ class MyRealms(APIView):
                 members=Count("member", distinct=True),
                 is_admin=Exists(
                     Member.objects.filter(
-                        realm=OuterRef("pk"), account=user, role="admin"
+                        realm=OuterRef("pk"), entity=entity, role="admin"
                     )
                 ),
                 is_member=Exists(
-                    Member.objects.filter(realm=OuterRef("pk"), account=user)
+                    Member.objects.filter(realm=OuterRef("pk"), entity=entity)
                 ),
                 is_follower=Exists(
-                    RealmFollow.objects.filter(realm=OuterRef("pk"), follower=user)
+                    RealmFollow.objects.filter(realm=OuterRef("pk"), follower=entity)
                 ),
             ).filter(is_member=True, type=type)
 
@@ -119,13 +120,15 @@ class MyRealms(APIView):
 
     def put(self, request):
         user = self.request.user
+        entity = self.request.entity
+
         try:
             realm_id = request.data.get("realm_id")
             fields = request.data.get("fields")
 
             is_admin = Exists(
                 Member.objects.filter(
-                    realm__realm_id=realm_id, account=user, role="admin"
+                    realm__realm_id=realm_id, entity=entity, role="admin"
                 )
             )
 
@@ -159,6 +162,7 @@ class FollowRealmView(APIView):
 
     def get(self, request):
         user = self.request.user
+        entity = self.request.entity
 
         try:
             search = request.query_params.get("search", None)
@@ -170,14 +174,16 @@ class FollowRealmView(APIView):
                     members=Count("member", distinct=True),
                     is_admin=Exists(
                         Member.objects.filter(
-                            realm=OuterRef("pk"), account=user, role="admin"
+                            realm=OuterRef("pk"), entity=entity, role="admin"
                         )
                     ),
                     is_member=Exists(
-                        Member.objects.filter(realm=OuterRef("pk"), account=user)
+                        Member.objects.filter(realm=OuterRef("pk"), entity=entity)
                     ),
                     is_follower=Exists(
-                        RealmFollow.objects.filter(realm=OuterRef("pk"), follower=user)
+                        RealmFollow.objects.filter(
+                            realm=OuterRef("pk"), follower=entity
+                        )
                     ),
                 )
                 .filter(is_follower=True, type=type)
@@ -203,13 +209,14 @@ class FollowRealmView(APIView):
 
     def post(self, request):
         user = self.request.user
+        entity = self.request.entity
 
         try:
             realm_id = request.data.get("realm_id")
 
             realm = get_object_or_404(Realm, id=realm_id)
             follow_realm_queryset = RealmFollow.objects.create(
-                follower=user, realm=realm
+                follower=entity, realm=realm
             )
 
             if follow_realm_queryset is None:
@@ -227,13 +234,14 @@ class FollowRealmView(APIView):
 
     def delete(self, request):
         user = self.request.user
+        entity = self.request.entity
 
         try:
             realm_id = request.data.get("realm_id")
 
             realm = get_object_or_404(Realm, id=realm_id)
             unfollow_realm_queryset = RealmFollow.objects.get(
-                follower=user, realm=realm
+                follower=entity, realm=realm
             )
 
             if unfollow_realm_queryset is None:
@@ -258,12 +266,13 @@ class RealmMembersView(APIView):
 
     def get(self, request):
         user = self.request.user
+        entity = self.request.entity
 
         try:
             realm_id = request.query_params.get("realm_id")
             search = request.query_params.get("search", None)
 
-            is_member = Exists(Member.objects.filter(realm__id=realm_id, account=user))
+            is_member = Exists(Member.objects.filter(realm__id=realm_id, entity=entity))
 
             if not is_member:
                 return Response(
@@ -275,7 +284,7 @@ class RealmMembersView(APIView):
                 )
 
             realm_members_query_set = (
-                Member.objects.prefetch_related("account", "added_by")
+                Member.objects.prefetch_related("entity", "added_by")
                 .filter(realm__id=realm_id)
                 .order_by("-date_joined")
             )
@@ -283,14 +292,14 @@ class RealmMembersView(APIView):
             if search:
                 if search.startswith("@"):
                     realm_members_query_set = realm_members_query_set.filter(
-                        Q(account__username__icontains=search)
+                        Q(entity__users__username__icontains=search)
                     )
                 else:
                     realm_members_query_set = realm_members_query_set.filter(
                         Q(
-                            Q(account__first_name__icontains=search)
-                            | Q(account__middle_name__icontains=search)
-                            | Q(account__last_name__icontains=search)
+                            Q(entity__users__first_name__icontains=search)
+                            | Q(entity__users__middle_name__icontains=search)
+                            | Q(entity__users__last_name__icontains=search)
                         )
                     )
 
@@ -327,14 +336,14 @@ class RealmFollowersView(APIView):
             if search:
                 if search.startswith("@"):
                     realm_followers_query_set = realm_followers_query_set.filter(
-                        Q(follower__username__icontains=search)
+                        Q(follower__users__username__icontains=search)
                     )
                 else:
                     realm_followers_query_set = realm_followers_query_set.filter(
                         Q(
-                            Q(follower__first_name__icontains=search)
-                            | Q(follower__middle_name__icontains=search)
-                            | Q(follower__last_name__icontains=search)
+                            Q(follower__users__first_name__icontains=search)
+                            | Q(follower__users__middle_name__icontains=search)
+                            | Q(follower__users__last_name__icontains=search)
                         )
                     )
 
@@ -347,6 +356,34 @@ class RealmFollowersView(APIView):
             data = paginator.get_paginated_response(serialized_result.data)
 
             return data
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def delete(self, request):
+        user = self.request.user
+        entity = self.request.entity
+
+        try:
+            realm_id = request.data.get("realm_id")
+            follow_id = request.data.get("follow_id")
+
+            realm = get_object_or_404(Realm, id=realm_id)
+            unfollow_realm_queryset = RealmFollow.objects.get(
+                follow_id=follow_id, realm=realm
+            )
+
+            if unfollow_realm_queryset is None:
+                return Response(
+                    {"status": False, "message": "Error completing follow request"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            unfollow_realm_queryset.delete()
+
+            return Response(
+                {"status": True, "message": f"Followed {realm_id}"},
+                status=status.HTTP_201_CREATED,
+            )
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
