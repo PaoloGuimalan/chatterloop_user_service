@@ -413,6 +413,7 @@ class PostReactionsView(APIView):
     def post(self, request, *args, **kwargs):
         try:
             user = self.request.user
+            entity = self.request.entity
             post_id = request.data.get("post_id")
             emoji_id = request.data.get("emoji_id")
 
@@ -425,7 +426,7 @@ class PostReactionsView(APIView):
                 Reaction.objects.create(
                     reaction_id=new_reaction_id,
                     post=post,
-                    user=user,
+                    entity=entity,
                     emoji=emoji,
                 )
 
@@ -438,26 +439,26 @@ class PostReactionsView(APIView):
                 reaction_ranking.save()
 
                 update_ranking_score(post_id, "react", False)
-                interaction_score_bump(user.id, post.user.id, "LIKE", False)
-                if post.author_realm:
+                interaction_score_bump(entity.id, post.entity.id, "LIKE", False)
+                if post.entity.type == "realm":
                     follower_interaction_score_bump(
-                        user.id, post.author_realm.realm_id, "LIKE", False
+                        entity.id, post.entity.id, "LIKE", False
                     )
 
-                if post.user.id != user.id:
+                if post.entity.id != entity.id:
                     service = NotificationService()
                     service.add_notification(
                         referenceID=new_reaction_id,
                         referenceStatus=True,
-                        toUserID=post.user.id,
-                        fromUserID=user.id,
+                        toUserID=post.entity.id,
+                        fromUserID=entity.id,
                         content_headline="Post Reaction",
                         content_details=f"@{user.username} reacted {emoji.emoji_content} to your post.",
                         type="post_reaction",
                         isRead=False,
                     )
 
-                    sse_sendToUser = post.user.id
+                    sse_sendToUser = post.entity.id
                     sse_sendToDetails = (
                         f"@{user.username} reacted {emoji.emoji_content} to your post."
                     )
@@ -487,6 +488,7 @@ class PostReactionsView(APIView):
     def put(self, request, *args, **kwargs):
         try:
             user = self.request.user
+            entity = self.request.entity
             post_id = request.data.get("post_id")
             emoji_id = request.data.get("emoji_id")
 
@@ -494,7 +496,7 @@ class PostReactionsView(APIView):
             new_emoji = Emoji.objects.get(emoji_id=emoji_id)
 
             with transaction.atomic():
-                reaction = Reaction.objects.get(post_id=post, user=user)
+                reaction = Reaction.objects.get(post_id=post, entity=entity)
                 old_emoji = reaction.emoji
                 reaction.emoji = new_emoji
                 reaction.save()
@@ -507,14 +509,14 @@ class PostReactionsView(APIView):
                 new_preview.count += 1
                 new_preview.save()
 
-                if post.user.id != user.id:
+                if post.entity.id != entity.id:
                     service = NotificationService()
                     service.update_content(
                         reaction_id=reaction.reaction_id,
                         new_content=f"@{user.username} reacted {new_emoji.emoji_content} to your post.",
                     )
 
-                    sse_sendToUser = post.user.id
+                    sse_sendToUser = post.entity.id
                     sse_sendToDetails = f"@{user.username} reacted {new_emoji.emoji_content} to your post."
 
                     now = datetime.now()
@@ -542,11 +544,12 @@ class PostReactionsView(APIView):
     def delete(self, request, *args, **kwargs):
         try:
             user = self.request.user
+            entity = self.request.entity
             post_id = request.data.get("post_id")
             post = Post.objects.get(post_id=post_id)
 
             with transaction.atomic():
-                reaction = Reaction.objects.get(post=post, user=user)
+                reaction = Reaction.objects.get(post=post, entity=entity)
 
                 service = NotificationService()
                 service.delete_notification_by_reference_id(
@@ -558,10 +561,10 @@ class PostReactionsView(APIView):
                 reaction_ranking.save()
 
                 update_ranking_score(post_id, "react", True)
-                interaction_score_bump(user.id, post.user.id, "LIKE", True)
-                if post.author_realm:
+                interaction_score_bump(entity.id, post.entity.id, "LIKE", True)
+                if post.entity.type == "realm":
                     follower_interaction_score_bump(
-                        user.id, post.author_realm.realm_id, "LIKE", True
+                        entity.id, post.entity.id, "LIKE", True
                     )
 
                 emoji = reaction.emoji
