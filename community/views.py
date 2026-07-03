@@ -394,12 +394,12 @@ class InviteView(APIView):
     def _serialize_invite(self, invite):
         return InviteSerializer(invite).data
 
-    def _publish_event(self, user_id, event, message):
-        if not user_id:
+    def _publish_event(self, entity_id, event, message):
+        if not entity_id:
             return
         try:
             RedisPubSubClient.publish_json(
-                f"events_{user_id}",
+                f"events_{entity_id}",
                 {
                     "logType": None,
                     "pod": "podless",
@@ -418,7 +418,7 @@ class InviteView(APIView):
     def _realm_admin_recipient_ids(self, realm):
         recipient_ids = set(
             Member.objects.filter(realm=realm, role="admin").values_list(
-                "account__id", flat=True
+                "entity__id", flat=True
             )
         )
         if realm.created_by_id:
@@ -432,7 +432,7 @@ class InviteView(APIView):
 
     def _notify_members_changed(self, realm):
         recipient_ids = set(
-            Member.objects.filter(realm=realm).values_list("account__id", flat=True)
+            Member.objects.filter(realm=realm).values_list("entity__id", flat=True)
         )
         if realm.created_by_id:
             recipient_ids.add(realm.created_by_id)
@@ -440,25 +440,25 @@ class InviteView(APIView):
         for recipient_id in recipient_ids:
             self._publish_event(recipient_id, "conference_members_changed", message)
 
-    def _notify_access_changed(self, account_id, realm):
+    def _notify_access_changed(self, entity_id, realm):
         # Targeted signal so a single requester refetches their room/access info.
-        if not account_id:
+        if not entity_id:
             return
         message = {"status": True, "auth": True, "realm_id": realm.realm_id}
-        self._publish_event(account_id, "conference_access_changed", message)
+        self._publish_event(entity_id, "conference_access_changed", message)
 
     def _add_member_if_missing(self, invite, actor):
-        # For email invites target_user is often unset (only target_email is
+        # For email invites target_entity is often unset (only target_email is
         # known), so fall back to the user accepting the invite. For requests,
-        # target_user (the requester) is set and rightly takes precedence over
+        # target_entity (the requester) is set and rightly takes precedence over
         # the admin acting on it. Without this, accepted invitees never become
         # members and are forced to re-request access on every rejoin.
-        account = invite.target_user or actor
-        if not account:
+        entity = invite.target_entity or actor
+        if not entity:
             return
 
         Member.objects.get_or_create(
-            account=account,
+            entity=entity,
             realm=invite.realm,
             defaults={
                 "added_by": actor,
@@ -469,6 +469,7 @@ class InviteView(APIView):
 
     def post(self, request):
         user = self.request.user
+        entity = self.request.entity
 
         try:
             realm_id = request.data.get("realm_id")
@@ -487,7 +488,7 @@ class InviteView(APIView):
             realm = get_object_or_404(Realm, realm_id=realm_id)
             normalized_kind = "request" if kind == "request" else "invite"
             is_admin = Member.objects.filter(
-                realm=realm, account=user, role="admin"
+                realm=realm, entity=entity, role="admin"
             ).exists()
 
             if normalized_kind != "request" and not is_admin:
@@ -497,7 +498,9 @@ class InviteView(APIView):
                 )
 
             normalized_email = str(target_email).strip().lower()
-            target_user = Account.objects.filter(email__iexact=normalized_email).first()
+            target_entity = Account.objects.filter(
+                email__iexact=normalized_email
+            ).first()
 
             existing_pending_invite = (
                 Invite.objects.filter(
@@ -511,8 +514,8 @@ class InviteView(APIView):
 
             if existing_pending_invite:
                 existing_pending_invite.kind = normalized_kind
-                existing_pending_invite.target_user = target_user
-                existing_pending_invite.created_by = user
+                existing_pending_invite.target_entity = target_entity.entity
+                existing_pending_invite.created_by = entity
                 existing_pending_invite.created_at = now()
                 existing_pending_invite.resolved_at = None
                 if normalized_kind == "invite":
@@ -525,8 +528,8 @@ class InviteView(APIView):
                     kind=normalized_kind,
                     status="pending",
                     target_email=normalized_email,
-                    target_user=target_user,
-                    created_by=user,
+                    target_entity=target_entity.entity,
+                    created_by=entity,
                 )
 
             if normalized_kind == "invite":
@@ -606,10 +609,10 @@ class InviteView(APIView):
             if realm_id:
                 realm = get_object_or_404(Realm, realm_id=realm_id)
                 is_admin = Member.objects.filter(
-                    realm=realm, account=request.user, role="admin"
+                    realm=realm, entity=request.entity, role="admin"
                 ).exists()
 
-                if not is_admin and realm.created_by != request.user:
+                if not is_admin and realm.created_by != request.entity:
                     return Response(
                         {
                             "status": False,
@@ -652,6 +655,7 @@ class InviteView(APIView):
 
     def patch(self, request):
         user = self.request.user
+        entity = self.request.entity
 
         try:
             invite_token = request.data.get("invite_token")
@@ -680,9 +684,9 @@ class InviteView(APIView):
 
             is_realm_admin = (
                 Member.objects.filter(
-                    realm=invite.realm, account=user, role="admin"
+                    realm=invite.realm, entity=entity, role="admin"
                 ).exists()
-                or invite.realm.created_by == user
+                or invite.realm.created_by == entity
             )
 
             if normalized_status == "accepted":
@@ -709,7 +713,7 @@ class InviteView(APIView):
                             status=status.HTTP_401_UNAUTHORIZED,
                         )
 
-                    if invite.target_user and invite.target_user != user:
+                    if invite.target_entity and invite.target_entity != entity:
                         return Response(
                             {
                                 "status": False,
@@ -720,7 +724,7 @@ class InviteView(APIView):
 
             if normalized_status == "declined" and invite.kind == "request":
                 # Only a host/admin can decline an incoming join request.
-                if not is_realm_admin and invite.created_by != user:
+                if not is_realm_admin and invite.created_by != entity:
                     return Response(
                         {
                             "status": False,
@@ -731,10 +735,10 @@ class InviteView(APIView):
 
             if normalized_status == "revoked":
                 is_admin = Member.objects.filter(
-                    realm=invite.realm, account=user, role="admin"
+                    realm=invite.realm, entity=entity, role="admin"
                 ).exists()
 
-                if not is_admin and invite.created_by != user:
+                if not is_admin and invite.created_by != entity:
                     return Response(
                         {
                             "status": False,
@@ -747,11 +751,11 @@ class InviteView(APIView):
                 invite.status = normalized_status
                 invite.resolved_at = now()
                 if normalized_status == "accepted":
-                    invite.accepted_by_user = user
+                    invite.accepted_by_entity = entity
                 invite.save()
 
                 if normalized_status == "accepted":
-                    self._add_member_if_missing(invite, user)
+                    self._add_member_if_missing(invite, entity)
 
             # Accepting adds a member, so the participants list changed.
             if normalized_status == "accepted":
@@ -764,7 +768,7 @@ class InviteView(APIView):
                 "declined",
             }:
                 self._notify_requests_changed(invite.realm)
-                self._notify_access_changed(invite.target_user_id, invite.realm)
+                self._notify_access_changed(invite.target_entity_id, invite.realm)
 
             return Response(
                 {
@@ -779,13 +783,14 @@ class InviteView(APIView):
 
     def delete(self, request):
         user = self.request.user
+        entity = self.request.entity
 
         try:
             realm_id = request.data.get("realm_id")
             follow_id = request.data.get("follow_id")
 
             is_admin = Exists(
-                Member.objects.filter(realm__id=realm_id, account=user, role="admin")
+                Member.objects.filter(realm__id=realm_id, entity=entity, role="admin")
             )
 
             if not is_admin:
