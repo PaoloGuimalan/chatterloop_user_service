@@ -44,17 +44,17 @@ class ConnectionHelpers:
             Connection.objects.filter(
                 Q(Q(action_by=entity) | Q(involved_entity=entity)),
                 ~Q(action_by=F("involved_entity")),
-                Q(action_by__is_active=True),
-                Q(action_by__is_verified=True),
-                Q(involved_user__is_active=True),
-                Q(involved_user__is_verified=True),
+                Q(action_by__users__is_active=True),
+                Q(action_by__users__is_verified=True),
+                Q(involved_entity__users__is_active=True),
+                Q(involved_entity__users__is_verified=True),
                 status=True,
             )
             .distinct("connection_id")
             .order_by("connection_id", "-interaction_score", "-last_interaction_at")
             .values_list(
                 "action_by_id",
-                "involved_user_id",
+                "involved_entity_id",
                 "interaction_score",
                 "last_interaction_at",
             )
@@ -67,7 +67,7 @@ class ConnectionHelpers:
         )
 
         result_list = [
-            {"action_by_id": ab_id, "involved_user_id": iu_id}
+            {"action_by_id": ab_id, "involved_entity_id": iu_id}
             for ab_id, iu_id, *_ in sorted_connections
         ]
         unique_values = []

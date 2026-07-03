@@ -105,7 +105,7 @@ def log_comment_action(sender, instance, created, **kwargs):
         # )
 
         log = UserEngagementLog(
-            user_id=str(instance.user.id),
+            user_id=str(instance.entity.id),
             activity_time=now(),
             time_spent=float(0),
             activity_type="comment",
@@ -116,26 +116,27 @@ def log_comment_action(sender, instance, created, **kwargs):
 
         # bump interaction_score
 
-        if instance.user != instance.post.user:
+        if instance.entity != instance.post.entity:
             interaction_score_bump(
-                instance.user.id, instance.post.user.id, "COMMENT", False
+                instance.entity.id, instance.post.entity.id, "COMMENT", False
             )
 
-        if instance.post.author_realm:
+        if instance.post.entity:
             follower_interaction_score_bump(
-                instance.user.id, instance.post.author_realm.realm_id, "COMMENT", False
+                instance.entity.id,
+                instance.post.entity.id,
+                "COMMENT",
+                False,
             )
 
         # fan-out to timelines
 
         author_id = (
-            instance.post.author_realm.id
-            if instance.post.author_realm
-            else instance.post.user.id
+            instance.post.entity.id if instance.post.entity else instance.post.entity.id
         )
-        current_user = instance.user
+        current_user = instance.entity
 
-        lock_key = f"chatterloop:bump_lock:{str(instance.post.post_id)}:{str(instance.user.id)}:comment"
+        lock_key = f"chatterloop:bump_lock:{str(instance.post.post_id)}:{str(instance.entity.id)}:comment"
 
         if cache.add(lock_key, "active", timeout=1800):
             connections = ConnectionHelpers(current_user)
@@ -154,7 +155,7 @@ def remove_comment_log(sender, instance, **kwargs):
     # ).delete()
 
     logs = UserEngagementLog.objects.filter(
-        user_id=str(instance.user.id),
+        user_id=str(instance.entity.id),
         activity_type="comment",
         target_type="post",
         target_id=str(instance.comment_id),
@@ -179,7 +180,7 @@ def log_reaction_action(sender, instance, created, **kwargs):
         # )
 
         log = UserEngagementLog(
-            user_id=str(instance.user.id),
+            user_id=str(instance.entity.id),
             activity_time=now(),
             time_spent=float(0),
             activity_type="react",
@@ -196,7 +197,7 @@ def remove_reaction_log(sender, instance, **kwargs):
     # ).delete()
 
     logs = UserEngagementLog.objects.filter(
-        user_id=str(instance.user.id),
+        user_id=str(instance.entity.id),
         activity_type="react",
         target_type="post",
         target_id=str(instance.reaction_id),

@@ -212,7 +212,7 @@ def follower_interaction_score_bump(actor_id, receiver_id, action, is_decrease):
 
     with transaction.atomic():
         follower_log = RealmFollow.objects.select_for_update().filter(
-            follower_id=actor_id, realm_id=receiver_id
+            follower_id=actor_id, realm__entity_id=receiver_id
         )
 
         follower_log.update(

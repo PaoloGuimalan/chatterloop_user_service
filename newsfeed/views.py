@@ -223,11 +223,16 @@ class NewsfeedProfileView(APIView):
         return super().get_permissions()
 
     def get_authenticators(self):
-        """Disable authentication completely for GET and POST requests"""
+        """
+        VIEW LEVEL FIX: If a guest visits without an 'x-access-token' header,
+        completely strip the authentication class out of this execution thread.
+        This stops the custom backend from throwing "Token not defined" errors!
+        """
         if self.request.method in ["POST"]:
-            return (
-                []
-            )  # Returns an empty list, skipping your AuthenticationBackend completely
+            token = self.request.headers.get("x-access-token")
+            if not token:
+                return ()  # Returns an empty tuple, bypassing your custom backend entirely for guests!
+
         return super().get_authenticators()
 
     pagination_class = Pagination
@@ -265,8 +270,11 @@ class NewsfeedProfileView(APIView):
                 Q(entity__users__username=username)
                 | Q(tagging__entity__users__username=username)
             )
+
             if archive:
                 profile_filter = Q(entity=entity)
+
+            print(archive, profile_filter, entity)
 
             queryset = (
                 Post.objects.select_related("entity", "score")
@@ -282,7 +290,7 @@ class NewsfeedProfileView(APIView):
                     is_saved=Exists(
                         PostSave.objects.filter(post=OuterRef("pk"), entity=entity)
                     ),
-                    user_reaction=Coalesce(
+                    entity_reaction=Coalesce(
                         Subquery(user_reaction_subquery), Value(None)
                     ),
                 )
@@ -311,22 +319,28 @@ class NewsfeedPostPreviewView(APIView):
         return super().get_permissions()
 
     def get_authenticators(self):
-        """Disable authentication completely for GET and POST requests"""
+        """
+        VIEW LEVEL FIX: If a guest visits without an 'x-access-token' header,
+        completely strip the authentication class out of this execution thread.
+        This stops the custom backend from throwing "Token not defined" errors!
+        """
         if self.request.method in ["GET"]:
-            return (
-                []
-            )  # Returns an empty list, skipping your AuthenticationBackend completely
+            token = self.request.headers.get("x-access-token")
+            if not token:
+                return ()  # Returns an empty tuple, bypassing your custom backend entirely for guests!
+
         return super().get_authenticators()
 
     def get(self, request, post_id):
         user = self.request.user
+        entity = getattr(user, "entity", None)
         try:
             user_reaction_subquery = Reaction.objects.filter(
-                post=OuterRef("pk"), user=user
+                post=OuterRef("pk"), entity=entity
             ).values("emoji_id")[:1]
 
             queryset = (
-                Post.objects.select_related("user", "score", "author_realm")
+                Post.objects.select_related("entity", "score")
                 .prefetch_related(
                     "tagging",
                     "privacy_users",
@@ -336,9 +350,9 @@ class NewsfeedPostPreviewView(APIView):
                 )
                 .annotate(
                     is_saved=Exists(
-                        PostSave.objects.filter(post=OuterRef("pk"), user=user)
+                        PostSave.objects.filter(post=OuterRef("pk"), entity=entity)
                     ),
-                    user_reaction=Coalesce(
+                    entity_reaction=Coalesce(
                         Subquery(user_reaction_subquery), Value(None)
                     ),
                 )
@@ -369,11 +383,16 @@ class EmojisView(APIView):
         return super().get_permissions()
 
     def get_authenticators(self):
-        """Disable authentication completely for GET and POST requests"""
+        """
+        VIEW LEVEL FIX: If a guest visits without an 'x-access-token' header,
+        completely strip the authentication class out of this execution thread.
+        This stops the custom backend from throwing "Token not defined" errors!
+        """
         if self.request.method in ["GET"]:
-            return (
-                []
-            )  # Returns an empty list, skipping your AuthenticationBackend completely
+            token = self.request.headers.get("x-access-token")
+            if not token:
+                return ()  # Returns an empty tuple, bypassing your custom backend entirely for guests!
+
         return super().get_authenticators()
 
     def get(self, request):
@@ -603,16 +622,22 @@ class CommentsView(APIView):
         return super().get_permissions()
 
     def get_authenticators(self):
-        """Disable authentication completely for GET and POST requests"""
+        """
+        VIEW LEVEL FIX: If a guest visits without an 'x-access-token' header,
+        completely strip the authentication class out of this execution thread.
+        This stops the custom backend from throwing "Token not defined" errors!
+        """
         if self.request.method in ["GET"]:
-            return (
-                []
-            )  # Returns an empty list, skipping your AuthenticationBackend completely
+            token = self.request.headers.get("x-access-token")
+            if not token:
+                return ()  # Returns an empty tuple, bypassing your custom backend entirely for guests!
+
         return super().get_authenticators()
 
     def get(self, request):
         try:
             user = self.request.user
+            entity = getattr(user, "entity", None)
             post_id = request.GET.get("post_id")
             parent_id = request.GET.get("parent_id")
 
@@ -622,7 +647,7 @@ class CommentsView(APIView):
                 comment = Comment.objects.get(comment_id=parent_id)
                 queryset = (
                     Comment.objects.filter(post=post, parent_comment=comment)
-                    .select_related("user")
+                    .select_related("entity")
                     .order_by("created_at")
                 )
 
@@ -638,7 +663,7 @@ class CommentsView(APIView):
             else:
                 queryset = (
                     Comment.objects.filter(post=post, parent_comment=None)
-                    .select_related("user")
+                    .select_related("entity")
                     .order_by("created_at")
                 )
                 paginator = self.pagination_class()
@@ -656,6 +681,7 @@ class CommentsView(APIView):
     def post(self, request):
         try:
             user = self.request.user
+            entity = getattr(user, "entity", None)
             post_id = request.data.get("post_id")
             parent_id = request.data.get("parent_id")
             new_comment = request.data.get("new_comment")
@@ -677,14 +703,8 @@ class CommentsView(APIView):
                         post=post,
                         text=new_comment,
                         attachment=new_attachment,
-                        user=user,
+                        entity=entity,
                     )
-
-                    # activity_count_obj = ActivityCount.objects.get(
-                    #     post=post, count_type="comment"
-                    # )
-                    # activity_count_obj.count += 1
-                    # activity_count_obj.save()
 
                     reaction_ranking = PostScore.objects.get(post=post)
                     reaction_ranking.comments_count += 1
@@ -698,13 +718,13 @@ class CommentsView(APIView):
                         else parent_comment.text
                     )
 
-                    if parent_comment.user != user and post.user != user:
+                    if parent_comment.entity != entity and post.entity != entity:
                         service = NotificationService()
                         service.add_notification(
                             referenceID=new_comment_id,
                             referenceStatus=True,
-                            toUserID=parent_comment.user.id,
-                            fromUserID=user.id,
+                            toUserID=parent_comment.entity.id,
+                            fromUserID=entity.id,
                             content_headline="Replied Comment",
                             content_details=f'@{user.username} replied to your comment "{truncated_comment}"',
                             type="post_comment",
@@ -726,7 +746,7 @@ class CommentsView(APIView):
                         }
 
                         RedisPubSubClient.publish_json(
-                            f"events_{parent_comment.user.id}", data
+                            f"events_{parent_comment.entity.id}", data
                         )
 
                 else:
@@ -737,14 +757,8 @@ class CommentsView(APIView):
                         post=post,
                         text=new_comment,
                         attachment=new_attachment,
-                        user=user,
+                        entity=entity,
                     )
-
-                    # activity_count_obj = ActivityCount.objects.get(
-                    #     post=post, count_type="comment"
-                    # )
-                    # activity_count_obj.count += 1
-                    # activity_count_obj.save()
 
                     reaction_ranking = PostScore.objects.get(post=post)
                     reaction_ranking.comments_count += 1
@@ -752,13 +766,13 @@ class CommentsView(APIView):
 
                     update_ranking_score(post_id, "comment", False)
 
-                    if post.user != user:
+                    if post.entity != entity:
                         service = NotificationService()
                         service.add_notification(
                             referenceID=new_comment_id,
                             referenceStatus=True,
-                            toUserID=post.user.id,
-                            fromUserID=user.id,
+                            toUserID=post.entity.id,
+                            fromUserID=entity.id,
                             content_headline="Post Comment",
                             content_details=f"@{user.username} commented on your post.",
                             type="post_comment",
@@ -779,7 +793,7 @@ class CommentsView(APIView):
                             "dateTime": now.isoformat(),
                         }
 
-                        RedisPubSubClient.publish_json(f"events_{post.user.id}", data)
+                        RedisPubSubClient.publish_json(f"events_{post.entity.id}", data)
 
             return Response("OK", status=status.HTTP_200_OK)
         except Exception as e:
@@ -851,10 +865,11 @@ class PostSaveView(APIView):
     def post(self, request):
         try:
             user = self.request.user
+            entity = self.request.entity
             post_id = request.data.get("post_id")
 
             current_post = get_object_or_404(Post, post_id=post_id)
-            new_save_query = PostSave.objects.create(post=current_post, user=user)
+            new_save_query = PostSave.objects.create(post=current_post, entity=entity)
 
             return Response(
                 {
@@ -870,10 +885,11 @@ class PostSaveView(APIView):
     def delete(self, request):
         try:
             user = self.request.user
+            entity = self.request.entity
             post_id = request.data.get("post_id")
 
             current_post = get_object_or_404(Post, post_id=post_id)
-            PostSave.objects.filter(post=current_post, user=user).delete()
+            PostSave.objects.filter(post=current_post, entity=entity).delete()
 
             return Response(
                 {"status": True, "message": "Post has been unsaved"},
