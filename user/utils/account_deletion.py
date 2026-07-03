@@ -27,12 +27,12 @@ def delete_account(account, entity):
             deleted_at=now(), deleted_by=account
         )
         Comment.objects.filter(entity=entity, deleted_at__isnull=True).update(
-            deleted_at=now(), deleted_by=account
+            deleted_at=now(), deleted_by=entity
         )
         Reaction.objects.filter(entity=entity).delete()
         PostSave.objects.filter(entity=entity).delete()
         PostTag.objects.filter(entity=entity).delete()
-        PostPrivacy.objects.filter(entity=entity).delete()
+        PostPrivacy.objects.filter(allowed_entity=entity).delete()
 
         # Diary entries are private, non-shared content; safe to hard-delete
         # (cascades to Attachment/MapView).
