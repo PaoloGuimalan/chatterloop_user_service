@@ -136,7 +136,7 @@ class NewsfeedView(APIView):
                     is_saved=Exists(
                         PostSave.objects.filter(post=OuterRef("pk"), entity=entity)
                     ),
-                    user_reaction=Coalesce(
+                    entity_reaction=Coalesce(
                         Subquery(
                             Reaction.objects.filter(
                                 post=OuterRef("pk"), entity=entity
