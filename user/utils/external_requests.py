@@ -45,7 +45,7 @@ class PersistentEmailSender:
 
         generated_code = make_id(6)
         content = body or f"""
-Welcome to ChatterLoop!
+Hi {user_id}. Welcome to Chatterloop!
 
 Your registration was successful! Here is your verification code for the account activation: {generated_code}
             """.strip()

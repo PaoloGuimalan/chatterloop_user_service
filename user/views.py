@@ -1081,29 +1081,7 @@ class UserAccountManagement(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            username = generate_unique_username(first_name)
-
-            hashed_password = hash_password(raw_password)
-
             gender = gender.lower()
-
-            # new_user = Account(
-            #     username=username,
-            #     first_name=first_name,
-            #     middle_name=middle_name,
-            #     last_name=last_name,
-            #     email=email,
-            #     password=hashed_password,
-            #     birthdate=birthdate,
-            #     gender=gender,
-            #     profile="none",
-            #     date_created=now(),
-            #     is_active=True,
-            #     is_verified=False,
-            #     is_default_user=False,
-            #     is_superuser=False,
-            # )
-            # new_user.save()
 
             new_user = create_user(
                 first_name=first_name,
@@ -1133,7 +1111,7 @@ class UserAccountManagement(APIView):
             emailer.send_email_verification_code(
                 to_email=email,
                 subject="Verification Code",
-                user_id=username,
+                user_id=new_user.username,
                 body=None,
             )
 
@@ -1141,11 +1119,11 @@ class UserAccountManagement(APIView):
                 {
                     "status": True,
                     "message": "Account created",
-                    "username": username,
+                    "username": new_user.username,
                     "authtoken": jwt.encoder(
                         {
                             "userID": str(new_user.id),
-                            "username": username,
+                            "username": new_user.username,
                             "entity": str(new_user.entity.id),
                         }
                     ),
