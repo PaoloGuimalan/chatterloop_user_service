@@ -37,7 +37,7 @@ from user_service.services.redis import RedisPubSubClient
 from datetime import datetime
 from django.utils.timezone import make_aware
 from django.utils.timezone import now
-from .ext_models.mongomodels import Message
+from .ext_models.mongomodels import Message, Conversation
 from .services.mongohelpers import NotificationService, SessionService
 from core.models import TPAuthentication
 from .utils.bcrypt_tools import hash_password
@@ -61,6 +61,7 @@ from newsfeed.helpers.query_functions import (
     backfill_new_friend_feed,
 )
 from community.models import Realm, Member, RealmFollow, Invite
+from entity.models import Entity
 from community.serializers import RealmSerializer
 import bcrypt
 import uuid
@@ -102,7 +103,7 @@ class UserAuthentication(APIView):
 
     def get(self, request, username=None):
         me = self.request.user
-        entity = self.request.entity
+        entity = getattr(me, "entity", None)
         # user = get_object_or_404(Account, username=username)
         user_queryset = Account.objects.filter(
             username=username, is_active=True, is_verified=True, user_type="user"
@@ -113,7 +114,7 @@ class UserAuthentication(APIView):
         if len(user_queryset) > 0:
             user = user_queryset[0]
 
-            if isinstance(me, Account) and is_blocked(me, user):
+            if isinstance(entity, Entity) and is_blocked(entity, user.entity):
                 return Response(
                     {"message": "Profile not available"},
                     status=status.HTTP_404_NOT_FOUND,
@@ -125,8 +126,8 @@ class UserAuthentication(APIView):
                     Q(action_by=user.entity, involved_entity=entity)
                     | Q(action_by=entity, involved_entity=user.entity),
                     ~Q(action_by=F("involved_entity")),
-                    Q(action_by__is_active=True),
-                    Q(action_by__is_verified=True),
+                    Q(action_by__users__is_active=True),
+                    Q(action_by__users__is_verified=True),
                     Q(involved_entity__users__is_active=True),
                     Q(involved_entity__users__is_verified=True),
                     # status=True,
@@ -173,8 +174,11 @@ class UserAuthentication(APIView):
             date_str = date_created.strftime("%m/%d/%Y")
             time_str = date_created.strftime("%I:%M:%S %p").lower()
 
-            save_profile_visit(me, user.id, "profile")
-            interaction_score_bump(me.id, user.id, "PROFILE_VISIT", False)
+            if entity:
+                save_profile_visit(entity, user.entity.id, "profile")
+                interaction_score_bump(
+                    entity.id, user.entity.id, "PROFILE_VISIT", False
+                )
 
             # Build response JSON matching your example
             data = {
@@ -204,6 +208,7 @@ class UserAuthentication(APIView):
                         "is_user_connection_initiator": is_user_connection_initiator,
                     },
                     "id": str(user.id),
+                    "entityID": str(user.entity.id),
                     "userID": user.username,
                     "profile": user.profile,
                     "coverphoto": user.coverphoto,
@@ -248,10 +253,11 @@ class UserAuthentication(APIView):
                 query_filter,
             )
 
-            save_profile_visit(entity, realm_queryset.entity.id, "realm")
-            follower_interaction_score_bump(
-                entity.id, realm_queryset.entity.id, "PROFILE_VISIT", False
-            )
+            if entity:
+                save_profile_visit(entity, realm_queryset.entity.id, "realm")
+                follower_interaction_score_bump(
+                    entity.id, realm_queryset.entity.id, "PROFILE_VISIT", False
+                )
 
             serialized_realm = RealmSerializer(realm_queryset)
             data = {"data": {**serialized_realm.data}}
@@ -544,22 +550,27 @@ class UserContacts(APIView):
 
             # MongoDB aggregation pipeline for existing conversations
             users = [adduser.entity.id, entity.id]  # entity based
-            pipeline = [
-                {"$match": {"conversationType": "single"}},
-                {"$match": {"$expr": {"$setEquals": ["$receivers", users]}}},
-                {"$group": {"_id": "$conversationID"}},
-                {"$project": {"_id": 0, "conversationID": "$_id"}},
-            ]
+            # pipeline = [
+            #     {"$match": {"conversationType": "single"}},
+            #     {"$match": {"$expr": {"$setEquals": ["$participant_ids", users]}}},
+            #     {"$group": {"_id": "$conversationID"}},
+            #     {"$project": {"_id": 0, "conversationID": "$_id"}},
+            # ]
 
-            existing_connection_id = Message._get_collection().aggregate(pipeline)
-            conversation_id_list = list(
-                set(doc["conversationID"] for doc in existing_connection_id)
+            # existing_connection_id = Conversation._get_collection().aggregate(pipeline)
+
+            existing_connection = (
+                Conversation.objects(
+                    conversationType="single",
+                    participant_ids__all=[str(u) for u in users],
+                )
+                .only("conversationID")
+                .first()
             )
 
-            # Re-use existing ID if it exists, otherwise generate a fresh one correctly
             new_connection_id = (
-                conversation_id_list[0]
-                if len(conversation_id_list) == 1
+                existing_connection.conversationID
+                if existing_connection
                 else generate_random_digit(20)
             )
 
@@ -1210,7 +1221,8 @@ class UserAccountManagement(APIView):
     def delete(self, request):
         try:
             account = self.request.user
-            delete_account(account)
+            entity = self.request.entity
+            delete_account(account, entity)
 
             return Response(
                 {"status": True, "message": "Account deleted"},
@@ -1229,8 +1241,9 @@ class AccountDataExport(APIView):
     def get(self, request):
         try:
             account = self.request.user
+            entity = self.request.entity
             return Response(
-                {"status": True, "data": export_account_data(account)},
+                {"status": True, "data": export_account_data(account, entity)},
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
@@ -1356,14 +1369,16 @@ class BlockedUserList(APIView):
     def get(self, request):
         try:
             account = self.request.user
-            blocks = Block.objects.filter(blocker=account).select_related("blocked")
+            entity = self.request.entity
+            blocks = Block.objects.filter(blocker=entity).select_related("blocked")
             data = [
                 {
-                    "id": block.blocked.id,
-                    "username": block.blocked.username,
-                    "first_name": block.blocked.first_name,
-                    "last_name": block.blocked.last_name,
-                    "profile": block.blocked.profile,
+                    "id": block.blocked.users.id,
+                    "entityID": block.blocked.id,
+                    "username": block.blocked.users.username,
+                    "first_name": block.blocked.users.first_name,
+                    "last_name": block.blocked.users.last_name,
+                    "profile": block.blocked.users.profile,
                     "created_at": block.created_at,
                 }
                 for block in blocks
@@ -1378,33 +1393,34 @@ class BlockedUserList(APIView):
     def post(self, request):
         try:
             account = self.request.user
-            target_id = request.data.get("user_id")
+            entity = self.request.entity
+            target_id = request.data.get("entityID")
 
             if not target_id:
                 return Response(
-                    {"status": False, "message": "user_id is required"},
+                    {"status": False, "message": "entityID is required"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            if str(target_id) == str(account.id):
+            if str(target_id) == str(entity.id):
                 return Response(
                     {"status": False, "message": "You cannot block yourself"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            target = get_object_or_404(Account, id=target_id)
+            target = get_object_or_404(Entity, id=target_id)
 
             with transaction.atomic():
-                Block.objects.get_or_create(blocker=account, blocked=target)
+                Block.objects.get_or_create(blocker=entity, blocked=target)
 
                 Connection.objects.filter(
-                    Q(action_by=account, involved_user=target)
-                    | Q(action_by=target, involved_user=account)
+                    Q(action_by=entity, involved_entity=target)
+                    | Q(action_by=target, involved_entity=entity)
                 ).delete()
 
                 Invite.objects.filter(
-                    Q(created_by=account, target_user=target)
-                    | Q(created_by=target, target_user=account)
+                    Q(created_by=entity, target_entity=target)
+                    | Q(created_by=target, target_entity=entity)
                 ).delete()
 
             return Response(
@@ -1420,15 +1436,16 @@ class BlockedUserList(APIView):
     def delete(self, request):
         try:
             account = self.request.user
-            target_id = request.data.get("user_id")
+            entity = self.request.entity
+            target_id = request.data.get("entityID")
 
             if not target_id:
                 return Response(
-                    {"status": False, "message": "user_id is required"},
+                    {"status": False, "message": "entityID is required"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            Block.objects.filter(blocker=account, blocked_id=target_id).delete()
+            Block.objects.filter(blocker=entity, blocked_id=target_id).delete()
 
             return Response(
                 {"status": True, "message": "User unblocked"},

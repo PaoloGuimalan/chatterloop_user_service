@@ -56,6 +56,7 @@ from .helpers.query_functions import (
 )
 import uuid
 from community.models import RealmFollow, Realm
+from entity.models import Entity
 from django.shortcuts import get_object_or_404
 from user.utils.blocking import get_blocked_account_ids, is_blocked
 
@@ -233,24 +234,25 @@ class NewsfeedProfileView(APIView):
 
     def post(self, request, username):
         user = self.request.user
+        entity = getattr(user, "entity", None)
         try:
             archive_param = request.query_params.get("archive", False)
             archive = True if archive_param == "true" else False
 
             user_reaction_subquery = Reaction.objects.filter(
-                post=OuterRef("pk"), user=user
+                post=OuterRef("pk"), entity=entity
             ).values("emoji_id")[:1]
 
             viewcache = request.data.get("viewcache", [])
 
             if user.username != username:
-                save_viewcache_engagements(user, viewcache)
+                save_viewcache_engagements(entity, viewcache)
 
             realm_match = Realm.objects.filter(slug=username).first()
 
-            if not realm_match and isinstance(user, Account):
+            if not realm_match and isinstance(entity, Entity):
                 target_account = Account.objects.filter(username=username).first()
-                if target_account and is_blocked(user, target_account):
+                if target_account and is_blocked(entity, target_account.entity):
                     empty_paginator = self.pagination_class()
                     empty_page = empty_paginator.paginate_queryset(
                         Post.objects.none(), request, view=self
@@ -260,15 +262,14 @@ class NewsfeedProfileView(APIView):
                     )
 
             profile_filter = Q(
-                Q(user__username=username) | Q(tagging__user__username=username)
-            ) & Q(author_realm=None)
-            if realm_match:
-                profile_filter = Q(author_realm=realm_match)
-            elif archive:
-                profile_filter = Q(user=user) & Q(author_realm=None)
+                Q(entity__users__username=username)
+                | Q(tagging__entity__users__username=username)
+            )
+            if archive:
+                profile_filter = Q(entity=entity)
 
             queryset = (
-                Post.objects.select_related("user", "score", "author_realm")
+                Post.objects.select_related("entity", "score")
                 .prefetch_related(
                     "tagging",
                     "privacy_users",
@@ -279,7 +280,7 @@ class NewsfeedProfileView(APIView):
                 .filter(profile_filter)
                 .annotate(
                     is_saved=Exists(
-                        PostSave.objects.filter(post=OuterRef("pk"), user=user)
+                        PostSave.objects.filter(post=OuterRef("pk"), entity=entity)
                     ),
                     user_reaction=Coalesce(
                         Subquery(user_reaction_subquery), Value(None)
@@ -827,10 +828,11 @@ class PostSaveView(APIView):
     def get(self, request):
         try:
             user = self.request.user
+            entity = self.request.entity
 
             post_save_query = (
                 PostSave.objects.select_related("post")
-                .filter(user=user, post__deleted_at=None)
+                .filter(entity=entity, post__deleted_at=None)
                 .order_by("-saved_at")
             )
 

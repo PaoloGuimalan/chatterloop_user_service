@@ -85,11 +85,11 @@ def create_user(
         raise ValueError(str(ex))
 
 
-def save_profile_visit(user, profile_id, target_type):
+def save_profile_visit(entity, profile_id, target_type):
     try:
-        user_id = uuid.UUID(user.id) if isinstance(user.id, str) else user.id
+        user_id = uuid.UUID(entity.id) if isinstance(entity.id, str) else entity.id
 
-        if str(profile_id) == str(user.id):
+        if str(profile_id) == str(entity.id):
             return
 
         log = UserEngagementLog(

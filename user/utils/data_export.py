@@ -4,12 +4,10 @@ from ..models import Connection, UserConsent
 from ..ext_models.mongomodels import Message, Notification, Session
 
 
-def export_account_data(account):
+def export_account_data(account, entity):
     from community.models import Realm, Member, RealmFollow, Invite
     from diary.models import Entry
     from newsfeed.models import Post, Comment, PostSave
-
-    account_id = str(account.id)
 
     return {
         "profile": {
@@ -28,12 +26,12 @@ def export_account_data(account):
         },
         "connections": list(
             Connection.objects.filter(
-                Q(action_by=account) | Q(involved_user=account)
+                Q(action_by=entity) | Q(involved_entity=entity)
             ).values(
                 "id",
                 "connection_id",
                 "action_by_id",
-                "involved_user_id",
+                "involved_entity_id",
                 "nickname",
                 "status",
                 "action_date",
@@ -41,27 +39,27 @@ def export_account_data(account):
             )
         ),
         "consents": list(
-            UserConsent.objects.filter(user=account).values(
+            UserConsent.objects.filter(entity=entity).values(
                 "document_type", "version", "accepted_at", "ip_address", "user_agent"
             )
         ),
         "realms_created": list(
-            Realm.objects.filter(created_by=account).values(
+            Realm.objects.filter(created_by=entity).values(
                 "realm_id", "name", "type", "is_private", "created_at"
             )
         ),
         "realm_memberships": list(
-            Member.objects.filter(account=account).values(
+            Member.objects.filter(entity=entity).values(
                 "realm__realm_id", "realm__name", "role", "nickname", "date_joined"
             )
         ),
         "realm_follows": list(
-            RealmFollow.objects.filter(follower=account).values(
+            RealmFollow.objects.filter(follower=entity).values(
                 "realm__realm_id", "realm__name", "created_at"
             )
         ),
         "realm_invites_sent": list(
-            Invite.objects.filter(created_by=account).values(
+            Invite.objects.filter(created_by=entity).values(
                 "realm__realm_id", "target_email", "kind", "status", "created_at"
             )
         ),
@@ -77,7 +75,7 @@ def export_account_data(account):
             )
         ),
         "posts": list(
-            Post.objects.filter(user=account).values(
+            Post.objects.filter(entity=entity).values(
                 "post_id",
                 "caption",
                 "content_type",
@@ -88,12 +86,12 @@ def export_account_data(account):
             )
         ),
         "comments": list(
-            Comment.objects.filter(user=account).values(
+            Comment.objects.filter(entity=entity).values(
                 "comment_id", "post_id", "text", "created_at", "deleted_at"
             )
         ),
         "post_saves": list(
-            PostSave.objects.filter(user=account).values("post_id", "saved_at")
+            PostSave.objects.filter(entity=entity).values("post_id", "saved_at")
         ),
         "messages_sent": [
             {
@@ -103,7 +101,7 @@ def export_account_data(account):
                 "messageDate": doc.get("messageDate"),
                 "isDeleted": doc.get("isDeleted", False),
             }
-            for doc in Message._get_collection().find({"sender": account_id})
+            for doc in Message._get_collection().find({"sender": str(entity.id)})
         ],
         "notifications": [
             {
@@ -115,7 +113,7 @@ def export_account_data(account):
                 "date": doc.get("date"),
                 "isRead": doc.get("isRead", False),
             }
-            for doc in Notification._get_collection().find({"toUserID": account_id})
+            for doc in Notification._get_collection().find({"toUserID": str(entity.id)})
         ],
         "sessions": [
             {
@@ -124,6 +122,6 @@ def export_account_data(account):
                 "os": doc.get("os"),
                 "lastSeen": doc.get("lastSeen"),
             }
-            for doc in Session._get_collection().find({"userID": account_id})
+            for doc in Session._get_collection().find({"userID": str(entity.id)})
         ],
     }

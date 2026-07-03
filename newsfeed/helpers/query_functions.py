@@ -160,8 +160,8 @@ def interaction_score_bump(actor_id, receiver_id, action, is_decrease):
 
     with transaction.atomic():
         existing_connection_query = Connection.objects.filter(
-            Q(action_by__id=actor_id, involved_user__id=receiver_id)
-            | Q(action_by__id=receiver_id, involved_user__id=actor_id)
+            Q(action_by__id=actor_id, involved_entity__id=receiver_id)
+            | Q(action_by__id=receiver_id, involved_entity__id=actor_id)
         )
 
         connection_ids = []

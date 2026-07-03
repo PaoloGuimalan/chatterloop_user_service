@@ -7,7 +7,7 @@ from ..models import Connection, Verification
 from ..ext_models.mongomodels import Message, Notification, Session
 
 
-def delete_account(account):
+def delete_account(account, entity):
     """
     Anonymizes the account in place rather than hard-deleting the row.
     Most owned content (Realm.created_by, Post.user, Comment.user, ...)
@@ -23,28 +23,28 @@ def delete_account(account):
     account_id = account.id
 
     with transaction.atomic():
-        Post.objects.filter(user=account, deleted_at__isnull=True).update(
+        Post.objects.filter(entity=entity, deleted_at__isnull=True).update(
             deleted_at=now(), deleted_by=account
         )
-        Comment.objects.filter(user=account, deleted_at__isnull=True).update(
+        Comment.objects.filter(entity=entity, deleted_at__isnull=True).update(
             deleted_at=now(), deleted_by=account
         )
-        Reaction.objects.filter(user=account).delete()
-        PostSave.objects.filter(user=account).delete()
-        PostTag.objects.filter(user=account).delete()
-        PostPrivacy.objects.filter(allowed_user=account).delete()
+        Reaction.objects.filter(entity=entity).delete()
+        PostSave.objects.filter(entity=entity).delete()
+        PostTag.objects.filter(entity=entity).delete()
+        PostPrivacy.objects.filter(entity=entity).delete()
 
         # Diary entries are private, non-shared content; safe to hard-delete
         # (cascades to Attachment/MapView).
         Entry.objects.filter(account=account).delete()
 
-        Member.objects.filter(account=account).delete()
-        RealmFollow.objects.filter(follower=account).delete()
-        Invite.objects.filter(target_user=account).delete()
-        Invite.objects.filter(created_by=account).delete()
+        Member.objects.filter(entity=entity).delete()
+        RealmFollow.objects.filter(follower=entity).delete()
+        Invite.objects.filter(target_entity=entity).delete()
+        Invite.objects.filter(created_by=entity).delete()
 
-        Connection.objects.filter(action_by=account).delete()
-        Connection.objects.filter(involved_user=account).delete()
+        Connection.objects.filter(action_by=entity).delete()
+        Connection.objects.filter(involved_entity=entity).delete()
 
         Verification.objects.filter(user=account).delete()
 
@@ -63,11 +63,9 @@ def delete_account(account):
         account.save()
 
     # Mongo isn't part of the Postgres transaction; best-effort cleanup.
-    Message.objects(sender=str(account_id), isDeleted=False).update(
-        set__isDeleted=True
-    )
-    Notification.objects(toUserID=str(account_id)).delete()
-    Notification.objects(fromUserID=str(account_id)).delete()
-    Session.objects(userID=str(account_id)).delete()
+    Message.objects(sender=str(entity.id), isDeleted=False).update(set__isDeleted=True)
+    Notification.objects(toUserID=str(entity.id)).delete()
+    Notification.objects(fromUserID=str(entity.id)).delete()
+    Session.objects(entityID=str(entity.id)).delete()
 
     return account
