@@ -121,6 +121,12 @@ class UserAuthentication(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
+            # NOTE: a "single" connection is stored as two mirrored rows sharing
+            # the same connection_id (one per direction), so the Q() below
+            # matches both. Order by action_date so we deterministically land
+            # on the row created first, i.e. the actual requester's row —
+            # otherwise which row comes back is arbitrary and
+            # is_user_connection_initiator flips depending on query order.
             connection_exists = (
                 Connection.objects.select_related("action_by", "involved_entity")
                 .filter(
@@ -133,7 +139,7 @@ class UserAuthentication(APIView):
                     Q(involved_entity__users__is_verified=True),
                     # status=True,
                 )
-                .distinct("connection_id")
+                .order_by("action_date")
             )
 
             is_connection_present = (
@@ -156,7 +162,7 @@ class UserAuthentication(APIView):
                 # 2. FIX: Check if the 'users' (Account) relation exists on the Entity to prevent attribute crashes
                 if hasattr(connection_record.action_by, "users"):
                     is_user_connection_initiator = (
-                        connection_record.action_by.users.username == username
+                        connection_record.action_by.users.username == me.username
                     )
                 else:
                     # Fallback if the entity doesn't have an associated Account record
@@ -659,6 +665,13 @@ class UserContacts(APIView):
                 }
 
                 RedisPubSubClient.publish_json(f"events_{sse_sendToUser}", data)
+
+                emailer.send_contact_request_notification(
+                    to_email=pending_involved_user.email,
+                    from_entity_id=entity.id,
+                    to_entity_id=target_entity.id,
+                    from_username=user.username,
+                )
 
             return Response(
                 {
@@ -1445,6 +1458,101 @@ class BlockedUserList(APIView):
 
             return Response(
                 {"status": True, "message": "User unblocked"},
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            return Response(
+                {"status": False, "message": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class PokeUser(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = self.request.user
+        entity = self.request.entity
+        try:
+            target_id = request.data.get("target_id")
+            if not target_id:
+                return Response(
+                    {"status": False, "message": "target_id is required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            target_account = get_object_or_404(Account, id=target_id)
+            target_entity = target_account.entity
+
+            if target_entity == entity:
+                return Response(
+                    {"status": False, "message": "You cannot poke yourself"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if is_blocked(entity, target_entity):
+                return Response(
+                    {"status": False, "message": "You cannot poke this user"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            is_connected = Connection.objects.filter(
+                Q(action_by=entity, involved_entity=target_entity)
+                | Q(action_by=target_entity, involved_entity=entity),
+                type="single",
+                status=True,
+            ).exists()
+
+            if not is_connected:
+                return Response(
+                    {
+                        "status": False,
+                        "message": "You can only poke users you are connected with",
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            poke_reference_id = f"POKE_{generate_random_digit(20)}"
+            poke_message = f"@{user.username} poked you."
+
+            service = NotificationService()
+            service.add_notification(
+                referenceID=poke_reference_id,
+                referenceStatus=True,
+                toUserID=target_entity.id,
+                fromUserID=entity.id,
+                content_headline="New Poke",
+                content_details=poke_message,
+                type="poke",
+                isRead=False,
+            )
+
+            data = {
+                "logType": None,
+                "pod": "podless",
+                "event": "notifications",
+                "message": {
+                    "status": True,
+                    "auth": True,
+                    "message": poke_message,
+                    "result": "",
+                },
+                "dateTime": datetime.now().isoformat(),
+            }
+            RedisPubSubClient.publish_json(f"events_{target_entity.id}", data)
+
+            emailer.send_poke_notification_email(
+                to_email=target_account.email,
+                from_entity_id=entity.id,
+                to_entity_id=target_entity.id,
+                from_username=user.username,
+            )
+
+            return Response(
+                {
+                    "status": True,
+                    "message": f"You poked @{target_account.username}",
+                },
                 status=status.HTTP_200_OK,
             )
         except Exception as e:

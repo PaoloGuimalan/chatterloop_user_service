@@ -4,6 +4,7 @@ from .generators import make_id
 from user_service.settings import MAILINGSERVICE
 from django.core.mail import send_mail
 from django.conf import settings
+from user_service.services.redis import RedisPubSubClient
 import requests
 
 
@@ -105,6 +106,90 @@ Open the invite link below to continue:
         except Exception as e:
             print("Error sending realm invite email:", e)
             self._connection._is_connected = False
+            return False
+
+    def send_contact_request_notification(
+        self,
+        to_email: str,
+        from_entity_id: str,
+        to_entity_id: str,
+        from_username: str,
+        subject: str = "You have a new contact request on Chatterloop",
+        body: str = None,
+    ):
+        """
+        Notifies a user that someone added them as a contact, linking to the
+        requester's profile. Uses EMAIL_HOST_USER (the noreply/notification
+        credentials) rather than EMAIL_VERIFY_USER, since this is a
+        notification email, not an account-verification one.
+        """
+
+        if not RedisPubSubClient.acquire_email_cooldown(
+            "contact_request", from_entity_id, to_entity_id
+        ):
+            return False
+
+        profile_link = f"{settings.FRONTEND_URL}/{from_username}"
+        content = body or f"""
+@{from_username} has added you as a contact on Chatterloop.
+
+View their profile here:
+{profile_link}
+            """.strip()
+
+        try:
+            send_mail(
+                subject=subject,
+                message=content,
+                from_email=settings.EMAIL_HOST_USER,
+                recipient_list=[to_email],
+            )
+            return True
+        except Exception as e:
+            print("Error sending contact request notification email:", e)
+            return False
+
+    def send_poke_notification_email(
+        self,
+        to_email: str,
+        from_entity_id: str,
+        to_entity_id: str,
+        from_username: str,
+        subject: str = "Someone poked you on Chatterloop",
+        body: str = None,
+        cooldown_ttl: int = 3600,
+    ):
+        """
+        Notifies a user that someone poked their profile. Uses
+        EMAIL_HOST_USER, same as other notification emails. Pokes are a
+        casual, repeatable action, so this uses a shorter cooldown than the
+        contact-request email to still curb spam from someone poking
+        the same profile over and over.
+        """
+
+        if not RedisPubSubClient.acquire_email_cooldown(
+            "poke", from_entity_id, to_entity_id, ttl=cooldown_ttl
+        ):
+            return False
+
+        profile_link = f"{settings.FRONTEND_URL}/{from_username}"
+        content = body or f"""
+@{from_username} just poked you on Chatterloop.
+
+View their profile here:
+{profile_link}
+            """.strip()
+
+        try:
+            send_mail(
+                subject=subject,
+                message=content,
+                from_email=settings.EMAIL_HOST_USER,
+                recipient_list=[to_email],
+            )
+            return True
+        except Exception as e:
+            print("Error sending poke notification email:", e)
             return False
 
 

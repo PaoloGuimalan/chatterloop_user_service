@@ -46,4 +46,5 @@ urlpatterns = [
     ),
     path("blocks", views.BlockedUserList.as_view(), name="blocked-user-list"),
     path("reports", views.ReportCreate.as_view(), name="report-create"),
+    path("poke", views.PokeUser.as_view(), name="user-poke"),
 ]

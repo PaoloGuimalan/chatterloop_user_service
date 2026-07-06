@@ -41,6 +41,27 @@ class RedisPubSubClient:
         return False
 
     @classmethod
+    def acquire_email_cooldown(cls, action, from_entity_id, to_entity_id, ttl=1800):
+        """
+        Generic per-action email rate-limiter, e.g. stops rapid add/cancel/
+        re-add or repeated-poke clicks from spamming the same recipient.
+        Returns True the first time it's called for a given action/pair
+        within the cooldown window (and the email should be sent), False
+        otherwise. If Redis is unavailable, fails open so the email still
+        goes out.
+        """
+        conn = cls.get_redis_connection()
+        if not conn:
+            return True
+
+        cooldown_key = (
+            f"chatterloop:email:{action}_cooldown:{from_entity_id}:{to_entity_id}"
+        )
+        result = conn.set(cooldown_key, "1", nx=True, ex=ttl)
+
+        return result is True
+
+    @classmethod
     def get_and_toggle_feed_mode(cls, entity_id, fallback_mode="friends"):
         """
         Determines the feed mode for the current request by reading the
