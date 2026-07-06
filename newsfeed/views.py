@@ -59,6 +59,10 @@ from community.models import RealmFollow, Realm
 from entity.models import Entity
 from django.shortcuts import get_object_or_404
 from user.utils.blocking import get_blocked_account_ids, is_blocked
+from rest_framework.exceptions import PermissionDenied
+from entity.ownership import assert_owns
+from entity.permissions import Permission
+from entity.drf_permissions import RequiresPermission
 
 
 class Pagination(PageNumberPagination):
@@ -179,6 +183,9 @@ class NewsfeedView(APIView):
             post_id = request.data.get("post_id")
             fields = request.data.get("fields")
 
+            post = get_object_or_404(Post, post_id=post_id)
+            assert_owns(request, post)
+
             if fields:
                 Post.objects.filter(post_id=post_id).update(**fields)
 
@@ -190,6 +197,8 @@ class NewsfeedView(APIView):
                 },
                 status=status.HTTP_200_OK,
             )
+        except PermissionDenied:
+            raise
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -199,6 +208,15 @@ class NewsfeedView(APIView):
             post_ids = request.data.get("post_ids")
 
             if len(post_ids) > 0:
+                entity = getattr(request, "entity", None)
+                owned_count = Post.objects.filter(
+                    post_id__in=post_ids, entity_id=getattr(entity, "id", None)
+                ).count()
+                if entity is None or owned_count != len(post_ids):
+                    raise PermissionDenied(
+                        "You do not own all of the specified posts."
+                    )
+
                 Post.objects.filter(post_id__in=post_ids).update(
                     deleted_at=now(), deleted_by=user
                 )
@@ -211,6 +229,8 @@ class NewsfeedView(APIView):
                 },
                 status=status.HTTP_200_OK,
             )
+        except PermissionDenied:
+            raise
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
@@ -626,6 +646,8 @@ class CommentsView(APIView):
     def get_permissions(self):
         if self.request.method in ["GET"]:
             return [AllowAny()]
+        if self.request.method == "POST":
+            return [IsAuthenticated(), RequiresPermission(Permission.COMMENTS_CREATE)()]
         return super().get_permissions()
 
     def get_authenticators(self):
@@ -814,6 +836,7 @@ class CommentsView(APIView):
 
             with transaction.atomic():
                 current_comment = Comment.objects.get(comment_id=comment_id)
+                assert_owns(request, current_comment)
 
                 if updated_comment.strip() == "" and current_comment.attachment is None:
                     raise ValueError("No comment to save.")
@@ -823,6 +846,8 @@ class CommentsView(APIView):
                 current_comment.save()
 
             return Response("OK", status=status.HTTP_200_OK)
+        except PermissionDenied:
+            raise
         except Exception as e:
             return Response({"error": str(e)}, status=500)
 
@@ -833,11 +858,15 @@ class CommentsView(APIView):
 
             with transaction.atomic():
                 current_comment = Comment.objects.get(comment_id=comment_id)
+                assert_owns(request, current_comment)
+
                 current_comment.deleted_at = now()
                 current_comment.deleted_by = user
                 current_comment.save()
 
             return Response("OK", status=status.HTTP_200_OK)
+        except PermissionDenied:
+            raise
         except Exception as e:
             return Response({"error": str(e)}, status=500)
 

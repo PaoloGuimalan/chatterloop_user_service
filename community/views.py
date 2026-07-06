@@ -20,6 +20,8 @@ from datetime import datetime
 from user.models import Account
 from user.utils.external_requests import emailer
 from user_service.services.redis import RedisPubSubClient
+from entity.permissions import Permission
+from entity.services.permission_resolver import has_permission
 
 
 class Pagination(PageNumberPagination):
@@ -126,13 +128,9 @@ class MyRealms(APIView):
             realm_id = request.data.get("realm_id")
             fields = request.data.get("fields")
 
-            is_admin = Exists(
-                Member.objects.filter(
-                    realm__realm_id=realm_id, entity=entity, role="admin"
-                )
-            )
+            realm = get_object_or_404(Realm, realm_id=realm_id)
 
-            if not is_admin:
+            if not has_permission(entity, Permission.REALM_UPDATE, realm=realm):
                 return Response(
                     {
                         "status": False,
@@ -272,9 +270,9 @@ class RealmMembersView(APIView):
             realm_id = request.query_params.get("realm_id")
             search = request.query_params.get("search", None)
 
-            is_member = Exists(Member.objects.filter(realm__id=realm_id, entity=entity))
+            realm = get_object_or_404(Realm, id=realm_id)
 
-            if not is_member:
+            if not has_permission(entity, Permission.REALM_MEMBER_VIEW, realm=realm):
                 return Response(
                     {
                         "status": False,
@@ -368,6 +366,16 @@ class RealmFollowersView(APIView):
             follow_id = request.data.get("follow_id")
 
             realm = get_object_or_404(Realm, id=realm_id)
+
+            if not has_permission(entity, Permission.REALM_FOLLOWER_REMOVE, realm=realm):
+                return Response(
+                    {
+                        "status": False,
+                        "message": "You are not allowed to remove follower",
+                    },
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+
             unfollow_realm_queryset = RealmFollow.objects.get(
                 follow_id=follow_id, realm=realm
             )
@@ -487,11 +495,10 @@ class InviteView(APIView):
 
             realm = get_object_or_404(Realm, realm_id=realm_id)
             normalized_kind = "request" if kind == "request" else "invite"
-            is_admin = Member.objects.filter(
-                realm=realm, entity=entity, role="admin"
-            ).exists()
 
-            if normalized_kind != "request" and not is_admin:
+            if normalized_kind != "request" and not has_permission(
+                entity, Permission.REALM_INVITE_CREATE, realm=realm
+            ):
                 return Response(
                     {"status": False, "message": "You are not allowed to invite users"},
                     status=status.HTTP_401_UNAUTHORIZED,
@@ -608,11 +615,10 @@ class InviteView(APIView):
 
             if realm_id:
                 realm = get_object_or_404(Realm, realm_id=realm_id)
-                is_admin = Member.objects.filter(
-                    realm=realm, entity=request.entity, role="admin"
-                ).exists()
 
-                if not is_admin and realm.created_by != request.entity:
+                if not has_permission(
+                    request.entity, Permission.REALM_MEMBER_VIEW, realm=realm
+                ):
                     return Response(
                         {
                             "status": False,
@@ -682,17 +688,12 @@ class InviteView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            is_realm_admin = (
-                Member.objects.filter(
-                    realm=invite.realm, entity=entity, role="admin"
-                ).exists()
-                or invite.realm.created_by == entity
-            )
-
             if normalized_status == "accepted":
                 if invite.kind == "request":
                     # A host/admin approves another member's join request.
-                    if not is_realm_admin:
+                    if not has_permission(
+                        entity, Permission.REALM_REQUEST_APPROVE, realm=invite.realm
+                    ):
                         return Response(
                             {
                                 "status": False,
@@ -723,8 +724,15 @@ class InviteView(APIView):
                         )
 
             if normalized_status == "declined" and invite.kind == "request":
-                # Only a host/admin can decline an incoming join request.
-                if not is_realm_admin and invite.created_by != entity:
+                # A host/admin can decline an incoming join request, or the
+                # requester can withdraw their own request - the latter is a
+                # resource-identity check, not a grantable permission.
+                if (
+                    not has_permission(
+                        entity, Permission.REALM_REQUEST_DECLINE, realm=invite.realm
+                    )
+                    and invite.created_by_id != entity.id
+                ):
                     return Response(
                         {
                             "status": False,
@@ -734,11 +742,12 @@ class InviteView(APIView):
                     )
 
             if normalized_status == "revoked":
-                is_admin = Member.objects.filter(
-                    realm=invite.realm, entity=entity, role="admin"
-                ).exists()
-
-                if not is_admin and invite.created_by != entity:
+                if (
+                    not has_permission(
+                        entity, Permission.REALM_INVITE_REVOKE, realm=invite.realm
+                    )
+                    and invite.created_by_id != entity.id
+                ):
                     return Response(
                         {
                             "status": False,
@@ -789,11 +798,9 @@ class InviteView(APIView):
             realm_id = request.data.get("realm_id")
             follow_id = request.data.get("follow_id")
 
-            is_admin = Exists(
-                Member.objects.filter(realm__id=realm_id, entity=entity, role="admin")
-            )
+            realm = get_object_or_404(Realm, id=realm_id)
 
-            if not is_admin:
+            if not has_permission(entity, Permission.REALM_FOLLOWER_REMOVE, realm=realm):
                 return Response(
                     {
                         "status": False,

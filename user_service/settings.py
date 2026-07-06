@@ -107,6 +107,11 @@ CACHES = {
         "LOCATION": f"redis://{REDIS_USERNAME}:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0",  # Change if needed
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            # Permission checks now read through this cache on nearly every
+            # write endpoint (entity/services/permission_catalog_cache.py) -
+            # a Redis outage should fall back to direct DB queries, not 500
+            # every gated request.
+            "IGNORE_EXCEPTIONS": True,
         },
     }
 }

@@ -4,6 +4,7 @@ import secrets
 from django.db import models
 from user.models import Account
 from entity.models import Entity
+from entity.permissions import MemberRole
 from django.utils.timezone import now
 
 
@@ -22,11 +23,12 @@ def generate_invite_token():
 class Realm(models.Model):
 
     REALM_TYPE_CHOICES = [
-        ("community", "Community"),
         ("page", "Page"),
         ("server", "Server"),
         ("group", "Group"),
         ("conference", "Conference"),
+        ("channel", "Channel"),
+        ("voice", "Voice"),
     ]
 
     id = models.CharField(
@@ -99,7 +101,9 @@ class Member(models.Model):
         on_delete=models.DO_NOTHING,
         related_name="user_as_added_by",
     )
-    role = models.CharField(max_length=150, default="member")
+    role = models.CharField(
+        max_length=150, choices=MemberRole.choices, default=MemberRole.MEMBER
+    )
     date_joined = models.DateTimeField(null=True)
 
     class Meta:

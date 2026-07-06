@@ -63,6 +63,8 @@ from newsfeed.helpers.query_functions import (
 )
 from community.models import Realm, Member, RealmFollow, Invite
 from entity.models import Entity
+from entity.permissions import Permission
+from entity.drf_permissions import RequiresPermission
 from community.serializers import RealmSerializer
 import bcrypt
 import uuid
@@ -492,6 +494,11 @@ class ThirdPartyAuthentication(APIView):
 class UserContacts(APIView):
     permission_classes = [IsAuthenticated]
     pagination_class = Pagination
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsAuthenticated(), RequiresPermission(Permission.CONTACTS_REQUEST_CREATE)()]
+        return super().get_permissions()
 
     def get(self, request):
         user = self.request.user
@@ -1475,7 +1482,7 @@ class BlockedUserList(APIView):
 
 
 class PokeUser(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, RequiresPermission(Permission.POKE_CREATE)]
 
     def post(self, request):
         user = self.request.user
