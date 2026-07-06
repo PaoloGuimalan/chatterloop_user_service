@@ -102,13 +102,9 @@ class AutheticationBackend(BaseBackend):
 
             self._check_compliance(request, user)
 
-            print(decoded_header["entity"])
-
             if decoded_header["entity"]:
                 entity = Entity.objects.get(id=uuid.UUID(decoded_header["entity"]))
                 request.entity = entity
-
-                print("Entity: ", entity)
 
             return (user, True)
         except Account.DoesNotExist:

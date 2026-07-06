@@ -312,7 +312,12 @@ class UserAuthentication(APIView):
                         {
                             "status": True,
                             "result": {
-                                "usertoken": jwt.encoder(serialized_user.data),
+                                "usertoken": jwt.encoder(
+                                    {
+                                        **serialized_user.data,
+                                        "entity_id": user.entity.id,
+                                    }
+                                ),
                                 "authtoken": jwt.encoder(
                                     {
                                         "userID": str(user.id),
