@@ -149,6 +149,46 @@ View their profile here:
             print("Error sending contact request notification email:", e)
             return False
 
+    def send_contact_accepted_email(
+        self,
+        to_email: str,
+        from_entity_id: str,
+        to_entity_id: str,
+        from_username: str,
+        subject: str = "Your contact request was accepted",
+        body: str = None,
+    ):
+        """
+        Notifies the original requester that their contact request was
+        accepted, linking to the accepter's profile. Uses EMAIL_HOST_USER,
+        same as the other notification emails.
+        """
+
+        if not RedisPubSubClient.acquire_email_cooldown(
+            "contact_accepted", from_entity_id, to_entity_id
+        ):
+            return False
+
+        profile_link = f"{settings.FRONTEND_URL}/{from_username}"
+        content = body or f"""
+@{from_username} accepted your contact request on Chatterloop.
+
+View their profile here:
+{profile_link}
+            """.strip()
+
+        try:
+            send_mail(
+                subject=subject,
+                message=content,
+                from_email=settings.EMAIL_HOST_USER,
+                recipient_list=[to_email],
+            )
+            return True
+        except Exception as e:
+            print("Error sending contact accepted email:", e)
+            return False
+
     def send_poke_notification_email(
         self,
         to_email: str,

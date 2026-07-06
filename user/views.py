@@ -739,6 +739,13 @@ class UserContacts(APIView):
                             backfill_new_friend_feed(entity.id, other_user.id)
                             backfill_new_friend_feed(other_user.id, entity.id)
 
+                            emailer.send_contact_accepted_email(
+                                to_email=acceptee_update.email,
+                                from_entity_id=entity.id,
+                                to_entity_id=other_user.id,
+                                from_username=user.username,
+                            )
+
                         notifHeadline = "Accepted Request"
                         notifContent = f"@{user.username} accepted your request"
 
