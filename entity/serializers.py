@@ -24,7 +24,7 @@ class EmbeddedAccountSerializer(serializers.ModelSerializer):
 class EmbeddedRealmSerializer(serializers.ModelSerializer):
     class Meta:
         model = Realm
-        fields = ["id", "realm_id", "name", "type", "profile", "is_active"]
+        fields = ["id", "realm_id", "name", "type", "profile", "is_active", "slug"]
 
 
 class EntitySerializer(serializers.ModelSerializer):

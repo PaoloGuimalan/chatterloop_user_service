@@ -267,14 +267,18 @@ class NewsfeedProfileView(APIView):
                     )
 
             profile_filter = Q(
-                Q(entity__users__username=username)
-                | Q(tagging__entity__users__username=username)
+                Q(
+                    Q(entity__users__username=username)
+                    | Q(tagging__entity__users__username=username)
+                )
+                | Q(
+                    Q(entity__realms__slug=username)
+                    | Q(tagging__entity__realms__slug=username)
+                )
             )
 
             if archive:
                 profile_filter = Q(entity=entity)
-
-            print(archive, profile_filter, entity)
 
             queryset = (
                 Post.objects.select_related("entity", "score")

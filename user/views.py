@@ -33,6 +33,7 @@ from .utils.jwt_tools import JWTTools
 from .utils.generators import generate_random_digit
 from rest_framework.pagination import PageNumberPagination
 from django.db import transaction
+from django.db.models import Prefetch
 from user_service.services.redis import RedisPubSubClient
 from datetime import datetime
 from django.utils.timezone import make_aware
@@ -488,26 +489,34 @@ class UserContacts(APIView):
             search = request.query_params.get("search", None)
             paginated_header = request.headers.get("paginated", "true")
 
-            queryset = (
-                Connection.objects.select_related(
-                    "action_by", "involved_entity"
-                ).filter(
-                    Q(Q(action_by=entity) | Q(involved_entity=entity)),
-                    ~Q(action_by=F("involved_entity")),
-                    action_by__users__is_active=True,
-                    action_by__users__is_verified=True,
-                    involved_entity__users__is_active=True,
-                    involved_entity__users__is_verified=True,
-                    status=True,
-                )
-                # .distinct("connection_id")
-                # .order_by("connection_id", "-action_date")
-                .order_by("-action_date", "connection_id")
+            # 1. PRE-FILTER VALID USERS (Drastically cuts down join complexity)
+            active_verified_users = Account.objects.filter(
+                is_active=True, is_verified=True
             )
 
+            # 2. OPTIMIZED BASE QUERY WITH DEEP PREFETCHING
+            queryset = (
+                Connection.objects.filter(
+                    Q(action_by=entity)
+                    | Q(
+                        involved_entity=entity
+                    ),  # Re-added your original target entity filter
+                    action_by__users__in=active_verified_users,
+                    involved_entity__users__in=active_verified_users,
+                    status=True,
+                )
+                .exclude(action_by=F("involved_entity"))
+                .select_related("action_by", "involved_entity")
+                .prefetch_related(
+                    Prefetch("action_by__users", queryset=active_verified_users),
+                    Prefetch("involved_entity__users", queryset=active_verified_users),
+                )
+            )
+
+            # --- SEARCH EXTENSION ---
             if search:
                 if search.startswith("@"):
-                    domain = search.split("@")[-1]  # Safely handle the @ prefix
+                    domain = search[1:]
                     queryset = queryset.filter(
                         involved_entity__users__username__icontains=domain
                     )
@@ -518,21 +527,25 @@ class UserContacts(APIView):
                         | Q(involved_entity__users__last_name__icontains=search)
                     )
 
+            # --- CRITICAL FIX: COLLAPSE DUPLICATES BEFORE ORDERING ---
+            # .distinct() cleans up database duplicates caused by the user connection tables
+            queryset = queryset.distinct().order_by("-action_date")
+
             if paginated_header == "true":
                 paginator = self.pagination_class()
                 paginated_queryset = paginator.paginate_queryset(
                     queryset, request, view=self
                 )
-
                 serialized_result = ConnectionSerializer(paginated_queryset, many=True)
-                data = paginator.get_paginated_response(serialized_result.data)
-
-                return data
+                return paginator.get_paginated_response(serialized_result.data)
             else:
                 serialized_result = ConnectionSerializer(queryset, many=True)
                 return Response(serialized_result.data, status=status.HTTP_200_OK)
+
         except Exception as e:
-            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     def post(self, request):
         user = self.request.user  # This is an Account
