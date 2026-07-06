@@ -239,7 +239,7 @@ class NewsfeedProfileView(APIView):
 
     def post(self, request, username):
         user = self.request.user
-        entity = getattr(user, "entity", None)
+        entity = getattr(self.request, "entity", None)
         try:
             archive_param = request.query_params.get("archive", False)
             archive = True if archive_param == "true" else False
@@ -337,7 +337,7 @@ class NewsfeedPostPreviewView(APIView):
 
     def get(self, request, post_id):
         user = self.request.user
-        entity = getattr(user, "entity", None)
+        entity = getattr(self.request, "entity", None)
         try:
             user_reaction_subquery = Reaction.objects.filter(
                 post=OuterRef("pk"), entity=entity
@@ -644,7 +644,7 @@ class CommentsView(APIView):
     def get(self, request):
         try:
             user = self.request.user
-            entity = getattr(user, "entity", None)
+            entity = getattr(self.request, "entity", None)
             post_id = request.GET.get("post_id")
             parent_id = request.GET.get("parent_id")
 
@@ -688,7 +688,7 @@ class CommentsView(APIView):
     def post(self, request):
         try:
             user = self.request.user
-            entity = getattr(user, "entity", None)
+            entity = getattr(self.request, "entity", None)
             post_id = request.data.get("post_id")
             parent_id = request.data.get("parent_id")
             new_comment = request.data.get("new_comment")

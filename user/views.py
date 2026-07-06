@@ -104,7 +104,7 @@ class UserAuthentication(APIView):
 
     def get(self, request, username=None):
         me = self.request.user
-        entity = getattr(me, "entity", None)
+        entity = getattr(self.request, "entity", None)
         # user = get_object_or_404(Account, username=username)
         user_queryset = Account.objects.filter(
             username=username, is_active=True, is_verified=True, user_type="user"
