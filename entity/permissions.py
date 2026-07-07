@@ -66,6 +66,16 @@ class Permission:
     REALM_DELETE = "realm.delete"
     REALM_OWNERSHIP_TRANSFER = "realm.ownership.transfer"
 
+    # --- Entity-type-scope capabilities (resolved via the acting entity's own
+    # .type - user vs realm - unlike REALM_SCOPED above, which is about a
+    # Member.role within some OTHER realm being visited/administered) ---
+    MODULE_DIARY_ACCESS = "module.diary.access"
+    MODULE_POKE_ACCESS = "module.poke.access"
+    MODULE_CONTACTS_ACCESS = "module.contacts.access"
+    MODULE_PAGE_DASHBOARD_ACCESS = "module.page_dashboard.access"
+    MODULE_PAGE_MEMBERS_ACCESS = "module.page_members.access"
+    MODULE_PAGE_INVITES_ACCESS = "module.page_invites.access"
+
     GLOBAL_SCOPED = {
         MESSAGES_SEND,
         MESSAGES_REACT,
@@ -96,7 +106,16 @@ class Permission:
         REALM_OWNERSHIP_TRANSFER,
     }
 
-    ALL = GLOBAL_SCOPED | REALM_SCOPED
+    ENTITY_TYPE_SCOPED = {
+        MODULE_DIARY_ACCESS,
+        MODULE_POKE_ACCESS,
+        MODULE_CONTACTS_ACCESS,
+        MODULE_PAGE_DASHBOARD_ACCESS,
+        MODULE_PAGE_MEMBERS_ACCESS,
+        MODULE_PAGE_INVITES_ACCESS,
+    }
+
+    ALL = GLOBAL_SCOPED | REALM_SCOPED | ENTITY_TYPE_SCOPED
 
 
 # Role -> set of realm-scoped permissions granted by default when no

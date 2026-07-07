@@ -65,6 +65,7 @@ class EntityPermission(models.Model):
 class PermissionScope(models.TextChoices):
     GLOBAL = "global", "Global"
     REALM = "realm", "Realm"
+    ENTITY_TYPE = "entity_type", "Entity Type"
     # Future: API = "api", "Api" - additive, no migration rewrite needed later.
 
 
@@ -84,7 +85,7 @@ class PermissionCatalogEntry(models.Model):
 
     codename = models.CharField(max_length=150, unique=True)  # e.g. "posts.create"
     description = models.TextField(blank=True, default="")
-    scope = models.CharField(max_length=10, choices=PermissionScope.choices)
+    scope = models.CharField(max_length=20, choices=PermissionScope.choices)
     is_active = models.BooleanField(default=True)  # soft-disable without deleting
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -119,3 +120,49 @@ class RolePermission(models.Model):
 
     def __str__(self):
         return f"{self.role} -> {self.permission.codename}"
+
+
+class EntityTypeDefaultPermission(models.Model):
+    """
+    Entity.type -> default permission mapping, for permissions whose
+    resolution depends on the ACTING entity's own fundamental type (e.g.
+    "does this entity see the Page Dashboard module" vs "does this entity
+    see the Diary module") rather than on a realm-scoped Member.role.
+
+    Distinct axis from RolePermission: RolePermission answers "what can
+    this entity do WITHIN a specific realm it is a member of" (e.g. can an
+    admin of realm X update realm X). This model answers "what does this
+    entity fundamentally get, everywhere, by virtue of being a user vs a
+    realm" - independent of any specific realm the entity might currently
+    be visiting or a member of. Scoped to PermissionCatalogEntry rows with
+    scope=PermissionScope.ENTITY_TYPE, always checked with realm=None (same
+    call shape as global-scoped permissions), resolved against this table
+    keyed by entity.type instead of GLOBAL_PLATFORM_DEFAULT's predicates.
+
+    Keyed on the coarse Entity.type (user/bot/realm), not the finer-grained
+    Realm.type (page/server/group/...) - module gating is a UI-shell-level
+    concern (personal vs. institutional), and drilling into Realm.type would
+    cost an extra query hop on every permission check for no current
+    benefit. If individual realm types ever need to diverge from their
+    entity type's default, use EntityPermission's existing nullable `realm`
+    FK for a per-realm exception instead of adding a new model.
+    """
+
+    entity_type = models.CharField(max_length=20, choices=EntityType.choices)
+    permission = models.ForeignKey(
+        PermissionCatalogEntry,
+        on_delete=models.CASCADE,
+        related_name="entity_type_grants",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["entity_type", "permission"],
+                name="unique_entity_type_permission",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.entity_type} -> {self.permission.codename}"

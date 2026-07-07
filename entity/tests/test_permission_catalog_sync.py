@@ -40,5 +40,14 @@ class PermissionCatalogSyncTests(TestCase):
                 "codename", flat=True
             )
         )
+        entity_type_rows = set(
+            PermissionCatalogEntry.objects.filter(scope="entity_type").values_list(
+                "codename", flat=True
+            )
+        )
         self.assertEqual(global_rows & Permission.GLOBAL_SCOPED, Permission.GLOBAL_SCOPED)
         self.assertEqual(realm_rows & Permission.REALM_SCOPED, Permission.REALM_SCOPED)
+        self.assertEqual(
+            entity_type_rows & Permission.ENTITY_TYPE_SCOPED,
+            Permission.ENTITY_TYPE_SCOPED,
+        )

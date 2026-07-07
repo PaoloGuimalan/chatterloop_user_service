@@ -21,6 +21,14 @@ def generate_random_digit(digit):
     return str(random.randint(start, end))
 
 
+def generate_ver_code():
+    return generate_random_digit(5)
+
+
+def generate_connection_id():
+    return generate_random_digit(20)
+
+
 def calculate_age(birthdate):
     if birthdate is None:
         return None
@@ -118,7 +126,7 @@ class Verification(models.Model):
     )
     user = models.ForeignKey(Account, null=False, on_delete=models.DO_NOTHING)
     ver_code = models.CharField(
-        max_length=6, default=generate_random_digit(5), null=False
+        max_length=6, default=generate_ver_code, null=False
     )
     date_generated = models.DateTimeField(default=now)
     is_used = models.BooleanField(default=False)
@@ -133,7 +141,7 @@ class Connection(models.Model):
     id = models.CharField(
         max_length=150, default=uuid.uuid4, unique=True, primary_key=True
     )
-    connection_id = models.CharField(max_length=150, default=generate_random_digit(20))
+    connection_id = models.CharField(max_length=150, default=generate_connection_id)
     action_by = models.ForeignKey(
         Entity,
         null=False,

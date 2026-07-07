@@ -13,7 +13,14 @@ from .serializers import (
     InviteSerializer,
 )
 from django.shortcuts import get_object_or_404
-from django.db.models import Q, Exists, OuterRef, Count
+from django.db.models import (
+    Q,
+    Exists,
+    OuterRef,
+    Count,
+    ExpressionWrapper,
+    BooleanField,
+)
 from django.db import transaction
 from django.utils.timezone import now
 from datetime import datetime
@@ -44,15 +51,29 @@ class TopRealms(APIView):
             top_realm_queryset = Realm.objects.annotate(
                 followers_count=Count("followers", distinct=True),
                 members=Count("member", distinct=True),
-                is_admin=Exists(
-                    Member.objects.filter(
-                        Q(Q(role="admin") | Q(role="owner")),
-                        realm=OuterRef("pk"),
-                        entity=entity,
+                # A page's own entity is never itself a Member row of its
+                # realm (Member rows only ever represent personal accounts),
+                # so once switched to act as a page, `entity` IS the realm's
+                # own entity and the Member-based Exists() below would always
+                # miss for that realm. `Q(entity=entity)` catches exactly
+                # that self-administration case.
+                is_admin=ExpressionWrapper(
+                    Q(
+                        Exists(
+                            Member.objects.filter(
+                                Q(Q(role="admin") | Q(role="owner")),
+                                realm=OuterRef("pk"),
+                                entity=entity,
+                            )
+                        )
                     )
+                    | Q(entity=entity),
+                    output_field=BooleanField(),
                 ),
-                is_member=Exists(
-                    Member.objects.filter(realm=OuterRef("pk"), entity=entity)
+                is_member=ExpressionWrapper(
+                    Q(Exists(Member.objects.filter(realm=OuterRef("pk"), entity=entity)))
+                    | Q(entity=entity),
+                    output_field=BooleanField(),
                 ),
                 is_follower=Exists(
                     RealmFollow.objects.filter(realm=OuterRef("pk"), follower=entity)
@@ -92,15 +113,26 @@ class MyRealms(APIView):
             my_realm_queryset = Realm.objects.annotate(
                 followers_count=Count("followers", distinct=True),
                 members=Count("member", distinct=True),
-                is_admin=Exists(
-                    Member.objects.filter(
-                        Q(Q(role="admin") | Q(role="owner")),
-                        realm=OuterRef("pk"),
-                        entity=entity,
+                # See TopRealms.get() above: `Q(entity=entity)` covers acting
+                # as a page whose own entity can never be a Member row of
+                # its own realm.
+                is_admin=ExpressionWrapper(
+                    Q(
+                        Exists(
+                            Member.objects.filter(
+                                Q(Q(role="admin") | Q(role="owner")),
+                                realm=OuterRef("pk"),
+                                entity=entity,
+                            )
+                        )
                     )
+                    | Q(entity=entity),
+                    output_field=BooleanField(),
                 ),
-                is_member=Exists(
-                    Member.objects.filter(realm=OuterRef("pk"), entity=entity)
+                is_member=ExpressionWrapper(
+                    Q(Exists(Member.objects.filter(realm=OuterRef("pk"), entity=entity)))
+                    | Q(entity=entity),
+                    output_field=BooleanField(),
                 ),
                 is_follower=Exists(
                     RealmFollow.objects.filter(realm=OuterRef("pk"), follower=entity)
@@ -174,15 +206,32 @@ class FollowRealmView(APIView):
                 Realm.objects.annotate(
                     followers_count=Count("followers", distinct=True),
                     members=Count("member", distinct=True),
-                    is_admin=Exists(
-                        Member.objects.filter(
-                            Q(Q(role="admin") | Q(role="owner")),
-                            realm=OuterRef("pk"),
-                            entity=entity,
+                    # See TopRealms.get() above: `Q(entity=entity)` covers
+                    # acting as a page whose own entity can never be a
+                    # Member row of its own realm.
+                    is_admin=ExpressionWrapper(
+                        Q(
+                            Exists(
+                                Member.objects.filter(
+                                    Q(Q(role="admin") | Q(role="owner")),
+                                    realm=OuterRef("pk"),
+                                    entity=entity,
+                                )
+                            )
                         )
+                        | Q(entity=entity),
+                        output_field=BooleanField(),
                     ),
-                    is_member=Exists(
-                        Member.objects.filter(realm=OuterRef("pk"), entity=entity)
+                    is_member=ExpressionWrapper(
+                        Q(
+                            Exists(
+                                Member.objects.filter(
+                                    realm=OuterRef("pk"), entity=entity
+                                )
+                            )
+                        )
+                        | Q(entity=entity),
+                        output_field=BooleanField(),
                     ),
                     is_follower=Exists(
                         RealmFollow.objects.filter(

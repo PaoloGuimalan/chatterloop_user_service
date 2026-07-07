@@ -29,6 +29,7 @@ from django_redis import get_redis_connection
 
 CATALOG_CACHE_KEY = "permcache:catalog:v1"
 ROLE_MATRIX_CACHE_KEY = "permcache:role_matrix:v1"
+ENTITY_TYPE_MATRIX_CACHE_KEY = "permcache:entity_type_matrix:v1"
 CACHE_TTL_SECONDS = 60 * 60  # safety-net only; invalidation is signal-driven
 
 
@@ -94,9 +95,32 @@ def get_role_matrix():
     return matrix
 
 
+def get_entity_type_matrix():
+    """entity_type -> [codename, ...], joined against active permissions only."""
+    cached = _redis_get(ENTITY_TYPE_MATRIX_CACHE_KEY)
+    if cached is not None:
+        return json.loads(cached)
+
+    from entity.models import EntityTypeDefaultPermission
+
+    matrix = {}
+    entity_type_permissions = EntityTypeDefaultPermission.objects.filter(
+        permission__is_active=True
+    ).select_related("permission")
+    for etp in entity_type_permissions:
+        matrix.setdefault(etp.entity_type, []).append(etp.permission.codename)
+
+    _redis_set(ENTITY_TYPE_MATRIX_CACHE_KEY, json.dumps(matrix))
+    return matrix
+
+
 def invalidate_catalog_cache():
     _redis_delete(CATALOG_CACHE_KEY)
 
 
 def invalidate_role_matrix_cache():
     _redis_delete(ROLE_MATRIX_CACHE_KEY)
+
+
+def invalidate_entity_type_matrix_cache():
+    _redis_delete(ENTITY_TYPE_MATRIX_CACHE_KEY)

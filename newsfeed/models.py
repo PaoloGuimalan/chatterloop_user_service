@@ -19,6 +19,10 @@ def generate_random_digit(digit):
     return str(random.randint(start, end))
 
 
+def generate_post_id():
+    return generate_random_digit(25)
+
+
 class Post(models.Model):
     PRIVACY_STATUS_CHOICES = [
         ("public", "Public"),
@@ -28,7 +32,7 @@ class Post(models.Model):
 
     post_id = models.CharField(
         max_length=150,
-        default=generate_random_digit(25),
+        default=generate_post_id,
         unique=True,
         blank=True,
         primary_key=True,

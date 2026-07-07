@@ -14,6 +14,7 @@ from django.db.models import (
     Value,
     Subquery,
     Count,
+    ExpressionWrapper,
 )
 from .models import (
     Account,
@@ -65,6 +66,7 @@ from community.models import Realm, Member, RealmFollow, Invite
 from entity.models import Entity
 from entity.permissions import Permission
 from entity.drf_permissions import RequiresPermission
+from entity.utils import get_entity_display_name, get_entity_profile_path
 from community.serializers import RealmSerializer
 import bcrypt
 import uuid
@@ -245,15 +247,35 @@ class UserAuthentication(APIView):
             realm_queryset = get_object_or_404(
                 Realm.objects.annotate(
                     followers_count=Count("followers"),
-                    is_admin=Exists(
-                        Member.objects.filter(
-                            Q(Q(role="admin") | Q(role="owner")),
-                            realm=OuterRef("pk"),
-                            entity=entity,
+                    # A page's own entity can never appear as a Member row of
+                    # its own realm (Member rows only ever represent personal
+                    # accounts) - so while switched to act as this exact page,
+                    # `entity` IS the realm's own entity and the Member-based
+                    # Exists() below would always miss. `Q(entity=entity)`
+                    # covers that self-administration case directly.
+                    is_admin=ExpressionWrapper(
+                        Q(
+                            Exists(
+                                Member.objects.filter(
+                                    Q(Q(role="admin") | Q(role="owner")),
+                                    realm=OuterRef("pk"),
+                                    entity=entity,
+                                )
+                            )
                         )
+                        | Q(entity=entity),
+                        output_field=BooleanField(),
                     ),
-                    is_member=Exists(
-                        Member.objects.filter(realm=OuterRef("pk"), entity=entity)
+                    is_member=ExpressionWrapper(
+                        Q(
+                            Exists(
+                                Member.objects.filter(
+                                    realm=OuterRef("pk"), entity=entity
+                                )
+                            )
+                        )
+                        | Q(entity=entity),
+                        output_field=BooleanField(),
                     ),
                     is_follower=Exists(
                         RealmFollow.objects.filter(
@@ -652,14 +674,14 @@ class UserContacts(APIView):
                     toUserID=target_entity.id,
                     fromUserID=entity.id,
                     content_headline="Contact Request",
-                    content_details=f"@{user.username} have sent a contact request for you.",
+                    content_details=f"{get_entity_display_name(entity)} have sent a contact request for you.",
                     type="contact_request",
                     isRead=False,
                 )
 
                 sse_sendToUser = target_entity.id
                 sse_sendToDetails = (
-                    f"@{user.username} have sent a contact request for you."
+                    f"{get_entity_display_name(entity)} have sent a contact request for you."
                 )
 
                 now = datetime.now()
@@ -682,7 +704,7 @@ class UserContacts(APIView):
                     to_email=pending_involved_user.email,
                     from_entity_id=entity.id,
                     to_entity_id=target_entity.id,
-                    from_username=user.username,
+                    from_username=get_entity_profile_path(entity),
                 )
 
             return Response(
@@ -755,11 +777,11 @@ class UserContacts(APIView):
                                 to_email=acceptee_update.email,
                                 from_entity_id=entity.id,
                                 to_entity_id=other_user.id,
-                                from_username=user.username,
+                                from_username=get_entity_profile_path(entity),
                             )
 
                         notifHeadline = "Accepted Request"
-                        notifContent = f"@{user.username} accepted your request"
+                        notifContent = f"{get_entity_display_name(entity)} accepted your request"
 
                         service = NotificationService()
                         service.add_notification(
@@ -889,7 +911,7 @@ class UserContacts(APIView):
 
                     if updated and action == "decline":
                         notifHeadline = "Declined Request"
-                        notifContent = f"@{user.username} declined your request"
+                        notifContent = f"{get_entity_display_name(entity)} declined your request"
 
                         service = NotificationService()
                         service.add_notification(
@@ -1532,7 +1554,7 @@ class PokeUser(APIView):
                 )
 
             poke_reference_id = f"POKE_{generate_random_digit(20)}"
-            poke_message = f"@{user.username} poked you."
+            poke_message = f"{get_entity_display_name(entity)} poked you."
 
             service = NotificationService()
             service.add_notification(
@@ -1564,7 +1586,7 @@ class PokeUser(APIView):
                 to_email=target_account.email,
                 from_entity_id=entity.id,
                 to_entity_id=target_entity.id,
-                from_username=user.username,
+                from_username=get_entity_profile_path(entity),
             )
 
             return Response(

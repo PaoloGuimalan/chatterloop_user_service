@@ -20,6 +20,14 @@ def generate_invite_token():
     return secrets.token_urlsafe(16)
 
 
+def generate_realm_uid():
+    # Matches the id format Node's server repo already generates for realms
+    # (createRealmReusable / makeID(20)-style numeric strings) rather than a
+    # uuid4 - realm_id used to independently generate this way; id is now
+    # the source of that value and realm_id mirrors it (see save() below).
+    return generate_random_digit(15)
+
+
 class Realm(models.Model):
 
     REALM_TYPE_CHOICES = [
@@ -32,14 +40,23 @@ class Realm(models.Model):
     ]
 
     id = models.CharField(
-        max_length=150, default=uuid.uuid4, unique=True, blank=True, primary_key=True
+        max_length=150,
+        default=generate_realm_uid,
+        unique=True,
+        blank=True,
+        primary_key=True,
     )
     entity = models.OneToOneField(
         Entity, unique=True, on_delete=models.CASCADE, related_name="realms"
     )
+    # Always kept equal to `id` (see save() below) - community_realm.realm_id
+    # and .id must always be the same value. Node's createRealmReusable
+    # (server repo) already enforces this by generating one id and writing
+    # it to both columns; this mirrors that invariant on the Django side so
+    # any Django-created Realm (e.g. via Realm.objects.create()) can't drift.
     realm_id = models.CharField(
         max_length=150,
-        default=f"{generate_random_digit(15)}",
+        blank=True,
         unique=True,
     )
     name = models.CharField(max_length=150, null=False)
@@ -76,6 +93,12 @@ class Realm(models.Model):
     expires_at = models.DateTimeField(null=True)
     created_at = models.DateTimeField(default=now)
     ranking_score = models.FloatField(default=0.0, db_index=True)
+
+    def save(self, *args, **kwargs):
+        # Enforced unconditionally, not just "if blank" - id and realm_id
+        # must always be the same value, full stop.
+        self.realm_id = self.id
+        super().save(*args, **kwargs)
 
 
 class Member(models.Model):
