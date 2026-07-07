@@ -12,7 +12,7 @@ def get_entity_display_name(entity):
         return f"@{account.username}"
     realm = getattr(entity, "realms", None)
     if realm is not None:
-        return realm.name
+        return f"@{realm.slug}"
     return str(entity.id)
 
 

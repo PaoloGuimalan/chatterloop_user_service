@@ -43,6 +43,7 @@ from user.serializers import ConnectionSerializer
 from rest_framework.pagination import PageNumberPagination
 from user.services.connections import ConnectionHelpers
 from user.services.mongohelpers import NotificationService
+from entity.utils import get_entity_display_name
 from user_service.services.redis import RedisPubSubClient
 from django.utils.timezone import now
 from datetime import datetime
@@ -477,14 +478,14 @@ class PostReactionsView(APIView):
                         toUserID=post.entity.id,
                         fromUserID=entity.id,
                         content_headline="Post Reaction",
-                        content_details=f"@{user.username} reacted {emoji.emoji_content} to your post.",
+                        content_details=f"{get_entity_display_name(entity)} reacted {emoji.emoji_content} to your post.",
                         type="post_reaction",
                         isRead=False,
                     )
 
                     sse_sendToUser = post.entity.id
                     sse_sendToDetails = (
-                        f"@{user.username} reacted {emoji.emoji_content} to your post."
+                        f"{get_entity_display_name(entity)} reacted {emoji.emoji_content} to your post."
                     )
 
                     now = datetime.now()
@@ -537,11 +538,11 @@ class PostReactionsView(APIView):
                     service = NotificationService()
                     service.update_content(
                         reaction_id=reaction.reaction_id,
-                        new_content=f"@{user.username} reacted {new_emoji.emoji_content} to your post.",
+                        new_content=f"{get_entity_display_name(entity)} reacted {new_emoji.emoji_content} to your post.",
                     )
 
                     sse_sendToUser = post.entity.id
-                    sse_sendToDetails = f"@{user.username} reacted {new_emoji.emoji_content} to your post."
+                    sse_sendToDetails = f"{get_entity_display_name(entity)} reacted {new_emoji.emoji_content} to your post."
 
                     now = datetime.now()
                     data = {
@@ -755,7 +756,7 @@ class CommentsView(APIView):
                             toUserID=parent_comment.entity.id,
                             fromUserID=entity.id,
                             content_headline="Replied Comment",
-                            content_details=f'@{user.username} replied to your comment "{truncated_comment}"',
+                            content_details=f'{get_entity_display_name(entity)} replied to your comment "{truncated_comment}"',
                             type="post_comment",
                             isRead=False,
                         )
@@ -768,7 +769,7 @@ class CommentsView(APIView):
                             "message": {
                                 "status": True,
                                 "auth": True,
-                                "message": f'@{user.username} replied to your comment "{truncated_comment}"',
+                                "message": f'{get_entity_display_name(entity)} replied to your comment "{truncated_comment}"',
                                 "result": "",
                             },
                             "dateTime": now.isoformat(),
@@ -803,7 +804,7 @@ class CommentsView(APIView):
                             toUserID=post.entity.id,
                             fromUserID=entity.id,
                             content_headline="Post Comment",
-                            content_details=f"@{user.username} commented on your post.",
+                            content_details=f"{get_entity_display_name(entity)} commented on your post.",
                             type="post_comment",
                             isRead=False,
                         )
@@ -816,7 +817,7 @@ class CommentsView(APIView):
                             "message": {
                                 "status": True,
                                 "auth": True,
-                                "message": f"@{user.username} commented on your post.",
+                                "message": f"{get_entity_display_name(entity)} commented on your post.",
                                 "result": "",
                             },
                             "dateTime": now.isoformat(),
