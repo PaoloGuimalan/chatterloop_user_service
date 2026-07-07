@@ -30,6 +30,7 @@ def create_user(
     birthyear,
     gender,
     join_type,
+    is_verified,
 ):
     try:
         if not middle_name or middle_name.strip() == "":
@@ -71,7 +72,7 @@ def create_user(
             profile="none",
             date_created=now(),
             is_active=True,
-            is_verified=True,
+            is_verified=is_verified,
             is_default_user=True,
             is_superuser=False,
             join_type=join_type,

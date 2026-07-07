@@ -472,6 +472,10 @@ class ThirdPartyAuthentication(APIView):
                             None,
                             None,
                             "google",
+                            # Google's OAuth flow already establishes email
+                            # ownership - no separate code-verification step
+                            # for this path, unlike manual registration.
+                            True,
                         )
 
                         if create_user_query:
@@ -1180,6 +1184,10 @@ class UserAccountManagement(APIView):
                 birthyear=birthyear,
                 gender=gender,
                 join_type="system",
+                # Manual registration must go through CodeVerification - the
+                # email below is that code, and is_verified only flips True
+                # once the correct code is submitted.
+                is_verified=False,
             )
 
             session = SessionService()

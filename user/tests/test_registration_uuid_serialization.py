@@ -5,6 +5,7 @@ from rest_framework.test import APIRequestFactory
 
 from core.models import TPAuthentication
 from user.ext_models.mongomodels import Session
+from user.models import Account
 from user.utils.jwt_tools import JWTTools
 from user.views import ThirdPartyAuthentication, UserAccountManagement
 
@@ -58,13 +59,18 @@ class RegistrationUuidSerializationTests(TestCase):
         self.assertIn("usertoken", response.data["result"])
         self.assertIn("authtoken", response.data["result"])
 
+        # Google's OAuth already established email ownership - no separate
+        # code-verification step for this path.
+        self.assertTrue(Account.objects.get(email=email).is_verified)
+
     def test_regular_registration_does_not_crash(self):
+        email = f"{uuid.uuid4()}@example.com"
         request = self.factory.post(
             "/api/user/me",
             {
                 "firstName": "Test",
                 "lastName": "User",
-                "email": f"{uuid.uuid4()}@example.com",
+                "email": email,
                 "password": "Sup3rSecret!",
                 "gender": "male",
                 "agreedToTerms": True,
@@ -82,3 +88,7 @@ class RegistrationUuidSerializationTests(TestCase):
         self.assertTrue(response.data["status"])
         self.assertIn("usertoken", response.data)
         self.assertIn("authtoken", response.data)
+
+        # Manual registration must go through CodeVerification - the account
+        # should NOT be marked verified just from filling out the form.
+        self.assertFalse(Account.objects.get(email=email).is_verified)
