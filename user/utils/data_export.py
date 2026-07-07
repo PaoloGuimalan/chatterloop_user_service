@@ -122,6 +122,6 @@ def export_account_data(account, entity):
                 "os": doc.get("os"),
                 "lastSeen": doc.get("lastSeen"),
             }
-            for doc in Session._get_collection().find({"userID": str(entity.id)})
+            for doc in Session._get_collection().find({"entityID": str(entity.id)})
         ],
     }

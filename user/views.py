@@ -39,7 +39,7 @@ from user_service.services.redis import RedisPubSubClient
 from datetime import datetime
 from django.utils.timezone import make_aware
 from django.utils.timezone import now
-from .ext_models.mongomodels import Message, Conversation
+from .ext_models.mongomodels import Message, Conversation, Session
 from .services.mongohelpers import NotificationService, SessionService
 from core.models import TPAuthentication
 from .utils.bcrypt_tools import hash_password
@@ -64,7 +64,7 @@ from newsfeed.helpers.query_functions import (
 )
 from community.models import Realm, Member, RealmFollow, Invite
 from entity.models import Entity
-from entity.permissions import Permission
+from entity.permissions import Permission, MemberRole
 from entity.drf_permissions import RequiresPermission
 from entity.utils import get_entity_display_name, get_entity_profile_path
 from community.serializers import RealmSerializer
@@ -337,7 +337,7 @@ class UserAuthentication(APIView):
 
                     session = SessionService()
 
-                    if not session.exists(device_token, user.id):
+                    if not session.exists(device_token, user.entity.id):
                         session.add_session(request, user.entity.id, device_token)
 
                     return Response(
@@ -1499,6 +1499,84 @@ class BlockedUserList(APIView):
 
             return Response(
                 {"status": True, "message": "User unblocked"},
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            return Response(
+                {"status": False, "message": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class DeviceSessionList(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def _allowed_entity_ids(self, entity):
+        """Personal entity + every page/realm entity this account can
+        switch into - mirrors EntitySwitch's own admin/owner membership
+        check, so a revoke can never reach an entity this device could not
+        have legitimately held a session for."""
+        page_entity_ids = Member.objects.filter(
+            entity=entity, role__in=[MemberRole.OWNER, MemberRole.ADMIN]
+        ).values_list("realm__entity_id", flat=True)
+        return [str(entity.id), *[str(e) for e in page_entity_ids]]
+
+    def get(self, request):
+        try:
+            entity = self.request.entity
+            device_token = request.headers.get("device-token")
+
+            session = SessionService()
+            sessions = session.list_for_entity(entity.id)
+
+            data = [
+                {
+                    "sessionID": s.sessionID,
+                    "deviceType": s.deviceType,
+                    "browser": s.browser,
+                    "os": s.os,
+                    "ip": s.ip,
+                    "status": s.status,
+                    "lastSeen": s.lastSeen,
+                    "is_current_device": s.deviceToken == device_token,
+                }
+                for s in sessions
+            ]
+            return Response({"status": True, "data": data}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response(
+                {"status": False, "message": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    def delete(self, request):
+        try:
+            entity = self.request.entity
+            session_id = request.data.get("sessionID")
+
+            if not session_id:
+                return Response(
+                    {"status": False, "message": "sessionID is required"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            allowed_ids = self._allowed_entity_ids(entity)
+
+            target_session = Session.objects(
+                sessionID=session_id, entityID__in=allowed_ids
+            ).first()
+
+            if target_session is None:
+                return Response(
+                    {"status": False, "message": "Session not found"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            session = SessionService()
+            session.revoke_device(target_session.deviceToken, allowed_ids)
+
+            return Response(
+                {"status": True, "message": "Device signed out"},
                 status=status.HTTP_200_OK,
             )
         except Exception as e:

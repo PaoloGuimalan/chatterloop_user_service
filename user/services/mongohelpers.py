@@ -155,3 +155,21 @@ class SessionService:
         )
         session.save()
         return session
+
+    def list_for_entity(self, entity_id):
+        """Sessions for this exact entity only - deliberately excludes any
+        page/realm session rows the same physical device may also hold from
+        having switched entities, since the device list is account-level."""
+        return Session.objects(entityID=str(entity_id)).order_by("-lastSeen")
+
+    def revoke_device(self, device_token, allowed_entity_ids):
+        """Deletes every session row for this deviceToken, but only across
+        the given entity ids. deviceToken is generated once per browser/
+        install, not per-account, so a blanket delete-by-deviceToken could
+        reach a different account's session that happens to share the same
+        physical device/browser - allowed_entity_ids must be this account's
+        personal entity plus every page/realm it can switch into."""
+        allowed = [str(entity_id) for entity_id in allowed_entity_ids]
+        return Session.objects(
+            deviceToken=device_token, entityID__in=allowed
+        ).delete()
