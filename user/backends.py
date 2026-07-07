@@ -21,6 +21,14 @@ COMPLIANCE_EXEMPT_VIEW_NAMES = {
     "api-user:policy-document-list",
     "api-user:policy-consent-accept",
     "api-user:account-data-export",
+    # The app shell (rail/top bar) needs allowed_modules/active_entity_context
+    # to render around the Complete Profile / verification / consent pages
+    # themselves, so this can't require a complete profile - it's just
+    # module-visibility metadata, not something that depends on birthdate/
+    # gender being set, and a profile-incomplete account is always the
+    # personal entity anyway (never switched), so there's nothing sensitive
+    # being gated here.
+    "api-entity:my-allowed-modules",
 }
 
 

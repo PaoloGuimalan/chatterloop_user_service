@@ -430,7 +430,12 @@ class ThirdPartyAuthentication(APIView):
                             {
                                 "status": True,
                                 "result": {
-                                    "usertoken": jwt.encoder(serialized_user.data),
+                                    "usertoken": jwt.encoder(
+                                        {
+                                            **serialized_user.data,
+                                            "entity_id": str(user.entity.id),
+                                        }
+                                    ),
                                     "authtoken": jwt.encoder(
                                         {
                                             "userID": str(user.id),
@@ -483,7 +488,14 @@ class ThirdPartyAuthentication(APIView):
                                 {
                                     "status": True,
                                     "result": {
-                                        "usertoken": jwt.encoder(serialized_user.data),
+                                        "usertoken": jwt.encoder(
+                                            {
+                                                **serialized_user.data,
+                                                "entity_id": str(
+                                                    create_user_query.entity.id
+                                                ),
+                                            }
+                                        ),
                                         "authtoken": jwt.encoder(
                                             {
                                                 "userID": str(create_user_query.id),
@@ -680,9 +692,7 @@ class UserContacts(APIView):
                 )
 
                 sse_sendToUser = target_entity.id
-                sse_sendToDetails = (
-                    f"{get_entity_display_name(entity)} have sent a contact request for you."
-                )
+                sse_sendToDetails = f"{get_entity_display_name(entity)} have sent a contact request for you."
 
                 now = datetime.now()
                 data = {
@@ -781,7 +791,9 @@ class UserContacts(APIView):
                             )
 
                         notifHeadline = "Accepted Request"
-                        notifContent = f"{get_entity_display_name(entity)} accepted your request"
+                        notifContent = (
+                            f"{get_entity_display_name(entity)} accepted your request"
+                        )
 
                         service = NotificationService()
                         service.add_notification(
@@ -911,7 +923,9 @@ class UserContacts(APIView):
 
                     if updated and action == "decline":
                         notifHeadline = "Declined Request"
-                        notifContent = f"{get_entity_display_name(entity)} declined your request"
+                        notifContent = (
+                            f"{get_entity_display_name(entity)} declined your request"
+                        )
 
                         service = NotificationService()
                         service.add_notification(
@@ -1187,6 +1201,8 @@ class UserAccountManagement(APIView):
                 body=None,
             )
 
+            serialized_user = AccountSerializer(new_user)
+
             return Response(
                 {
                     "status": True,
@@ -1199,7 +1215,12 @@ class UserAccountManagement(APIView):
                             "entity": str(new_user.entity.id),
                         }
                     ),
-                    "usertoken": jwt.encoder(AccountSerializer(new_user).data),
+                    "usertoken": jwt.encoder(
+                        {
+                            **serialized_user.data,
+                            "entity_id": str(new_user.entity.id),
+                        }
+                    ),
                 },
                 status=status.HTTP_201_CREATED,
             )
