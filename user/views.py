@@ -247,7 +247,9 @@ class UserAuthentication(APIView):
                     followers_count=Count("followers"),
                     is_admin=Exists(
                         Member.objects.filter(
-                            realm=OuterRef("pk"), entity=entity, role="admin"
+                            Q(Q(role="admin") | Q(role="owner")),
+                            realm=OuterRef("pk"),
+                            entity=entity,
                         )
                     ),
                     is_member=Exists(
@@ -497,7 +499,10 @@ class UserContacts(APIView):
 
     def get_permissions(self):
         if self.request.method == "POST":
-            return [IsAuthenticated(), RequiresPermission(Permission.CONTACTS_REQUEST_CREATE)()]
+            return [
+                IsAuthenticated(),
+                RequiresPermission(Permission.CONTACTS_REQUEST_CREATE)(),
+            ]
         return super().get_permissions()
 
     def get(self, request):

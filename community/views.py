@@ -46,7 +46,9 @@ class TopRealms(APIView):
                 members=Count("member", distinct=True),
                 is_admin=Exists(
                     Member.objects.filter(
-                        realm=OuterRef("pk"), entity=entity, role="admin"
+                        Q(Q(role="admin") | Q(role="owner")),
+                        realm=OuterRef("pk"),
+                        entity=entity,
                     )
                 ),
                 is_member=Exists(
@@ -92,7 +94,9 @@ class MyRealms(APIView):
                 members=Count("member", distinct=True),
                 is_admin=Exists(
                     Member.objects.filter(
-                        realm=OuterRef("pk"), entity=entity, role="admin"
+                        Q(Q(role="admin") | Q(role="owner")),
+                        realm=OuterRef("pk"),
+                        entity=entity,
                     )
                 ),
                 is_member=Exists(
@@ -172,7 +176,9 @@ class FollowRealmView(APIView):
                     members=Count("member", distinct=True),
                     is_admin=Exists(
                         Member.objects.filter(
-                            realm=OuterRef("pk"), entity=entity, role="admin"
+                            Q(Q(role="admin") | Q(role="owner")),
+                            realm=OuterRef("pk"),
+                            entity=entity,
                         )
                     ),
                     is_member=Exists(
@@ -367,7 +373,9 @@ class RealmFollowersView(APIView):
 
             realm = get_object_or_404(Realm, id=realm_id)
 
-            if not has_permission(entity, Permission.REALM_FOLLOWER_REMOVE, realm=realm):
+            if not has_permission(
+                entity, Permission.REALM_FOLLOWER_REMOVE, realm=realm
+            ):
                 return Response(
                     {
                         "status": False,
@@ -800,7 +808,9 @@ class InviteView(APIView):
 
             realm = get_object_or_404(Realm, id=realm_id)
 
-            if not has_permission(entity, Permission.REALM_FOLLOWER_REMOVE, realm=realm):
+            if not has_permission(
+                entity, Permission.REALM_FOLLOWER_REMOVE, realm=realm
+            ):
                 return Response(
                     {
                         "status": False,
