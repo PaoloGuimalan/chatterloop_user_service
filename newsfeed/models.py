@@ -6,6 +6,7 @@ from django.utils.timezone import now
 from user.models import Account
 from community.models import Realm
 from entity.models import Entity
+from interests.models import Interest
 
 from cassandra.cqlengine import columns
 from django_cassandra_engine.models import DjangoCassandraModel
@@ -68,6 +69,9 @@ class Post(models.Model):
         default=None,
         on_delete=models.DO_NOTHING,
         related_name="post_deleted_by",
+    )
+    interests = models.ManyToManyField(
+        Interest, through="interests.PostInterestLink", blank=True, related_name="posts"
     )
 
 

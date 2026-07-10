@@ -8,6 +8,10 @@ from django.utils.dateparse import parse_datetime
 from django.db import transaction
 from django.db.models import Q, F
 from user.services.connections import ConnectionHelpers
+from interests.services.affinity import bump_interest_affinity
+from interests.services.interest_resolver import IMPLICIT_GRANT_THRESHOLD
+from interests.models import EntityInterest, EntityInterestAffinity
+from entity.permissions import PermissionEffect
 import uuid
 
 
@@ -88,6 +92,15 @@ def save_viewcache_engagements(entity, viewcache):
 
         logs_to_create = []
         post_ids_to_clean = []
+        viewed_post_ids = [str(view["post_id"]) for view in viewcache]
+        # One query for every viewed post's interests, keyed by post_id -
+        # avoids an N+1 per view when bumping affinity below.
+        interests_by_post_id = {}
+        for pid, interest_id in Post.objects.filter(
+            post_id__in=viewed_post_ids
+        ).values_list("post_id", "interests__id"):
+            if interest_id is not None:
+                interests_by_post_id.setdefault(pid, []).append(interest_id)
 
         for view in viewcache:
             pid = view["post_id"]
@@ -95,6 +108,8 @@ def save_viewcache_engagements(entity, viewcache):
             current_duration = view.get("duration", 0)
 
             post_ids_to_clean.append(str(pid))
+
+            bump_interest_affinity(entity.id, interests_by_post_id.get(str(pid), []), "VIEW", False)
 
             if str(poid) != str(entity.id):
                 created_at = view.get("created_at")
@@ -322,6 +337,46 @@ def fetch_friends_posts(entity_id, page_size=10):
     return list(newsfeed_queryset)
 
 
+# TrendingPool.category is the partition key, and fetch_trending_posts
+# queries it with category__in=user_interests - this cluster's configured
+# hard limit is 20 partition keys per query ("Select query cannot be
+# completed because it selects N partitions keys - more than the maximum
+# allowed 20"), confirmed directly from the server error, not assumed.
+# Reserve 1 slot for the always-included "global" fallback below.
+MAX_TRENDING_CATEGORIES = 19
+
+
+def resolved_interest_categories(entity):
+    """
+    Replaces the previously-hardcoded ["global"] placeholder passed to
+    fetch_trending_posts: explicitly granted interests, plus any the entity
+    has a high implicit affinity for (see interests.services.affinity),
+    plus "global" itself kept as an always-included fallback bucket so the
+    pool never comes back completely empty for a brand new entity with no
+    signal yet.
+
+    Capped at MAX_TRENDING_CATEGORIES total (see constant above) - an
+    entity can accumulate far more than 25 granted/high-affinity interests
+    over time (e.g. via diary tagging), which would otherwise blow up
+    TrendingPool's category__in query. Explicit grants are a stronger
+    signal than implicit affinity, so grants fill the cap first; implicit
+    interests only fill whatever's left, highest-scored first.
+    """
+    granted = list(
+        EntityInterest.objects.filter(entity=entity, effect=PermissionEffect.GRANT)
+        .values_list("interest__normalized_name", flat=True)[:MAX_TRENDING_CATEGORIES]
+    )
+    remaining_slots = max(MAX_TRENDING_CATEGORIES - len(granted), 0)
+    implicit = list(
+        EntityInterestAffinity.objects.filter(
+            entity=entity, score__gte=IMPLICIT_GRANT_THRESHOLD
+        )
+        .order_by("-score")
+        .values_list("interest__normalized_name", flat=True)[:remaining_slots]
+    )
+    return list(set(granted) | set(implicit) | {"global"})
+
+
 def fetch_trending_posts(
     entity_id, page_size=10, candidate_limit=100, user_interests=[]
 ):
@@ -330,8 +385,11 @@ def fetch_trending_posts(
         uuid.UUID(str(entity_id)) if not isinstance(entity_id, uuid.UUID) else entity_id
     )
 
+    # Defensive cap independent of the caller: category__in is a Cassandra/
+    # Scylla query against TrendingPool's partition key, which rejects more
+    # than 25 IN values regardless of how user_interests was built.
     trending_queryset = (
-        TrendingPool.objects.filter(category__in=user_interests)
+        TrendingPool.objects.filter(category__in=list(user_interests)[:MAX_TRENDING_CATEGORIES + 1])
         .limit(int(candidate_limit))
         .values_list("post_id", flat=True)
     )

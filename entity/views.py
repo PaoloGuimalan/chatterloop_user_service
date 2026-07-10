@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 
 from entity.permissions import Permission
 from entity.services.permission_resolver import has_permission
-from entity.utils import get_entity_display_name, get_entity_profile_path
+from entity.utils import get_entity_name, get_entity_profile_path
 
 
 class MyAllowedModules(APIView):
@@ -56,7 +56,7 @@ class MyAllowedModules(APIView):
                     "type": "realm",
                     "realm_type": realm.type if realm else None,
                     "realm_id": realm.id if realm else None,
-                    "name": get_entity_display_name(entity),
+                    "name": get_entity_name(entity),
                     "slug": get_entity_profile_path(entity),
                     "profile": realm.profile if realm else None,
                 }

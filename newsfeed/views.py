@@ -43,7 +43,8 @@ from user.serializers import ConnectionSerializer
 from rest_framework.pagination import PageNumberPagination
 from user.services.connections import ConnectionHelpers
 from user.services.mongohelpers import NotificationService
-from entity.utils import get_entity_display_name
+from entity.utils import get_entity_display_username
+from interests.services.affinity import bump_interest_affinity
 from user_service.services.redis import RedisPubSubClient
 from django.utils.timezone import now
 from datetime import datetime
@@ -54,6 +55,7 @@ from .helpers.query_functions import (
     follower_interaction_score_bump,
     fetch_friends_posts,
     fetch_trending_posts,
+    resolved_interest_categories,
 )
 import uuid
 from community.models import RealmFollow, Realm
@@ -100,13 +102,13 @@ class NewsfeedView(APIView):
 
                 if not candidate_post_ids:
                     candidate_post_ids = fetch_trending_posts(
-                        entity.id, page_size, 100, ["global"]
+                        entity.id, page_size, 100, resolved_interest_categories(entity)
                     )
                     current_mode = "trending"
                     RedisPubSubClient.update_feed_mode(entity.id, current_mode)
             else:
                 candidate_post_ids = fetch_trending_posts(
-                    entity.id, page_size, 100, ["global"]
+                    entity.id, page_size, 100, resolved_interest_categories(entity)
                 )
 
                 if not candidate_post_ids:
@@ -469,6 +471,9 @@ class PostReactionsView(APIView):
                     follower_interaction_score_bump(
                         entity.id, post.entity.id, "LIKE", False
                     )
+                bump_interest_affinity(
+                    entity.id, post.interests.values_list("id", flat=True), "LIKE", False
+                )
 
                 if post.entity.id != entity.id:
                     service = NotificationService()
@@ -478,14 +483,14 @@ class PostReactionsView(APIView):
                         toUserID=post.entity.id,
                         fromUserID=entity.id,
                         content_headline="Post Reaction",
-                        content_details=f"{get_entity_display_name(entity)} reacted {emoji.emoji_content} to your post.",
+                        content_details=f"{get_entity_display_username(entity)} reacted {emoji.emoji_content} to your post.",
                         type="post_reaction",
                         isRead=False,
                     )
 
                     sse_sendToUser = post.entity.id
                     sse_sendToDetails = (
-                        f"{get_entity_display_name(entity)} reacted {emoji.emoji_content} to your post."
+                        f"{get_entity_display_username(entity)} reacted {emoji.emoji_content} to your post."
                     )
 
                     now = datetime.now()
@@ -538,11 +543,11 @@ class PostReactionsView(APIView):
                     service = NotificationService()
                     service.update_content(
                         reaction_id=reaction.reaction_id,
-                        new_content=f"{get_entity_display_name(entity)} reacted {new_emoji.emoji_content} to your post.",
+                        new_content=f"{get_entity_display_username(entity)} reacted {new_emoji.emoji_content} to your post.",
                     )
 
                     sse_sendToUser = post.entity.id
-                    sse_sendToDetails = f"{get_entity_display_name(entity)} reacted {new_emoji.emoji_content} to your post."
+                    sse_sendToDetails = f"{get_entity_display_username(entity)} reacted {new_emoji.emoji_content} to your post."
 
                     now = datetime.now()
                     data = {
@@ -591,6 +596,9 @@ class PostReactionsView(APIView):
                     follower_interaction_score_bump(
                         entity.id, post.entity.id, "LIKE", True
                     )
+                bump_interest_affinity(
+                    entity.id, post.interests.values_list("id", flat=True), "LIKE", True
+                )
 
                 emoji = reaction.emoji
                 reaction.delete()
@@ -741,6 +749,9 @@ class CommentsView(APIView):
                     reaction_ranking.save()
 
                     update_ranking_score(post_id, "comment", False)
+                    bump_interest_affinity(
+                        entity.id, post.interests.values_list("id", flat=True), "COMMENT", False
+                    )
 
                     truncated_comment = (
                         (parent_comment.text[:30] + "...")
@@ -756,7 +767,7 @@ class CommentsView(APIView):
                             toUserID=parent_comment.entity.id,
                             fromUserID=entity.id,
                             content_headline="Replied Comment",
-                            content_details=f'{get_entity_display_name(entity)} replied to your comment "{truncated_comment}"',
+                            content_details=f'{get_entity_display_username(entity)} replied to your comment "{truncated_comment}"',
                             type="post_comment",
                             isRead=False,
                         )
@@ -769,7 +780,7 @@ class CommentsView(APIView):
                             "message": {
                                 "status": True,
                                 "auth": True,
-                                "message": f'{get_entity_display_name(entity)} replied to your comment "{truncated_comment}"',
+                                "message": f'{get_entity_display_username(entity)} replied to your comment "{truncated_comment}"',
                                 "result": "",
                             },
                             "dateTime": now.isoformat(),
@@ -795,6 +806,9 @@ class CommentsView(APIView):
                     reaction_ranking.save()
 
                     update_ranking_score(post_id, "comment", False)
+                    bump_interest_affinity(
+                        entity.id, post.interests.values_list("id", flat=True), "COMMENT", False
+                    )
 
                     if post.entity != entity:
                         service = NotificationService()
@@ -804,7 +818,7 @@ class CommentsView(APIView):
                             toUserID=post.entity.id,
                             fromUserID=entity.id,
                             content_headline="Post Comment",
-                            content_details=f"{get_entity_display_name(entity)} commented on your post.",
+                            content_details=f"{get_entity_display_username(entity)} commented on your post.",
                             type="post_comment",
                             isRead=False,
                         )
@@ -817,7 +831,7 @@ class CommentsView(APIView):
                             "message": {
                                 "status": True,
                                 "auth": True,
-                                "message": f"{get_entity_display_name(entity)} commented on your post.",
+                                "message": f"{get_entity_display_username(entity)} commented on your post.",
                                 "result": "",
                             },
                             "dateTime": now.isoformat(),

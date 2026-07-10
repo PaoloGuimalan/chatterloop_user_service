@@ -138,8 +138,9 @@ INSTALLED_APPS = [
     # Added apps
     "user",
     "community",
-    "newsfeed",
     "core",
+    "interests",
+    "newsfeed",
     "diary",
     "entity",
     # Silk

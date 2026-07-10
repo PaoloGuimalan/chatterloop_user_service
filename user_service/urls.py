@@ -29,6 +29,7 @@ urlpatterns = [
                 path("diary/", include("diary.urls", namespace="api-diary")),
                 path("realm/", include("community.urls", namespace="api-community")),
                 path("entity/", include("entity.urls", namespace="api-entity")),
+                path("interests/", include("interests.urls", namespace="api-interests")),
             ]
         ),
     ),

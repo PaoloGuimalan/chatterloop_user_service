@@ -2,11 +2,16 @@ from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from django.db.models import Count, Q
+from django.db.models import Count, Q, OuterRef, Subquery, Value, FloatField
+from django.db.models.functions import Coalesce
 from django.db import transaction
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.pagination import PageNumberPagination
-from .models import Entry, Tag, Mood, Attachment
+from .models import Entry, Mood, Attachment
+from interests.models import Interest, EntityInterestAffinity
+from interests.services.affinity import bump_interest_affinity
+from interests.services.interest_resolver import ensure_grant_override
+from interests.views import InterestListView
 from user.models import Account
 from django.shortcuts import get_object_or_404
 from .serializers import EntrySerializer, TagSerializer, MoodSerializer
@@ -55,10 +60,28 @@ class DiaryTotalView(APIView):
                 .first()
             )
 
+            # Ranked by this entity's personal interest affinity (bumped
+            # every time a diary entry is tagged, see bump_interest_affinity
+            # in EntrySerializer._handle_tags / DiaryCRUDView.post) rather
+            # than raw diary tag-usage count - "top tags" now means "tags
+            # this entity actually cares about most", with entry_count only
+            # as a tie-break for interests never bumped (e.g. entries tagged
+            # before this ranking existed).
+            personal_score_subquery = EntityInterestAffinity.objects.filter(
+                entity_id=current_user.entity_id, interest_id=OuterRef("pk")
+            ).values("score")[:1]
+
             top_tags = (
-                Tag.objects.filter(entries__account=current_user)
-                .annotate(entry_count=Count("entries"))
-                .order_by("-entry_count")[:limit_tags]
+                Interest.objects.filter(entries__account=current_user)
+                .annotate(
+                    personal_score=Coalesce(
+                        Subquery(personal_score_subquery, output_field=FloatField()),
+                        Value(0.0),
+                    ),
+                    entry_count=Count("entries"),
+                )
+                .distinct()
+                .order_by("-personal_score", "-entry_count")[:limit_tags]
             )
 
             serialized_tags = TagSerializer(top_tags, many=True).data
@@ -129,50 +152,18 @@ class MoodListView(APIView):
             return Response(str(ex), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class TagListView(APIView):
-    permission_classes = [IsAuthenticated]
-    pagination_class = Pagination
+class TagListView(InterestListView):
+    """
+    Thin alias so /api/diary/tags/ keeps working unchanged now that the
+    search/autocomplete logic lives on the shared, system-wide
+    InterestListView (interests/views.py). Also fixes a pre-existing
+    inconsistency: this used to check "is_new" via an exact, case-sensitive
+    name match, while InterestListView checks case/whitespace-insensitively
+    against normalized_name - the same drift this whole move was meant to
+    clean up.
+    """
 
-    def get(self, request):
-        user = self.request.user
-
-        try:
-            search = request.GET.get("search", None)
-            queryset = Tag.objects
-            check_tag_query = Tag.objects.filter(name=search)
-
-            if search:
-                queryset = (
-                    queryset.filter(
-                        name__icontains=search,
-                    )
-                    .all()
-                    .order_by("id")
-                )
-            else:
-                queryset = queryset.all().order_by("id")
-
-            paginator = self.pagination_class()
-            paginated_queryset = paginator.paginate_queryset(
-                queryset, request, view=self
-            )
-
-            serialized_result = TagSerializer(paginated_queryset, many=True)
-            data = paginator.get_paginated_response(
-                {
-                    "list": serialized_result.data,
-                    "is_new": (
-                        False
-                        if search is None
-                        or (isinstance(search, str) and not search.strip())
-                        else not bool(len(check_tag_query))
-                    ),
-                }
-            )
-            return data
-
-        except Exception as ex:
-            return Response(str(ex), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    pass
 
 
 class DiaryCRUDView(APIView):
@@ -220,17 +211,16 @@ class DiaryCRUDView(APIView):
                 )
 
             with transaction.atomic():
-                new_tags = [
-                    Tag(name=tag["name"]) for tag in tags if tag["is_new"] == True
+                # Both branches resolve through the same canonical,
+                # race-safe, case/whitespace-insensitive lookup now -
+                # previously this used a separate bulk_create(
+                # ignore_conflicts=True) path with weaker dedup than
+                # EntrySerializer's get_or_create, and trusted the client's
+                # is_new flag even though it can be stale by request time.
+                combined_tags = [
+                    Interest.objects.get_or_create_by_name(tag["name"])[0]
+                    for tag in tags
                 ]
-                existing_tags = [tag["id"] for tag in tags if tag["is_new"] == False]
-
-                Tag.objects.bulk_create(new_tags, ignore_conflicts=True)
-                saved_tags = Tag.objects.filter(id__in=existing_tags)
-
-                combined_tags = list(
-                    list(Tag.objects.filter(name__in=[tag.name for tag in new_tags]))
-                ) + list(saved_tags)
 
                 entry_mood = None
 
@@ -247,6 +237,11 @@ class DiaryCRUDView(APIView):
                 )
 
                 queryset.tags.set(combined_tags)
+
+                if combined_tags:
+                    tag_ids = [tag.id for tag in combined_tags]
+                    bump_interest_affinity(user.entity_id, tag_ids, "DIARY_TAG", False)
+                    ensure_grant_override(user.entity_id, tag_ids)
 
                 final_id = queryset.id
 

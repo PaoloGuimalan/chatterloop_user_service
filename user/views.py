@@ -66,7 +66,7 @@ from community.models import Realm, Member, RealmFollow, Invite
 from entity.models import Entity
 from entity.permissions import Permission, MemberRole
 from entity.drf_permissions import RequiresPermission
-from entity.utils import get_entity_display_name, get_entity_profile_path
+from entity.utils import get_entity_display_username, get_entity_profile_path
 from community.serializers import RealmSerializer
 import bcrypt
 import uuid
@@ -690,13 +690,13 @@ class UserContacts(APIView):
                     toUserID=target_entity.id,
                     fromUserID=entity.id,
                     content_headline="Contact Request",
-                    content_details=f"{get_entity_display_name(entity)} have sent a contact request for you.",
+                    content_details=f"{get_entity_display_username(entity)} have sent a contact request for you.",
                     type="contact_request",
                     isRead=False,
                 )
 
                 sse_sendToUser = target_entity.id
-                sse_sendToDetails = f"{get_entity_display_name(entity)} have sent a contact request for you."
+                sse_sendToDetails = f"{get_entity_display_username(entity)} have sent a contact request for you."
 
                 now = datetime.now()
                 data = {
@@ -796,7 +796,7 @@ class UserContacts(APIView):
 
                         notifHeadline = "Accepted Request"
                         notifContent = (
-                            f"{get_entity_display_name(entity)} accepted your request"
+                            f"{get_entity_display_username(entity)} accepted your request"
                         )
 
                         service = NotificationService()
@@ -928,7 +928,7 @@ class UserContacts(APIView):
                     if updated and action == "decline":
                         notifHeadline = "Declined Request"
                         notifContent = (
-                            f"{get_entity_display_name(entity)} declined your request"
+                            f"{get_entity_display_username(entity)} declined your request"
                         )
 
                         service = NotificationService()
@@ -1661,7 +1661,7 @@ class PokeUser(APIView):
                 )
 
             poke_reference_id = f"POKE_{generate_random_digit(20)}"
-            poke_message = f"{get_entity_display_name(entity)} poked you."
+            poke_message = f"{get_entity_display_username(entity)} poked you."
 
             service = NotificationService()
             service.add_notification(
