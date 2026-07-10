@@ -16,6 +16,7 @@ from .models import (
 from user.serializers import AccountPreviewSerializer
 from entity.serializers import EntitySerializer
 from community.models import Realm
+from .services.link_preview import extract_first_url, get_preview
 
 
 class PostTagSerializer(serializers.ModelSerializer):
@@ -94,6 +95,11 @@ class PostSerializer(serializers.ModelSerializer):
     # activity_counts = ActivityCountSerializer(read_only=True, many=True)
     score = PostScoreSerializer(read_only=True)
     is_saved = serializers.BooleanField(read_only=True)
+    link_preview = serializers.SerializerMethodField()
+
+    def get_link_preview(self, obj):
+        url = extract_first_url(obj.caption or "")
+        return get_preview(url) if url else None
 
     class Meta:
         model = Post
@@ -108,6 +114,11 @@ class EmojiSerializer(serializers.ModelSerializer):
 
 class CommentSerializer(serializers.ModelSerializer):
     entity = EntitySerializer(read_only=True)
+    link_preview = serializers.SerializerMethodField()
+
+    def get_link_preview(self, obj):
+        url = extract_first_url(obj.text or "")
+        return get_preview(url) if url else None
 
     class Meta:
         model = Comment

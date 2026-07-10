@@ -67,6 +67,11 @@ CASSANDRA_CLOUD_CONFIG = {
 DEBUG = os.getenv("DEBUG")
 SECRET_KEY = os.getenv("SECRET_KEY")
 
+# Shared secret allowing trusted backends (e.g. the Node chat server) to call
+# select internal endpoints (e.g. link-preview resolution) without a
+# per-user token. Same value must be provisioned in the Node server's .env.
+INTERNAL_SERVICE_SECRET = os.getenv("INTERNAL_SERVICE_SECRET")
+
 GUNICORN_MAX_REQUESTS = os.getenv("GUNICORN_MAX_REQUESTS")
 SILKY_PYTHON_PROFILER = os.getenv("SILKY_PYTHON_PROFILER")
 

@@ -1,4 +1,5 @@
 from django.shortcuts import render
+from django.http import HttpResponse
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -43,6 +44,8 @@ from user.serializers import ConnectionSerializer
 from rest_framework.pagination import PageNumberPagination
 from user.services.connections import ConnectionHelpers
 from user.services.mongohelpers import NotificationService
+from .drf_permissions import AllowsInternalService
+from .services.link_preview import extract_first_url, get_preview, fetch_image
 from entity.utils import get_entity_display_username
 from interests.services.affinity import bump_interest_affinity
 from user_service.services.redis import RedisPubSubClient
@@ -948,3 +951,108 @@ class PostSaveView(APIView):
             )
         except Exception as e:
             return Response({"error": str(e)}, status=500)
+
+
+def _empty_preview(status_value="failed"):
+    return {
+        "url": None,
+        "resolved_url": None,
+        "title": None,
+        "description": None,
+        "image": None,
+        "site_name": None,
+        "favicon": None,
+        "status": status_value,
+    }
+
+
+class LinkPreviewView(APIView):
+    """
+    Resolves a link-preview card for a URL. Two callers, one contract:
+    (a) the webapp, authenticated as a normal end user, calling live while a
+    user composes a chat message / comment / post caption / diary entry;
+    (b) the Node chat server, calling server-to-server with the shared
+    X-Internal-Service-Secret header (see AllowsInternalService) after a
+    message is saved. Accepts either an already-extracted {"url": "..."}
+    (what the webapp's composers know) or raw {"text": "..."} (what Node
+    sends - Django owns URL-extraction so that logic lives in exactly one
+    place). Always 200 on a well-formed request; a failed unfurl is a
+    legitimate result (status: "failed"), not a client error.
+    """
+
+    permission_classes = [AllowsInternalService]
+
+    def get_authenticators(self):
+        """
+        Same guest-safe pattern as CommentsView: the custom auth backend
+        raises PermissionDenied outright when there's no 'origin'/'x-nonce'
+        header, which real end-user requests always send but the internal-
+        service caller (Node) never does. Only run it when an end-user
+        token is actually present - the internal-service path is gated by
+        AllowsInternalService's header check instead, not by request.user.
+        """
+        if not self.request.headers.get("x-access-token"):
+            return ()
+        return super().get_authenticators()
+
+    def post(self, request):
+        try:
+            url = request.data.get("url")
+            text = request.data.get("text")
+            is_end_user = bool(request.user and request.user.is_authenticated)
+            force_refresh = is_end_user and bool(request.data.get("force_refresh"))
+
+            if not url and not text:
+                return Response(
+                    {"error": "Provide either 'url' or 'text'."}, status=400
+                )
+
+            if not url:
+                url = extract_first_url(text)
+
+            if not url:
+                return Response(_empty_preview(), status=200)
+
+            result = get_preview(url, force_refresh=force_refresh)
+
+            return Response(result or _empty_preview(), status=200)
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+
+class LinkPreviewImageProxyView(APIView):
+    """
+    Streams a preview thumbnail/favicon through Django rather than letting
+    the browser hotlink the original third-party URL directly - avoids
+    leaking viewers' IPs to arbitrary sites on every render and avoids
+    mixed-content issues. Goes through the same SSRF guard as the metadata
+    fetch (services.link_preview.fetch_image), just with an image
+    content-type allowlist instead of text/html.
+
+    Deliberately AllowAny/no auth: this is loaded via plain <img src="...">
+    tags in the browser, which cannot attach the x-access-token or
+    X-Internal-Service-Secret headers LinkPreviewView otherwise requires.
+    The SSRF guard (fetch_image) is the real protection here, not auth -
+    same trust model as any public image CDN. This does mean the endpoint
+    can be used by anyone to make Django fetch an arbitrary public image
+    URL through it; no rate limiting exists yet (matches the rest of this
+    codebase, see LinkPreviewView's docstring/plan notes) - worth adding
+    a per-IP throttle as a fast-follow.
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        url = request.GET.get("url")
+        if not url:
+            return HttpResponse(status=400)
+
+        result = fetch_image(url)
+        if result is None:
+            return HttpResponse(status=404)
+
+        body, content_type = result
+        response = HttpResponse(body, content_type=content_type)
+        response["Cache-Control"] = "public, max-age=86400"
+        return response

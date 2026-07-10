@@ -4,6 +4,7 @@ asgiref==3.9.1
 astrapy==2.2.1
 asttokens==3.0.1
 bcrypt==4.3.0
+beautifulsoup4==4.12.3
 billiard==4.2.4
 cachetools==6.2.2
 cassandra-driver==3.30.0
