@@ -3,9 +3,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 
-from entity.permissions import Permission
-from entity.services.permission_resolver import has_permission
-from entity.utils import get_entity_name, get_entity_profile_path
+from entity.services.allowed_modules import resolve_allowed_modules_and_context
 
 
 class MyAllowedModules(APIView):
@@ -21,9 +19,12 @@ class MyAllowedModules(APIView):
     name, profile path). This is the only place that CAN reliably answer
     "am I currently acting as myself or as a page" after a page reload -
     the JWT's `entity` claim is an opaque id with no type flag, so the
-    frontend cannot tell from the token alone. Called on login/session
-    restore and after every switch, so it's the single source of truth for
-    both allowed_modules and active_entity_context.
+    frontend cannot tell from the token alone.
+
+    Login/register/third-party-auth now merge resolve_allowed_modules_and_
+    context() directly into their own response instead of requiring this as
+    a separate follow-up call - this endpoint remains for session restore
+    (AuthCheck) and any future on-demand refresh.
     """
 
     permission_classes = [IsAuthenticated]
@@ -32,40 +33,13 @@ class MyAllowedModules(APIView):
         entity = request.entity
         user = request.user
         try:
-            allowed = [
-                codename
-                for codename in Permission.ENTITY_TYPE_SCOPED
-                if has_permission(entity, codename)
-            ]
-
-            is_personal = entity.id == user.entity.id
-            if is_personal:
-                active_entity = {
-                    "id": str(entity.id),
-                    "type": "user",
-                    "realm_type": None,
-                    "realm_id": None,
-                    "name": None,
-                    "slug": None,
-                    "profile": user.profile,
-                }
-            else:
-                realm = getattr(entity, "realms", None)
-                active_entity = {
-                    "id": str(entity.id),
-                    "type": "realm",
-                    "realm_type": realm.type if realm else None,
-                    "realm_id": realm.id if realm else None,
-                    "name": get_entity_name(entity),
-                    "slug": get_entity_profile_path(entity),
-                    "profile": realm.profile if realm else None,
-                }
+            allowed_modules, active_entity = resolve_allowed_modules_and_context(entity, user)
 
             return Response(
                 {
                     "status": True,
                     "result": {
-                        "allowed_modules": allowed,
+                        "allowed_modules": allowed_modules,
                         "active_entity": active_entity,
                         "personal_entity_id": str(user.entity.id),
                     },

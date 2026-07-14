@@ -66,6 +66,7 @@ from community.models import Realm, Member, RealmFollow, Invite
 from entity.models import Entity
 from entity.permissions import Permission, MemberRole
 from entity.drf_permissions import RequiresPermission
+from entity.services.allowed_modules import resolve_allowed_modules_and_context
 from entity.utils import get_entity_display_username, get_entity_profile_path
 from community.serializers import RealmSerializer
 import bcrypt
@@ -340,6 +341,15 @@ class UserAuthentication(APIView):
                     if not session.exists(device_token, user.entity.id):
                         session.add_session(request, user.entity.id, device_token)
 
+                    # A fresh login is always the personal entity (never a
+                    # page) - merged directly into this response so the
+                    # frontend doesn't need a separate follow-up call to
+                    # /api/entity/me/modules just to learn allowed_modules/
+                    # active_entity, same data MyAllowedModules resolves.
+                    allowed_modules, active_entity = resolve_allowed_modules_and_context(
+                        user.entity, user
+                    )
+
                     return Response(
                         {
                             "status": True,
@@ -357,6 +367,9 @@ class UserAuthentication(APIView):
                                         "entity": str(user.entity.id),
                                     }
                                 ),
+                                "allowed_modules": allowed_modules,
+                                "active_entity": active_entity,
+                                "personal_entity_id": str(user.entity.id),
                             },
                         },
                         status=status.HTTP_200_OK,
@@ -426,6 +439,10 @@ class ThirdPartyAuthentication(APIView):
                         if not session.exists(device_token, user.entity.id):
                             session.add_session(request, user.entity.id, device_token)
 
+                        allowed_modules, active_entity = resolve_allowed_modules_and_context(
+                            user.entity, user
+                        )
+
                         return Response(
                             {
                                 "status": True,
@@ -443,6 +460,9 @@ class ThirdPartyAuthentication(APIView):
                                             "entity": str(user.entity.id),
                                         }
                                     ),
+                                    "allowed_modules": allowed_modules,
+                                    "active_entity": active_entity,
+                                    "personal_entity_id": str(user.entity.id),
                                 },
                             },
                             status=status.HTTP_200_OK,
@@ -488,6 +508,10 @@ class ThirdPartyAuthentication(APIView):
                                     request, create_user_query.entity.id, device_token
                                 )
 
+                            allowed_modules, active_entity = resolve_allowed_modules_and_context(
+                                create_user_query.entity, create_user_query
+                            )
+
                             return Response(
                                 {
                                     "status": True,
@@ -508,6 +532,11 @@ class ThirdPartyAuthentication(APIView):
                                                     create_user_query.entity.id
                                                 ),
                                             }
+                                        ),
+                                        "allowed_modules": allowed_modules,
+                                        "active_entity": active_entity,
+                                        "personal_entity_id": str(
+                                            create_user_query.entity.id
                                         ),
                                     },
                                 },
@@ -1211,6 +1240,13 @@ class UserAccountManagement(APIView):
 
             serialized_user = AccountSerializer(new_user)
 
+            # A fresh registration is always the personal entity - merged
+            # directly into this response so the frontend doesn't need a
+            # separate follow-up call to /api/entity/me/modules.
+            allowed_modules, active_entity = resolve_allowed_modules_and_context(
+                new_user.entity, new_user
+            )
+
             return Response(
                 {
                     "status": True,
@@ -1229,6 +1265,9 @@ class UserAccountManagement(APIView):
                             "entity_id": str(new_user.entity.id),
                         }
                     ),
+                    "allowed_modules": allowed_modules,
+                    "active_entity": active_entity,
+                    "personal_entity_id": str(new_user.entity.id),
                 },
                 status=status.HTTP_201_CREATED,
             )
