@@ -1,9 +1,22 @@
-from ..models import Account
+from ..models import Account, MINIMUM_AGE, calculate_age
+from entity.models import Entity
 from datetime import datetime
 from django.utils.timezone import make_aware
 from django.utils.timezone import now
 from ..utils.bcrypt_tools import hash_password
 from ..utils.generators import generate_unique_username
+from ..models import UserEngagementLog
+from django.utils.timezone import now, is_naive, make_aware, get_current_timezone
+from django.utils.dateparse import parse_datetime
+import uuid
+
+
+def create_entity(type):
+
+    new_entity = Entity(type=type)
+    new_entity.save()
+
+    return new_entity
 
 
 def create_user(
@@ -17,6 +30,7 @@ def create_user(
     birthyear,
     gender,
     join_type,
+    is_verified,
 ):
     try:
         if not middle_name or middle_name.strip() == "":
@@ -36,7 +50,15 @@ def create_user(
             birthdate_naive = datetime(birthyear, birthmonth, birthday)
             birthdate = make_aware(birthdate_naive)
 
+            age = calculate_age(birthdate)
+            if age is None or age < MINIMUM_AGE:
+                raise ValueError(
+                    f"You must be at least {MINIMUM_AGE} years old to use Chatterloop"
+                )
+
         hashed_password = hash_password(raw_password)
+
+        new_entity = create_entity("user")
 
         new_user = Account(
             username=username,
@@ -50,10 +72,11 @@ def create_user(
             profile="none",
             date_created=now(),
             is_active=True,
-            is_verified=True,
+            is_verified=is_verified,
             is_default_user=True,
             is_superuser=False,
             join_type=join_type,
+            entity=new_entity,
         )
         new_user.save()
 
@@ -61,3 +84,26 @@ def create_user(
     except Exception as ex:
         print(str(ex))
         raise ValueError(str(ex))
+
+
+def save_profile_visit(entity, profile_id, target_type):
+    try:
+        user_id = uuid.UUID(entity.id) if isinstance(entity.id, str) else entity.id
+
+        if str(profile_id) == str(entity.id):
+            return
+
+        log = UserEngagementLog(
+            user_id=user_id,
+            activity_time=now(),
+            time_spent=float(0),
+            activity_type="visit",
+            target_type=target_type,
+            target_id=str(profile_id),
+        )
+        log.save()
+        return log
+
+    except Exception as ex:
+        print(ex)
+        return None

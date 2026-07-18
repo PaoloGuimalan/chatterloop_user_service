@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "webapp-vite-dev",
+      "runtimeExecutable": "yarn",
+      "runtimeArgs": ["--cwd", "C:\\Users\\paulo\\Documents\\Projects\\Chatterloop\\webapp", "dev"],
+      "port": 5173,
+      "autoPort": true
+    }
+  ]
+}

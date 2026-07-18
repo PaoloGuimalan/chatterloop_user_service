@@ -1,10 +1,7 @@
 from django.db import models
 from user.models import Account
+from interests.models import Interest
 import uuid
-
-
-class Tag(models.Model):
-    name = models.CharField(max_length=50, unique=True)
 
 
 class Mood(models.Model):
@@ -21,7 +18,9 @@ class Entry(models.Model):
     entry_date = models.DateField()
     mood = models.ForeignKey(Mood, null=True, blank=True, on_delete=models.DO_NOTHING)
     is_private = models.BooleanField(default=True)
-    tags = models.ManyToManyField(Tag, blank=True, related_name="entries")
+    tags = models.ManyToManyField(
+        Interest, through="interests.EntryTagLink", blank=True, related_name="entries"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

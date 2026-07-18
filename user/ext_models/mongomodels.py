@@ -6,18 +6,10 @@ from mongoengine import (
     EmbeddedDocument,
     EmbeddedDocumentField,
     IntField,
+    DateTimeField,
 )
 
-
-from mongoengine import (
-    Document,
-    StringField,
-    ListField,
-    BooleanField,
-    EmbeddedDocument,
-    EmbeddedDocumentField,
-    IntField,
-)
+from datetime import datetime
 
 
 class MessageDate(EmbeddedDocument):
@@ -55,6 +47,39 @@ class Message(Document):
     conversationType = StringField()
     # Do NOT add __v field as it causes errors in MongoEngine
     __v = IntField(db_field="__v")
+
+
+class ChatHistory(Document):
+    meta = {"collection": "chat_history"}
+
+    conversationID = StringField(required=True)
+    entityID = StringField(required=True)
+    cleared_at = DateTimeField(default=None)
+    isArchived = BooleanField(default=False)
+    isRestricted = BooleanField(default=False)
+
+
+class LastMessage(EmbeddedDocument):
+    messageID = StringField(default=None)
+    sender = StringField(default=None)
+    text = StringField(default="")
+    messageDate = DateTimeField(default=datetime.utcnow)
+    seeners = ListField(StringField())
+    messageType = StringField(default="text")  # text, image, video, file, notif
+    isDeleted = BooleanField(default=False)
+
+
+class Conversation(Document):
+    meta = {
+        "collection": "conversations",
+    }
+
+    conversationID = StringField(required=True, unique=True)
+    conversationType = StringField(default="single")
+    participant_ids = ListField(StringField())
+    last_message = EmbeddedDocumentField(LastMessage)
+    created_at = DateTimeField(default=datetime.utcnow)
+    updated_at = DateTimeField(default=datetime.utcnow)
 
 
 # Notifications Models
@@ -96,3 +121,23 @@ class Notification(Document):
 
 
 # END: Notifications Models
+
+
+class Session(Document):
+    meta = {"collection": "sessions"}
+
+    sessionID = StringField(required=True)
+    entityID = StringField(required=True)
+    userAgent = StringField(required=True)
+    deviceType = StringField(required=True)
+    deviceToken = StringField(required=True)
+
+    status = BooleanField(default=None)
+
+    browser = StringField(default=None)
+    os = StringField(default=None)
+    ip = StringField(default=None)
+
+    lastSeen = DateTimeField(default=None)
+
+    __v = IntField(db_field="__v")

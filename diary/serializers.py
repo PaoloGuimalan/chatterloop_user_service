@@ -1,10 +1,14 @@
 from rest_framework import serializers
-from .models import Tag, Entry, Attachment, MapView, Mood
+from .models import Entry, Attachment, MapView, Mood
+from interests.models import Interest
+from interests.services.affinity import bump_interest_affinity
+from interests.services.interest_resolver import ensure_grant_override
+from newsfeed.services.link_preview import extract_first_url_from_html, get_preview
 
 
 class TagSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Tag
+        model = Interest
         fields = ["id", "name"]
         read_only_fields = ["id"]
 
@@ -47,6 +51,11 @@ class EntrySerializer(serializers.ModelSerializer):
     attachments = AttachmentSerializer(many=True, read_only=True)
     entry_map_info = MapViewSerializer(read_only=True)
     mood = MoodSerializer()
+    link_preview = serializers.SerializerMethodField()
+
+    def get_link_preview(self, obj):
+        url = extract_first_url_from_html(obj.content or "")
+        return get_preview(url) if url else None
 
     class Meta:
         model = Entry
@@ -62,6 +71,7 @@ class EntrySerializer(serializers.ModelSerializer):
             "tag_objects",  # read-only detailed tags
             "attachments",
             "entry_map_info",
+            "link_preview",
             "created_at",
             "updated_at",
         ]
@@ -70,13 +80,18 @@ class EntrySerializer(serializers.ModelSerializer):
     def _handle_tags(self, entry, tag_names):
         if tag_names is None:
             return
-        entry.tags.clear()
+        tags = []
         for name in tag_names:
             cleaned = name.strip()
             if not cleaned:
                 continue
-            tag, _ = Tag.objects.get_or_create(name=cleaned)
-            entry.tags.add(tag)
+            tag, _ = Interest.objects.get_or_create_by_name(cleaned)
+            tags.append(tag)
+        entry.tags.set(tags)
+        if tags:
+            tag_ids = [tag.id for tag in tags]
+            bump_interest_affinity(entry.account.entity_id, tag_ids, "DIARY_TAG", False)
+            ensure_grant_override(entry.account.entity_id, tag_ids)
 
     def create(self, validated_data):
         tag_names = validated_data.pop("tags", [])

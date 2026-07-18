@@ -14,6 +14,7 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 from corsheaders.defaults import default_headers
+from cassandra.auth import PlainTextAuthProvider
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -26,8 +27,50 @@ DB_PORT = os.getenv("DB_PORT")
 DB_USERNAME = os.getenv("DB_USERNAME")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 
+CASSANDRA_DB_HOST = os.getenv("CASSANDRA_DB_HOST")
+CASSANDRA_DB_NAME = os.getenv("CASSANDRA_DB_NAME")
+CASSANDRA_DB_KEYSPACE = os.getenv("CASSANDRA_DB_KEYSPACE") or CASSANDRA_DB_NAME
+CASSANDRA_DB_PORT = os.getenv("CASSANDRA_DB_PORT")
+CASSANDRA_DB_USERNAME = os.getenv("CASSANDRA_DB_USERNAME")
+CASSANDRA_DB_PASSWORD = os.getenv("CASSANDRA_DB_PASSWORD")
+CASSANDRA_DB_TOKEN = os.getenv("CASSANDRA_DB_TOKEN")
+CASSANDRA_DB_BUNDLE = os.getenv("CASSANDRA_DB_BUNDLE")
+CASSANDRA_DB_ENDPOINT = os.getenv("CASSANDRA_DB_ENDPOINT")
+
+
+def build_cassandra_bundle_path():
+    if not CASSANDRA_DB_BUNDLE:
+        raise ValueError("CASSANDRA_DB_BUNDLE is not set.")
+
+    bundle_path = Path(BASE_DIR) / CASSANDRA_DB_BUNDLE
+    if not bundle_path.exists():
+        raise FileNotFoundError(
+            f"Astra secure connect bundle not found at {bundle_path}"
+        )
+
+    return bundle_path
+
+
+def build_cassandra_auth_provider():
+    if not CASSANDRA_DB_TOKEN:
+        raise ValueError("CASSANDRA_DB_TOKEN is not set.")
+
+    return PlainTextAuthProvider("token", CASSANDRA_DB_TOKEN)
+
+
+CASSANDRA_BUNDLE_PATH = build_cassandra_bundle_path()
+CASSANDRA_AUTH_PROVIDER = build_cassandra_auth_provider()
+CASSANDRA_CLOUD_CONFIG = {
+    "secure_connect_bundle": str(CASSANDRA_BUNDLE_PATH),
+}
+
 DEBUG = os.getenv("DEBUG")
 SECRET_KEY = os.getenv("SECRET_KEY")
+
+# Shared secret allowing trusted backends (e.g. the Node chat server) to call
+# select internal endpoints (e.g. link-preview resolution) without a
+# per-user token. Same value must be provisioned in the Node server's .env.
+INTERNAL_SERVICE_SECRET = os.getenv("INTERNAL_SERVICE_SECRET")
 
 GUNICORN_MAX_REQUESTS = os.getenv("GUNICORN_MAX_REQUESTS")
 SILKY_PYTHON_PROFILER = os.getenv("SILKY_PYTHON_PROFILER")
@@ -43,6 +86,23 @@ MONGODB_CLUSTER_HOST = os.getenv("MONGODB_CLUSTER_HOST")
 MONGODB_DB = os.getenv("MONGODB_DB")
 
 MAILINGSERVICE = os.getenv("MAILINGSERVICE")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://chatterloop.app")
+
+JWT_TOKEN = os.getenv("JWT_TOKEN")
+
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = os.getenv("EMAIL_HOST")
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+
+# Default Credentials (for noreply)
+EMAIL_HOST_USER = os.getenv("EMAIL_NOREPLY_USER")
+EMAIL_HOST_PASSWORD = JWT_TOKEN
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+
+# Additional Credentials for Manual Use (for verify)
+EMAIL_VERIFY_USER = os.getenv("EMAIL_VERIFY_USER")
+EMAIL_VERIFY_PASS = JWT_TOKEN
 
 CSRF_TRUSTED_ORIGINS = ["https://*.chatterloop.app", "https://*.neonsystems.net"]
 
@@ -52,6 +112,11 @@ CACHES = {
         "LOCATION": f"redis://{REDIS_USERNAME}:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0",  # Change if needed
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            # Permission checks now read through this cache on nearly every
+            # write endpoint (entity/services/permission_catalog_cache.py) -
+            # a Redis outage should fall back to direct DB queries, not 500
+            # every gated request.
+            "IGNORE_EXCEPTIONS": True,
         },
     }
 }
@@ -64,6 +129,7 @@ ALLOWED_HOSTS = ["*"]
 # Application definition
 
 INSTALLED_APPS = [
+    "django_cassandra_engine",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -73,12 +139,15 @@ INSTALLED_APPS = [
     "django_extensions",
     "rest_framework",
     "corsheaders",
+    "celery",
     # Added apps
     "user",
     "community",
-    "newsfeed",
     "core",
+    "interests",
+    "newsfeed",
     "diary",
+    "entity",
     # Silk
     "silk",
 ]
@@ -97,6 +166,23 @@ MIDDLEWARE = [
     "silk.middleware.SilkyMiddleware",
 ]
 
+CELERY_BROKER_URL = (
+    f"redis://{REDIS_USERNAME}:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
+)
+CELERY_RESULT_BACKEND = (
+    f"redis://{REDIS_USERNAME}:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
+)
+CELERY_BROKER_POOL_LIMIT = 4
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_WORKER_MAX_TASKS_PER_CHILD = 1
+CELERY_WORKER_MAX_MEMORY_PER_CHILD = 100000
+CELERY_RESULT_BACKEND = None
+CELERY_IGNORE_RESULT = True
+CELERY_STORE_ERRORS_EVEN_IF_IGNORED = False
+CELERY_BROKER_TRANSPORT_OPTIONS = {
+    "max_connections": 4,
+}
+
 CORS_ALLOWED_ORIGINS = []
 
 CORS_ALLOWED_ORIGIN_REGEXES = [
@@ -107,7 +193,14 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
 
 CORS_ALLOW_ALL_ORIGINS = False
 
-CORS_ALLOW_HEADERS = list(default_headers) + ["x-access-token", "paginated", "action"]
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "x-access-token",
+    "paginated",
+    "action",
+    "x-nonce",
+    "device-token",
+    "x-entity",
+]
 
 ROOT_URLCONF = "user_service.urls"
 
@@ -140,7 +233,21 @@ DATABASES = {
         "PASSWORD": DB_PASSWORD,
         "HOST": DB_HOST,
         "PORT": DB_PORT,
-    }
+    },
+    "cassandra": {
+        "ENGINE": "django_cassandra_engine",
+        "NAME": CASSANDRA_DB_KEYSPACE,
+        "HOST": CASSANDRA_DB_HOST,
+        "PORT": CASSANDRA_DB_PORT,
+        "USER": "token",
+        "PASSWORD": CASSANDRA_DB_TOKEN,
+        "OPTIONS": {
+            "connection": {
+                "cloud": CASSANDRA_CLOUD_CONFIG,
+                "auth_provider": CASSANDRA_AUTH_PROVIDER,
+            }
+        },
+    },
 }
 
 

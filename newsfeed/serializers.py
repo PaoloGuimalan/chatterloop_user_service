@@ -11,12 +11,16 @@ from .models import (
     ActivityCount,
     CountType,
     PostScore,
+    PostSave,
 )
 from user.serializers import AccountPreviewSerializer
+from entity.serializers import EntitySerializer
+from community.models import Realm
+from .services.link_preview import extract_first_url, get_preview
 
 
 class PostTagSerializer(serializers.ModelSerializer):
-    user = AccountPreviewSerializer(read_only=True)
+    entity = EntitySerializer(read_only=True)
 
     class Meta:
         model = PostTag
@@ -65,16 +69,37 @@ class PostScoreSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class RealmPreviewSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Realm
+        fields = [
+            "id",
+            "realm_id",
+            "name",
+            "profile",
+            "type",
+            "is_verified",
+            "slug",
+        ]
+
+
 class PostSerializer(serializers.ModelSerializer):
     tagging = PostTagSerializer(many=True, read_only=True)
-    privacy_users = PostPrivacySerializer(many=True, read_only=True)
+    privacy_entity = PostPrivacySerializer(many=True, read_only=True)
     references = PostReferenceSerializer(many=True, read_only=True)
     map_info = MapInfoSerializer(read_only=True)
     preview = PreviewCountSerializer(read_only=True, many=True)
-    user_reaction = serializers.CharField()
-    user = AccountPreviewSerializer(read_only=True)
+    entity_reaction = serializers.CharField()
+    entity = EntitySerializer(read_only=True)
+    # author_realm = RealmPreviewSerializer(read_only=True)
     # activity_counts = ActivityCountSerializer(read_only=True, many=True)
     score = PostScoreSerializer(read_only=True)
+    is_saved = serializers.BooleanField(read_only=True)
+    link_preview = serializers.SerializerMethodField()
+
+    def get_link_preview(self, obj):
+        url = extract_first_url(obj.caption or "")
+        return get_preview(url) if url else None
 
     class Meta:
         model = Post
@@ -88,8 +113,29 @@ class EmojiSerializer(serializers.ModelSerializer):
 
 
 class CommentSerializer(serializers.ModelSerializer):
-    user = AccountPreviewSerializer(read_only=True)
+    entity = EntitySerializer(read_only=True)
+    link_preview = serializers.SerializerMethodField()
+
+    def get_link_preview(self, obj):
+        url = extract_first_url(obj.text or "")
+        return get_preview(url) if url else None
 
     class Meta:
         model = Comment
+        fields = "__all__"
+
+
+class PostBasicSerializer(serializers.ModelSerializer):
+    entity = EntitySerializer(read_only=True)
+
+    class Meta:
+        model = Post
+        fields = "__all__"
+
+
+class PostSaveSerializer(serializers.ModelSerializer):
+    post = PostBasicSerializer(read_only=True)
+
+    class Meta:
+        model = PostSave
         fields = "__all__"
