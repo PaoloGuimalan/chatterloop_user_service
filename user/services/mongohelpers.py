@@ -156,6 +156,22 @@ class SessionService:
         session.save()
         return session
 
+    def update_fcm_token(self, device_token, entity_id, fcm_token):
+        """Upsert this device's FCM push token onto its session row - but only
+        write when it changed. Runs on every authenticated request, so the
+        fcmToken__ne filter makes it a no-op when the token is already current,
+        while STILL matching rows whose fcmToken is missing/stale (so it also
+        backfills already-logged-in devices on their next request). Scoped to
+        (deviceToken, entityID) like exists(), so it never clobbers a different
+        account's session on a shared device."""
+        if not fcm_token:
+            return
+        Session.objects(
+            deviceToken=device_token,
+            entityID=str(entity_id),
+            fcmToken__ne=fcm_token,
+        ).update(set__fcmToken=fcm_token)
+
     def list_for_entity(self, entity_id):
         """Sessions for this exact entity only - deliberately excludes any
         page/realm session rows the same physical device may also hold from
@@ -170,6 +186,4 @@ class SessionService:
         physical device/browser - allowed_entity_ids must be this account's
         personal entity plus every page/realm it can switch into."""
         allowed = [str(entity_id) for entity_id in allowed_entity_ids]
-        return Session.objects(
-            deviceToken=device_token, entityID__in=allowed
-        ).delete()
+        return Session.objects(deviceToken=device_token, entityID__in=allowed).delete()

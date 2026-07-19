@@ -132,6 +132,8 @@ class Session(Document):
     deviceType = StringField(required=True)
     deviceToken = StringField(required=True)
 
+    fcmToken = StringField(default=None)
+
     status = BooleanField(default=None)
 
     browser = StringField(default=None)

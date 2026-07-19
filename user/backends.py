@@ -64,6 +64,7 @@ class AutheticationBackend(BaseBackend):
             origin = request.headers.get("origin")
             nonce = request.headers.get("x-nonce")
             device_token = request.headers.get("device-token")
+            fcm_token = request.headers.get("fcm-token")
 
             if not origin:
                 raise PermissionDenied("Origin blocked")
@@ -107,6 +108,11 @@ class AutheticationBackend(BaseBackend):
 
             if not is_existing:
                 raise PermissionDenied("Device not logged in.")
+
+            if fcm_token:
+                session.update_fcm_token(
+                    device_token, decoded_header["entity"], fcm_token
+                )
 
             self._check_compliance(request, user)
 
