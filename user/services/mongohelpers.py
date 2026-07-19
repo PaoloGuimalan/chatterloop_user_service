@@ -156,6 +156,12 @@ class SessionService:
         session.save()
         return session
 
+    def clear_fcm_token(self, device_token, entity_id):
+        Session.objects(
+            deviceToken=device_token,
+            entityID=str(entity_id),
+        ).update(set__fcmToken=None)
+
     def update_fcm_token(self, device_token, entity_id, fcm_token):
         """Upsert this device's FCM push token onto its session row - but only
         write when it changed. Runs on every authenticated request, so the

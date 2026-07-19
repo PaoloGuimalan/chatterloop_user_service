@@ -54,6 +54,7 @@ class EntitySwitch(APIView):
 
     def post(self, request):
         user = request.user
+        entity = request.entity
         try:
             realm_id = request.data.get("realm_id")
             device_token = request.headers.get("device-token")
@@ -75,9 +76,7 @@ class EntitySwitch(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            member = Member.objects.filter(
-                entity=user.entity, realm=realm
-            ).first()
+            member = Member.objects.filter(entity=user.entity, realm=realm).first()
 
             if member is None or member.role not in (
                 MemberRole.OWNER,
@@ -92,6 +91,10 @@ class EntitySwitch(APIView):
                 )
 
             session = SessionService()
+
+            if session.exists(device_token, entity.id):
+                session.clear_fcm_token(device_token, entity.id)
+
             if not session.exists(device_token, realm.entity_id):
                 session.add_session(request, realm.entity_id, device_token)
 
@@ -139,6 +142,10 @@ class EntitySwitchBack(APIView):
                 )
 
             session = SessionService()
+
+            if session.exists(device_token, entity.id):
+                session.clear_fcm_token(device_token, entity.id)
+
             if not session.exists(device_token, user.entity.id):
                 session.add_session(request, user.entity.id, device_token)
 
