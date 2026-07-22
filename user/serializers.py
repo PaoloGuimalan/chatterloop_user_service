@@ -92,11 +92,16 @@ class AccountSearchSerializer(serializers.ModelSerializer):
     connection_accomplished = serializers.BooleanField()
     connection_id = serializers.CharField()
     is_action_by_entity = serializers.BooleanField()
+    # Raw FK column (account.entity_id) - read straight off the attribute so we
+    # don't trigger a join to Entity. Post tagging matches on entity_id, so the
+    # client needs it to tag searched users (see NewPostModal tagging flow).
+    entity_id = serializers.CharField(read_only=True)
 
     class Meta:
         model = Account
         fields = [
             "id",
+            "entity_id",
             "username",
             "first_name",
             "middle_name",

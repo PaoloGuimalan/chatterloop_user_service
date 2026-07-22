@@ -6,4 +6,5 @@ app_name = "entity"
 
 urlpatterns = [
     path("me/modules", views.MyAllowedModules.as_view(), name="my-allowed-modules"),
+    path("search/<str:query>/", views.EntitySearch.as_view(), name="entity-search"),
 ]

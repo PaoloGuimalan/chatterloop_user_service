@@ -2,8 +2,13 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.pagination import PageNumberPagination
+from django.db.models import Q
 
 from entity.services.allowed_modules import resolve_allowed_modules_and_context
+from user.models import Account
+from user.utils.blocking import get_blocked_account_ids
+from community.models import Realm
 
 
 class MyAllowedModules(APIView):
@@ -51,3 +56,160 @@ class MyAllowedModules(APIView):
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+class Pagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = "page_size"
+
+
+class EntitySearch(APIView):
+    """
+    Search v2 - unified entity search returning both users and realms/pages in
+    one normalized shape ({entity_id, type, display_name, handle, profile,
+    is_verified, realm_type}). Built for post tagging (tag a person OR a page),
+    but intended to become the go-forward search endpoint the rest of the app
+    migrates onto - hence the flexible filters below and the deliberate
+    decoupling from the user-only /api/user/search response (whose shape the
+    Explore page and top-bar drawer still depend on).
+
+    Query params:
+      - types: comma list of entity kinds to include. Default "user,realm".
+      - realm_types: comma list of Realm.type values to include when realms are
+        in scope, or "all" for no type filter. Default "page" - only public,
+        profile-like pages are taggable today; widen later with no code change.
+    """
+
+    permission_classes = [IsAuthenticated]
+    pagination_class = Pagination
+
+    @staticmethod
+    def _clean_profile(profile):
+        # The two models use different "no photo" sentinels (user: "none",
+        # realm: "N/A"); normalize both to null so the client has one rule.
+        return None if profile in (None, "", "none", "N/A") else profile
+
+    def _normalize_account(self, row):
+        first = row.get("first_name") or ""
+        middle = row.get("middle_name") or ""
+        middle = "" if middle == "N/A" else middle
+        last = row.get("last_name") or ""
+        display_name = " ".join(p for p in [first, middle, last] if p).strip()
+        return {
+            "entity_id": row.get("entity_id"),
+            "type": "user",
+            "display_name": display_name or (row.get("username") or ""),
+            "handle": row.get("username") or "",
+            "profile": self._clean_profile(row.get("profile")),
+            # A user's verified badge is `is_badged`, NOT `is_verified` (which is
+            # the account/email-verification gate). Realms carry their badge on
+            # `is_verified`. Normalize both onto the output `is_verified` =
+            # "show a verified badge", matching how PostItem renders each type.
+            "is_verified": bool(row.get("is_badged")),
+            "realm_type": None,
+        }
+
+    def _normalize_realm(self, row):
+        return {
+            "entity_id": row.get("entity_id"),
+            "type": "realm",
+            "display_name": row.get("name") or (row.get("slug") or ""),
+            "handle": row.get("slug") or "",
+            "profile": self._clean_profile(row.get("profile")),
+            "is_verified": bool(row.get("is_verified")),
+            "realm_type": row.get("type"),
+        }
+
+    def get(self, request, query):
+        entity = request.entity
+        try:
+            raw_kinds = request.query_params.get("types", "user,realm")
+            kinds = {t.strip() for t in raw_kinds.split(",") if t.strip()}
+
+            raw_realm_types = request.query_params.get("realm_types", "page")
+            realm_types = [t.strip() for t in raw_realm_types.split(",") if t.strip()]
+            include_all_realm_types = "all" in realm_types
+
+            blocked_ids = get_blocked_account_ids(entity)
+
+            # Per-kind cap so one kind can't crowd the other out before we merge.
+            per_kind_limit = 25
+            results = []
+
+            if "user" in kinds:
+                if query.startswith("@"):
+                    user_filter = Q(username__icontains=query.split("@", 1)[1])
+                else:
+                    user_filter = (
+                        Q(first_name__icontains=query)
+                        | Q(middle_name__icontains=query)
+                        | Q(last_name__icontains=query)
+                        | Q(username__icontains=query)
+                    )
+
+                accounts = (
+                    Account.objects.filter(
+                        user_filter,
+                        is_active=True,
+                        is_verified=True,
+                    )
+                    .exclude(entity_id=entity.id)
+                    .exclude(entity_id__in=blocked_ids)
+                    .values(
+                        "entity_id",
+                        "username",
+                        "first_name",
+                        "middle_name",
+                        "last_name",
+                        "profile",
+                        "is_badged",
+                    )[:per_kind_limit]
+                )
+                results.extend(self._normalize_account(a) for a in accounts)
+
+            if "realm" in kinds:
+                if query.startswith("@"):
+                    realm_filter = Q(slug__icontains=query.split("@", 1)[1])
+                else:
+                    realm_filter = Q(name__icontains=query) | Q(slug__icontains=query)
+
+                realm_qs = Realm.objects.filter(
+                    realm_filter,
+                    is_active=True,
+                    is_private=False,
+                )
+                if not include_all_realm_types and realm_types:
+                    realm_qs = realm_qs.filter(type__in=realm_types)
+
+                realms = (
+                    realm_qs.exclude(entity_id=entity.id)
+                    .exclude(entity_id__in=blocked_ids)
+                    .values(
+                        "entity_id",
+                        "name",
+                        "slug",
+                        "profile",
+                        "is_verified",
+                        "type",
+                    )[:per_kind_limit]
+                )
+                results.extend(self._normalize_realm(r) for r in realms)
+
+            # Prefix matches first (typing "jo" surfaces "John"/"jodoe" above
+            # incidental substring hits), then alphabetical for stable ordering.
+            q_lower = query.lstrip("@").lower()
+
+            def sort_key(item):
+                name = (item["display_name"] or "").lower()
+                handle = (item["handle"] or "").lower()
+                is_prefix = name.startswith(q_lower) or handle.startswith(q_lower)
+                return (not is_prefix, name)
+
+            results.sort(key=sort_key)
+
+            paginator = self.pagination_class()
+            page = paginator.paginate_queryset(results, request, view=self)
+            return paginator.get_paginated_response(page)
+
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
