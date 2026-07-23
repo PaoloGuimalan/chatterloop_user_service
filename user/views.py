@@ -58,9 +58,8 @@ from .utils.blocking import get_blocked_account_ids, is_blocked
 from newsfeed.helpers.query_functions import (
     interaction_score_bump,
     follower_interaction_score_bump,
-    remove_feed_on_unfriend,
-    backfill_new_friend_feed,
 )
+from entity.services.follows import follow_entity, purge_between
 from community.models import Realm, Member, Follow, Invite
 from entity.models import Entity
 from entity.permissions import Permission, MemberRole
@@ -822,6 +821,15 @@ class UserContacts(APIView):
                 )
                 conn2.save()
 
+                # Reaching out implies interest, so the requester starts
+                # following the target immediately - before, and regardless
+                # of, any accept. This also seeds the requester's feed with
+                # the target's posts (the feed is keyed on the follow graph),
+                # so there is something to see while the request is pending.
+                # Deliberately one-directional: the target has not agreed to
+                # anything yet, so nothing is created on their side.
+                follow_entity(entity, target_entity)
+
                 # Notification Saving and relay
 
                 service = NotificationService()
@@ -951,9 +959,16 @@ class UserContacts(APIView):
                                 acceptee_update.connection_count += 1
                                 acceptee_update.save()
 
-                            # Entity-keyed, so this is correct for both kinds.
-                            backfill_new_friend_feed(entity.id, other_user.id)
-                            backfill_new_friend_feed(other_user.id, entity.id)
+                            # Accepting implies interest in return, so the
+                            # accepter now follows the requester. The
+                            # requester already followed at request time, so
+                            # this completes the pair without touching their
+                            # side. follow_entity backfills the feed itself -
+                            # which is why the explicit symmetric
+                            # backfill_new_friend_feed() calls that used to
+                            # live here are gone: the feed is driven by the
+                            # follow graph now, not by connections.
+                            follow_entity(entity, other_user)
 
                             if acceptee_update and acceptee_update.email:
                                 emailer.send_contact_accepted_email(
@@ -1183,8 +1198,25 @@ class UserContacts(APIView):
                     else "You declined a connection request"
                 )
 
-                remove_feed_on_unfriend(entity.id, to_entity_id)
-                remove_feed_on_unfriend(to_entity_id, entity.id)
+                # Removing a connection PURGES the relationship in both
+                # directions: the follows that connecting created (the
+                # requester's at request time, the accepter's at accept time)
+                # go too, along with each side's feed bucket of the other's
+                # posts. Deliberately different from unfollowing, which is
+                # one-directional and leaves the connection intact.
+                #
+                # Applies to "decline" as well as "remove": both delete the
+                # connection rows, so both should leave no follow behind -
+                # otherwise a declined request would strand the requester
+                # still following someone who rejected them.
+                #
+                # purge_between clears each side's feed bucket of the other's
+                # posts UNCONDITIONALLY, not just when a follow row happened
+                # to exist - someone may have unfollowed manually earlier,
+                # leaving no edge while the posts it seeded still sit in the
+                # bucket.
+                for other in other_users:
+                    purge_between(entity, other)
 
                 return Response(
                     {"message": message_response}, status=status.HTTP_200_OK

@@ -11,7 +11,7 @@ from .models import (
     Reaction,
 )
 from user.models import UserEngagementLog
-from user.services.connections import ConnectionHelpers
+from entity.services.follows import get_follower_ids
 from .helpers.query_functions import (
     bulk_fanout_to_cache,
     interaction_score_bump,
@@ -139,11 +139,16 @@ def log_comment_action(sender, instance, created, **kwargs):
         lock_key = f"chatterloop:bump_lock:{str(instance.post.post_id)}:{str(instance.entity.id)}:comment"
 
         if cache.add(lock_key, "active", timeout=1800):
-            connections = ConnectionHelpers(current_user)
-            connections_list = connections.get_ranked_connections(limit=500)
+            # Social bump: someone commented, so push the post into the feeds
+            # of the people who follow THEM. Was the commenter's connections;
+            # the feed is keyed on the follow graph now, and following is a
+            # superset of connecting (both sides of a contact request
+            # auto-follow), so connections still receive this - via the
+            # follow edge that connecting created.
+            follower_ids = get_follower_ids(current_user.id, limit=500)
 
             bulk_fanout_to_cache(
-                connections_list, {"id": instance.post.post_id, "author_id": author_id}
+                follower_ids, {"id": instance.post.post_id, "author_id": author_id}
             )
 
 

@@ -30,6 +30,7 @@ from user_service.services.redis import RedisPubSubClient
 from entity.permissions import Permission
 from entity.services.permission_resolver import has_permission
 from entity.utils import resolve_entity_target
+from entity.services.follows import follow_entity, unfollow_entity
 
 
 class Pagination(PageNumberPagination):
@@ -294,9 +295,11 @@ class FollowRealmView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # get_or_create keeps a double-tap idempotent instead of raising on
-            # the (follower, followee) unique constraint.
-            Follow.objects.get_or_create(follower=entity, followee=followee)
+            # follow_entity also seeds this follower's feed bucket with the
+            # followee's recent posts - the feed is fan-out-on-write keyed on
+            # the follow graph. Idempotent, so a double-tap neither raises on
+            # the unique constraint nor re-backfills.
+            follow_entity(entity, followee)
 
             return Response(
                 {"status": True, "message": f"Followed {raw_target}"},
@@ -319,9 +322,10 @@ class FollowRealmView(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            # filter().delete() rather than get() - unfollowing something you
-            # do not follow is a no-op, not a 500.
-            Follow.objects.filter(follower=entity, followee=followee).delete()
+            # Also pulls the followee's fanned-out posts back out of this
+            # follower's feed bucket. Unfollowing something you do not follow
+            # is a no-op, not a 500.
+            unfollow_entity(entity, followee)
 
             return Response(
                 {"status": True, "message": f"Unfollowed {raw_target}"},
