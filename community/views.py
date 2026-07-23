@@ -5,11 +5,11 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from .models import RealmFollow, Realm, Member, Invite, generate_invite_token
+from .models import Follow, Realm, Member, Invite, generate_invite_token
 from .serializers import (
     RealmSerializer,
     RealmMemberSerializer,
-    RealmFollowSerializer,
+    FollowSerializer,
     InviteSerializer,
 )
 from django.shortcuts import get_object_or_404
@@ -29,6 +29,7 @@ from user.utils.external_requests import emailer
 from user_service.services.redis import RedisPubSubClient
 from entity.permissions import Permission
 from entity.services.permission_resolver import has_permission
+from entity.utils import resolve_entity_target
 
 
 class Pagination(PageNumberPagination):
@@ -49,7 +50,7 @@ class TopRealms(APIView):
             type = request.query_params.get("type", None)
 
             top_realm_queryset = Realm.objects.annotate(
-                followers_count=Count("followers", distinct=True),
+                followers_count=Count("entity__followers", distinct=True),
                 members=Count("member", distinct=True),
                 # A page's own entity is never itself a Member row of its
                 # realm (Member rows only ever represent personal accounts),
@@ -76,7 +77,7 @@ class TopRealms(APIView):
                     output_field=BooleanField(),
                 ),
                 is_follower=Exists(
-                    RealmFollow.objects.filter(realm=OuterRef("pk"), follower=entity)
+                    Follow.objects.filter(followee=OuterRef("entity_id"), follower=entity)
                 ),
             ).filter(type=type, is_private=False)
 
@@ -111,7 +112,7 @@ class MyRealms(APIView):
             type = request.query_params.get("type", None)
 
             my_realm_queryset = Realm.objects.annotate(
-                followers_count=Count("followers", distinct=True),
+                followers_count=Count("entity__followers", distinct=True),
                 members=Count("member", distinct=True),
                 # See TopRealms.get() above: `Q(entity=entity)` covers acting
                 # as a page whose own entity can never be a Member row of
@@ -135,7 +136,7 @@ class MyRealms(APIView):
                     output_field=BooleanField(),
                 ),
                 is_follower=Exists(
-                    RealmFollow.objects.filter(realm=OuterRef("pk"), follower=entity)
+                    Follow.objects.filter(followee=OuterRef("entity_id"), follower=entity)
                 ),
             ).filter(is_member=True, type=type)
 
@@ -204,7 +205,7 @@ class FollowRealmView(APIView):
 
             followed_realm_queryset = (
                 Realm.objects.annotate(
-                    followers_count=Count("followers", distinct=True),
+                    followers_count=Count("entity__followers", distinct=True),
                     members=Count("member", distinct=True),
                     # See TopRealms.get() above: `Q(entity=entity)` covers
                     # acting as a page whose own entity can never be a
@@ -234,8 +235,8 @@ class FollowRealmView(APIView):
                         output_field=BooleanField(),
                     ),
                     is_follower=Exists(
-                        RealmFollow.objects.filter(
-                            realm=OuterRef("pk"), follower=entity
+                        Follow.objects.filter(
+                            followee=OuterRef("entity_id"), follower=entity
                         )
                     ),
                 )
@@ -260,26 +261,45 @@ class FollowRealmView(APIView):
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @staticmethod
+    def _target_id(request):
+        """
+        Follow targets any entity now. `realm_id` is read first so existing
+        webapp/mobile calls are untouched; `entity_id`/`target_id` are the
+        general aliases used when following a person.
+        """
+        return (
+            request.data.get("realm_id")
+            or request.data.get("entity_id")
+            or request.data.get("target_id")
+        )
+
     def post(self, request):
         user = self.request.user
         entity = self.request.entity
 
         try:
-            realm_id = request.data.get("realm_id")
+            raw_target = self._target_id(request)
+            followee = resolve_entity_target(raw_target)
 
-            realm = get_object_or_404(Realm, id=realm_id)
-            follow_realm_queryset = RealmFollow.objects.create(
-                follower=entity, realm=realm
-            )
-
-            if follow_realm_queryset is None:
+            if followee is None:
                 return Response(
-                    {"status": False, "message": "Error completing follow request"},
+                    {"status": False, "message": "Target not found"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            if followee.id == entity.id:
+                return Response(
+                    {"status": False, "message": "You cannot follow yourself"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+            # get_or_create keeps a double-tap idempotent instead of raising on
+            # the (follower, followee) unique constraint.
+            Follow.objects.get_or_create(follower=entity, followee=followee)
+
             return Response(
-                {"status": True, "message": f"Followed {realm_id}"},
+                {"status": True, "message": f"Followed {raw_target}"},
                 status=status.HTTP_201_CREATED,
             )
         except Exception as e:
@@ -290,24 +310,22 @@ class FollowRealmView(APIView):
         entity = self.request.entity
 
         try:
-            realm_id = request.data.get("realm_id")
+            raw_target = self._target_id(request)
+            followee = resolve_entity_target(raw_target)
 
-            realm = get_object_or_404(Realm, id=realm_id)
-            unfollow_realm_queryset = RealmFollow.objects.get(
-                follower=entity, realm=realm
-            )
-
-            if unfollow_realm_queryset is None:
+            if followee is None:
                 return Response(
-                    {"status": False, "message": "Error completing follow request"},
-                    status=status.HTTP_400_BAD_REQUEST,
+                    {"status": False, "message": "Target not found"},
+                    status=status.HTTP_404_NOT_FOUND,
                 )
 
-            unfollow_realm_queryset.delete()
+            # filter().delete() rather than get() - unfollowing something you
+            # do not follow is a no-op, not a 500.
+            Follow.objects.filter(follower=entity, followee=followee).delete()
 
             return Response(
-                {"status": True, "message": f"Followed {realm_id}"},
-                status=status.HTTP_201_CREATED,
+                {"status": True, "message": f"Unfollowed {raw_target}"},
+                status=status.HTTP_200_OK,
             )
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -369,7 +387,7 @@ class RealmMembersView(APIView):
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class RealmFollowersView(APIView):
+class FollowersView(APIView):
     permission_classes = [IsAuthenticated]
     pagination_class = Pagination
 
@@ -381,8 +399,10 @@ class RealmFollowersView(APIView):
             search = request.query_params.get("search", None)
 
             realm_followers_query_set = (
-                RealmFollow.objects.prefetch_related("follower")
-                .filter(realm__id=str(realm_id))
+                Follow.objects.prefetch_related("follower")
+                # Follow targets an entity now; a realm's entity is reachable
+                # via Realm.entity's reverse accessor ("realms").
+                .filter(followee__realms__id=str(realm_id))
                 .order_by("-created_at")
             )
 
@@ -405,7 +425,7 @@ class RealmFollowersView(APIView):
                 realm_followers_query_set, request, view=self
             )
 
-            serialized_result = RealmFollowSerializer(paginated_queryset, many=True)
+            serialized_result = FollowSerializer(paginated_queryset, many=True)
             data = paginator.get_paginated_response(serialized_result.data)
 
             return data
@@ -433,8 +453,8 @@ class RealmFollowersView(APIView):
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
 
-            unfollow_realm_queryset = RealmFollow.objects.get(
-                follow_id=follow_id, realm=realm
+            unfollow_realm_queryset = Follow.objects.get(
+                follow_id=follow_id, followee=realm.entity
             )
 
             if unfollow_realm_queryset is None:
@@ -868,7 +888,7 @@ class InviteView(APIView):
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
 
-            delete_query = RealmFollow.objects.get(follow_id=follow_id)
+            delete_query = Follow.objects.get(follow_id=follow_id)
             delete_query.delete()
 
             return Response(

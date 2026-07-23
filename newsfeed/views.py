@@ -61,7 +61,7 @@ from .helpers.query_functions import (
     resolved_interest_categories,
 )
 import uuid
-from community.models import RealmFollow, Realm
+from community.models import Follow, Realm
 from entity.models import Entity
 from django.shortcuts import get_object_or_404
 from user.utils.blocking import get_blocked_account_ids, is_blocked
@@ -88,9 +88,12 @@ class NewsfeedView(APIView):
 
             connections = ConnectionHelpers(entity)
             connections_list = connections.get_connections()
+            # Was values_list("follower_id"), which returned the CURRENT
+            # entity's own id for every row rather than the things it follows -
+            # so this list was effectively useless. followee_id is the target.
             followed_realm_ids = list(
-                RealmFollow.objects.filter(follower=entity).values_list(
-                    "follower_id", flat=True
+                Follow.objects.filter(follower=entity).values_list(
+                    "followee_id", flat=True
                 )
             )
             blocked_account_ids = get_blocked_account_ids(entity)

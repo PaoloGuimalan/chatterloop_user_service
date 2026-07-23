@@ -5,7 +5,7 @@ from ..ext_models.mongomodels import Message, Notification, Session
 
 
 def export_account_data(account, entity):
-    from community.models import Realm, Member, RealmFollow, Invite
+    from community.models import Realm, Member, Follow, Invite
     from diary.models import Entry
     from newsfeed.models import Post, Comment, PostSave
 
@@ -53,9 +53,12 @@ def export_account_data(account, entity):
                 "realm__realm_id", "realm__name", "role", "nickname", "date_joined"
             )
         ),
+        # Follow targets an entity now, so a followed page is reached via
+        # Realm.entity's reverse accessor. Export key kept as-is so an
+        # existing export's shape does not change.
         "realm_follows": list(
-            RealmFollow.objects.filter(follower=entity).values(
-                "realm__realm_id", "realm__name", "created_at"
+            Follow.objects.filter(follower=entity).values(
+                "followee__realms__realm_id", "followee__realms__name", "created_at"
             )
         ),
         "realm_invites_sent": list(

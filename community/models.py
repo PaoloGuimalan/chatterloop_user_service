@@ -3,7 +3,11 @@ import random
 import secrets
 from django.db import models
 from user.models import Account
-from entity.models import Entity
+
+# Follow (formerly RealmFollow) now lives in the entity app - the follower is
+# an Entity, so a page can follow a page. Re-exported so existing
+# `from community.models import Follow` imports keep resolving.
+from entity.models import Entity, Follow  # noqa: F401
 from entity.permissions import MemberRole
 from django.utils.timezone import now
 
@@ -131,31 +135,6 @@ class Member(models.Model):
 
     class Meta:
         unique_together = ("entity", "realm")
-
-
-class RealmFollow(models.Model):
-    follow_id = models.CharField(
-        max_length=150, default=uuid.uuid4, unique=True, primary_key=True
-    )
-    follower = models.ForeignKey(
-        Entity,
-        null=False,
-        on_delete=models.CASCADE,
-        related_name="realm_follows",
-    )
-    realm = models.ForeignKey(
-        Realm,
-        null=False,
-        on_delete=models.CASCADE,
-        related_name="followers",
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    interaction_score = models.FloatField(default=10.0)
-    last_interaction_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        unique_together = ("follower", "realm")
 
 
 class Invite(models.Model):

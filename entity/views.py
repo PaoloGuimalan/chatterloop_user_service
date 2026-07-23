@@ -3,9 +3,10 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
-from django.db.models import Q
+from django.db.models import Q, Exists, OuterRef, Subquery, F
 
 from entity.services.allowed_modules import resolve_allowed_modules_and_context
+from entity.models import Connection
 from user.models import Account
 from user.utils.blocking import get_blocked_account_ids
 from community.models import Realm
@@ -38,7 +39,9 @@ class MyAllowedModules(APIView):
         entity = request.entity
         user = request.user
         try:
-            allowed_modules, active_entity = resolve_allowed_modules_and_context(entity, user)
+            allowed_modules, active_entity = resolve_allowed_modules_and_context(
+                entity, user
+            )
 
             return Response(
                 {
@@ -89,7 +92,7 @@ class EntitySearch(APIView):
         # realm: "N/A"); normalize both to null so the client has one rule.
         return None if profile in (None, "", "none", "N/A") else profile
 
-    def _normalize_account(self, row):
+    def _normalize_account(self, row, acting_entity_id=None):
         first = row.get("first_name") or ""
         middle = row.get("middle_name") or ""
         middle = "" if middle == "N/A" else middle
@@ -107,6 +110,25 @@ class EntitySearch(APIView):
             # "show a verified badge", matching how PostItem renders each type.
             "is_verified": bool(row.get("is_badged")),
             "realm_type": None,
+            # --- connection state (users only) ---
+            # Explore and the top-bar drawer render Add / Accept / Decline off
+            # these, and those actions address an Account id, not an entity_id.
+            # Emitted here so those surfaces can move off the user-only
+            # /api/user/search without losing behaviour. Realms get null for
+            # all of them (see _normalize_realm) so the client has one rule:
+            # "no id -> no connection actions".
+            "id": row.get("id"),
+            "has_connection": bool(row.get("has_connection")),
+            "connection_accomplished": bool(row.get("connection_accomplished")),
+            "connection_id": row.get("connection_id"),
+            # A connection is stored as TWO mirrored rows (one per direction),
+            # so "is there a row where I am action_by" is always true and
+            # cannot identify the requester. The initiator is the action_by of
+            # the EARLIEST row - same rule the profile endpoint uses.
+            "is_action_by_entity": bool(
+                acting_entity_id
+                and str(row.get("connection_initiator_id") or "") == acting_entity_id
+            ),
         }
 
     def _normalize_realm(self, row):
@@ -118,6 +140,14 @@ class EntitySearch(APIView):
             "profile": self._clean_profile(row.get("profile")),
             "is_verified": bool(row.get("is_verified")),
             "realm_type": row.get("type"),
+            # Realms are not connection targets from search - the client opens
+            # the page and follows from there. Keys are still present so both
+            # kinds share one shape.
+            "id": row.get("id"),
+            "has_connection": False,
+            "connection_accomplished": False,
+            "connection_id": None,
+            "is_action_by_entity": False,
         }
 
     def get(self, request, query):
@@ -147,6 +177,16 @@ class EntitySearch(APIView):
                         | Q(username__icontains=query)
                     )
 
+                # Connection state between the acting entity and each hit, so
+                # Explore/drawer keep their Add / Accept / Decline behaviour.
+                # Connection is entity<->entity, so this is NOT restricted to
+                # user-only sides the way the old /api/user/search was.
+                base_connection_qs = Connection.objects.filter(
+                    Q(action_by=entity, involved_entity=OuterRef("entity_id"))
+                    | Q(action_by=OuterRef("entity_id"), involved_entity=entity),
+                    ~Q(action_by=F("involved_entity")),
+                )
+
                 accounts = (
                     Account.objects.filter(
                         user_filter,
@@ -155,7 +195,27 @@ class EntitySearch(APIView):
                     )
                     .exclude(entity_id=entity.id)
                     .exclude(entity_id__in=blocked_ids)
+                    .annotate(
+                        has_connection=Exists(base_connection_qs),
+                        connection_accomplished=Exists(
+                            base_connection_qs.filter(status=True)
+                        ),
+                        connection_id=Subquery(
+                            base_connection_qs.values("connection_id")[:1]
+                        ),
+                        # Who actually initiated: the action_by of the EARLIEST
+                        # of the two mirrored rows. Filtering on action_by=entity
+                        # would always match (both directions exist), which is
+                        # why this is a Subquery ordered by action_date rather
+                        # than an Exists().
+                        connection_initiator_id=Subquery(
+                            base_connection_qs.order_by("action_date").values(
+                                "action_by_id"
+                            )[:1]
+                        ),
+                    )
                     .values(
+                        "id",
                         "entity_id",
                         "username",
                         "first_name",
@@ -163,9 +223,16 @@ class EntitySearch(APIView):
                         "last_name",
                         "profile",
                         "is_badged",
+                        "has_connection",
+                        "connection_accomplished",
+                        "connection_id",
+                        "connection_initiator_id",
                     )[:per_kind_limit]
                 )
-                results.extend(self._normalize_account(a) for a in accounts)
+                acting_entity_id = str(entity.id)
+                results.extend(
+                    self._normalize_account(a, acting_entity_id) for a in accounts
+                )
 
             if "realm" in kinds:
                 if query.startswith("@"):
@@ -185,6 +252,7 @@ class EntitySearch(APIView):
                     realm_qs.exclude(entity_id=entity.id)
                     .exclude(entity_id__in=blocked_ids)
                     .values(
+                        "id",
                         "entity_id",
                         "name",
                         "slug",

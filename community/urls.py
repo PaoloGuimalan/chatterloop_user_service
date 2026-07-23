@@ -12,7 +12,7 @@ urlpatterns = [
     re_path("", include((router.urls, "community-routes"))),
     re_path("top", views.TopRealms.as_view(), name="community-top"),
     re_path(
-        "realm-followers", views.RealmFollowersView.as_view(), name="followers-list"
+        "realm-followers", views.FollowersView.as_view(), name="followers-list"
     ),
     re_path("follow", views.FollowRealmView.as_view(), name="community-follows"),
     re_path("my-list", views.MyRealms.as_view(), name="community-list"),

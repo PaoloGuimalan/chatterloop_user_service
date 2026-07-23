@@ -1,5 +1,7 @@
 from user.serializers import ConnectionSerializer
-from ..models import Connection, Account
+from ..models import Connection
+from entity.models import Entity
+from entity.utils import entity_side_is_visible
 from django.db.models import Q, F
 
 
@@ -15,14 +17,14 @@ class ConnectionHelpers:
                 Q(action_by=entity) | Q(involved_entity=entity),
                 # 3. Exclude self-referencing connections
                 ~Q(action_by=F("involved_entity")),
+                # 4/5. Each side must be an active+verified user OR an active
+                # realm. The old user-only form returned NOTHING when `entity`
+                # was a page (its own side could never match) and dropped every
+                # connection whose counterpart was a page.
+                entity_side_is_visible("action_by"),
+                entity_side_is_visible("involved_entity"),
                 # 2. Connection is active
                 status=True,
-                # 4. Filter action_by's account status (Entity -> Account via 'users')
-                action_by__users__is_active=True,
-                action_by__users__is_verified=True,
-                # 5. Filter involved_entity's account status (Entity -> Account via 'users')
-                involved_entity__users__is_active=True,
-                involved_entity__users__is_verified=True,
             )
             .order_by("connection_id", "-action_date")
             .distinct("connection_id")
@@ -44,10 +46,9 @@ class ConnectionHelpers:
             Connection.objects.filter(
                 Q(Q(action_by=entity) | Q(involved_entity=entity)),
                 ~Q(action_by=F("involved_entity")),
-                Q(action_by__users__is_active=True),
-                Q(action_by__users__is_verified=True),
-                Q(involved_entity__users__is_active=True),
-                Q(involved_entity__users__is_verified=True),
+                # Same entity-generic predicate as get_connections above.
+                entity_side_is_visible("action_by"),
+                entity_side_is_visible("involved_entity"),
                 status=True,
             )
             .distinct("connection_id")
@@ -83,11 +84,17 @@ class ConnectionHelpers:
         return unique_values[:limit]
 
     def get_mutual_connections(self, friend_id):
-        friend = Account.objects.get(entity_id=friend_id)
+        # friend_id IS an entity id, so resolve the Entity directly rather
+        # than hopping through Account - a connection's other side can be a
+        # page, and Account.objects.get(entity_id=...) raised
+        # Account.DoesNotExist for those.
+        friend_entity = Entity.objects.filter(id=friend_id).first()
+        if friend_entity is None:
+            return []
 
         viewer_connections_list = self.get_connections()
 
-        friend_connections = ConnectionHelpers(friend.entity)
+        friend_connections = ConnectionHelpers(friend_entity)
         friend_connections_list = friend_connections.get_connections()
 
         final_intersection_list = list(

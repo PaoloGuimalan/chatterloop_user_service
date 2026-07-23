@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Realm, Member, RealmFollow, Invite
+from .models import Realm, Member, Follow, Invite
 from user.serializers import AccountPreviewSerializer
 from entity.serializers import EntitySerializer
 
@@ -13,12 +13,23 @@ class RealmMemberSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-class RealmFollowSerializer(serializers.ModelSerializer):
+class FollowSerializer(serializers.ModelSerializer):
     follower = EntitySerializer(read_only=True)
+    # Expanded so a followers list can render the target without a second
+    # lookup - and so a follow of a USER is displayable at all.
+    followee = EntitySerializer(read_only=True)
+    # Back-compat: `realm` used to be the Realm pk on this payload. Kept so
+    # existing clients (webapp + mobile) keep resolving it; null when the
+    # followee is a person rather than a page.
+    realm = serializers.SerializerMethodField()
 
     class Meta:
-        model = RealmFollow
+        model = Follow
         fields = "__all__"
+
+    def get_realm(self, obj):
+        realm = getattr(obj.followee, "realms", None)
+        return str(realm.id) if realm else None
 
 
 class InviteSerializer(serializers.ModelSerializer):

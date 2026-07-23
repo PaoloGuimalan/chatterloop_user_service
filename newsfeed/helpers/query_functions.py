@@ -1,6 +1,7 @@
 from ..models import Post, PostScore
 from user.models import UserEngagementLog, Connection, Account
-from community.models import RealmFollow
+from entity.models import Entity
+from community.models import Follow
 from ..models import NewsfeedIndex, TrendingPool
 from cassandra.cqlengine.query import BatchQuery
 from django.utils.timezone import now, is_naive, make_aware, get_current_timezone
@@ -226,8 +227,10 @@ def follower_interaction_score_bump(actor_id, receiver_id, action, is_decrease):
     weight = INTERACTION_WEIGHTS.get(action, 0.0)
 
     with transaction.atomic():
-        follower_log = RealmFollow.objects.select_for_update().filter(
-            follower_id=actor_id, realm__entity_id=receiver_id
+        # followee_id IS the receiver's entity id now, so this no longer has
+        # to hop through Realm to compare entity ids.
+        follower_log = Follow.objects.select_for_update().filter(
+            follower_id=actor_id, followee_id=receiver_id
         )
 
         follower_log.update(
@@ -271,7 +274,14 @@ def get_latest_mutual_engagements(mutual_friend_ids, candidate_pids):
 
 
 def backfill_new_friend_feed(viewer_id, new_friend_id):
-    user = Account.objects.get(entity_id=viewer_id)
+    # viewer_id IS an entity id, so resolve the Entity directly instead of
+    # hopping through Account. The old Account.objects.get(entity_id=...)
+    # raised Account.DoesNotExist whenever either side of a new connection
+    # was a page - which is what broke accepting a user<->page contact
+    # request, since the accept path calls this for BOTH sides.
+    viewer_entity = Entity.objects.filter(id=viewer_id).first()
+    if viewer_entity is None:
+        return
 
     candidate_posts = Post.objects.filter(entity__id=str(new_friend_id))[:50]
     candidate_pids = [str(p.post_id) for p in candidate_posts]
@@ -283,7 +293,7 @@ def backfill_new_friend_feed(viewer_id, new_friend_id):
         target_id__in=candidate_pids,
     )
 
-    user_connections = ConnectionHelpers(user.entity)
+    user_connections = ConnectionHelpers(viewer_entity)
     mutual_friends = user_connections.get_mutual_connections(new_friend_id)
 
     mutual_friend_engagements = {}

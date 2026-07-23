@@ -16,7 +16,7 @@ def delete_account(account, entity):
     the row (and its id) valid for those references while scrubbing the
     identifying information GDPR/CCPA erasure is actually about.
     """
-    from community.models import Member, RealmFollow, Invite
+    from community.models import Member, Follow, Invite
     from diary.models import Entry
     from newsfeed.models import Post, Comment, Reaction, PostSave, PostTag, PostPrivacy
 
@@ -39,7 +39,7 @@ def delete_account(account, entity):
         Entry.objects.filter(account=account).delete()
 
         Member.objects.filter(entity=entity).delete()
-        RealmFollow.objects.filter(follower=entity).delete()
+        Follow.objects.filter(follower=entity).delete()
         Invite.objects.filter(target_entity=entity).delete()
         Invite.objects.filter(created_by=entity).delete()
 

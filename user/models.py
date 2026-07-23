@@ -8,7 +8,11 @@ from django.utils.timezone import now
 from cassandra.cqlengine import columns
 from django_cassandra_engine.models import DjangoCassandraModel
 from core.models import PolicyDocument
-from entity.models import Entity
+
+# Connection now lives in the entity app (it is an entity<->entity edge, not a
+# user-only one). Re-exported here because historical migration user/0003
+# references `user.models.generate_connection_id` and must stay resolvable.
+from entity.models import Entity, Connection, generate_connection_id  # noqa: F401
 
 MINIMUM_AGE = 13
 
@@ -23,10 +27,6 @@ def generate_random_digit(digit):
 
 def generate_ver_code():
     return generate_random_digit(5)
-
-
-def generate_connection_id():
-    return generate_random_digit(20)
 
 
 def calculate_age(birthdate):
@@ -130,98 +130,6 @@ class Verification(models.Model):
     )
     date_generated = models.DateTimeField(default=now)
     is_used = models.BooleanField(default=False)
-
-
-class Connection(models.Model):
-
-    CONNECTION_TYPE_CHOICES = [
-        ("single", "Single"),
-    ]
-
-    id = models.CharField(
-        max_length=150, default=uuid.uuid4, unique=True, primary_key=True
-    )
-    connection_id = models.CharField(max_length=150, default=generate_connection_id)
-    action_by = models.ForeignKey(
-        Entity,
-        null=False,
-        on_delete=models.DO_NOTHING,
-        related_name="connections_as_action_by",
-    )
-    nickname = models.CharField(max_length=150, null=True, blank=True)
-    status = models.BooleanField(default=True)
-    involved_entity = models.ForeignKey(
-        Entity,
-        null=False,
-        on_delete=models.DO_NOTHING,
-        related_name="connections_as_involved_entity",
-    )
-    action_date = models.DateTimeField(default=now)
-    type = models.CharField(max_length=150, null=False, choices=CONNECTION_TYPE_CHOICES)
-
-    interaction_score = models.FloatField(default=10.0)
-    last_interaction_at = models.DateTimeField(auto_now=True)
-
-    def clean(self):
-        super().clean()
-
-        if self.type == "single":
-            # Count records with the same connection_id and type "single"
-            existing_connections = Connection.objects.filter(
-                connection_id=self.connection_id, type="single"
-            ).exclude(pk=self.pk)
-
-            if existing_connections.count() == 2:
-                raise ValidationError(
-                    "Single connection can only involve two users total."
-                )
-
-            # Check if this user is already in another distinct connection record under this ID
-            user_in_use = Connection.objects.filter(
-                connection_id=self.connection_id,
-                type="single",
-                involved_entity=self.involved_entity,
-            ).exclude(pk=self.pk)
-
-            if user_in_use.exists():
-                raise ValidationError(
-                    "This involved user is already part of the single connection."
-                )
-
-            if self.action_by != self.involved_entity:
-                # FIX: Exclude the current connection_id so reciprocal records don't block each other
-                connection_triggered = (
-                    Connection.objects.filter(
-                        type="single",
-                        involved_entity=self.involved_entity,
-                        action_by=self.action_by,
-                    )
-                    .exclude(connection_id=self.connection_id)
-                    .exclude(pk=self.pk)
-                )
-
-                if connection_triggered.exists():
-                    raise ValidationError("Connection is already existing.")
-
-                # FIX: Exclude the current connection_id here as well
-                user_initiated = (
-                    Connection.objects.filter(
-                        type="single",
-                        involved_entity=self.action_by,
-                        action_by=self.involved_entity,
-                    )
-                    .exclude(connection_id=self.connection_id)
-                    .exclude(pk=self.pk)
-                )
-
-                if user_initiated.exists():
-                    raise ValidationError(
-                        "This involved user has already initiated a single connection."
-                    )
-
-    def save(self, *args, **kwargs):
-        self.full_clean()  # Calls clean() and validates
-        super().save(*args, **kwargs)
 
 
 class Block(models.Model):

@@ -34,7 +34,6 @@ from .utils.jwt_tools import JWTTools
 from .utils.generators import generate_random_digit
 from rest_framework.pagination import PageNumberPagination
 from django.db import transaction
-from django.db.models import Prefetch
 from user_service.services.redis import RedisPubSubClient
 from datetime import datetime
 from django.utils.timezone import make_aware
@@ -62,12 +61,16 @@ from newsfeed.helpers.query_functions import (
     remove_feed_on_unfriend,
     backfill_new_friend_feed,
 )
-from community.models import Realm, Member, RealmFollow, Invite
+from community.models import Realm, Member, Follow, Invite
 from entity.models import Entity
 from entity.permissions import Permission, MemberRole
 from entity.drf_permissions import RequiresPermission
 from entity.services.allowed_modules import resolve_allowed_modules_and_context
-from entity.utils import get_entity_display_username, get_entity_profile_path
+from entity.utils import (
+    get_entity_display_username,
+    get_entity_profile_path,
+    entity_side_is_visible,
+)
 from community.serializers import RealmSerializer
 import bcrypt
 import uuid
@@ -132,16 +135,20 @@ class UserAuthentication(APIView):
             # on the row created first, i.e. the actual requester's row —
             # otherwise which row comes back is arbitrary and
             # is_user_connection_initiator flips depending on query order.
+
             connection_exists = (
                 Connection.objects.select_related("action_by", "involved_entity")
                 .filter(
                     Q(action_by=user.entity, involved_entity=entity)
                     | Q(action_by=entity, involved_entity=user.entity),
                     ~Q(action_by=F("involved_entity")),
-                    Q(action_by__users__is_active=True),
-                    Q(action_by__users__is_verified=True),
-                    Q(involved_entity__users__is_active=True),
-                    Q(involved_entity__users__is_verified=True),
+                    # Each side is valid as an active+verified USER or an
+                    # active REALM. The old user-only predicate matched
+                    # nothing while acting as a page, so a real user<->page
+                    # connection reported is_connection_present=false and the
+                    # page saw "Add Contact" for an existing contact.
+                    entity_side_is_visible("action_by"),
+                    entity_side_is_visible("involved_entity"),
                     # status=True,
                 )
                 .order_by("action_date")
@@ -164,14 +171,24 @@ class UserAuthentication(APIView):
                 connection_id = connection_record.connection_id
                 is_connection_handshaked = connection_record.status
 
-                # 2. FIX: Check if the 'users' (Account) relation exists on the Entity to prevent attribute crashes
-                if hasattr(connection_record.action_by, "users"):
-                    is_user_connection_initiator = (
-                        connection_record.action_by.users.username == me.username
-                    )
-                else:
-                    # Fallback if the entity doesn't have an associated Account record
-                    is_user_connection_initiator = False
+                # "Did the ACTING entity initiate this?" - compared on entity
+                # ids so it is valid whether acting as a person or a page.
+                # (Was comparing action_by.users.username to the human's
+                # username, which is always False when acting as a page, since
+                # a realm entity has no Account.)
+                is_user_connection_initiator = (
+                    connection_record.action_by_id == entity.id
+                    if isinstance(entity, Entity)
+                    else False
+                )
+
+            # Following is entity->entity now, so a person can be followed the
+            # same way a page can. Drives the Follow button on user profiles.
+            is_follower = (
+                Follow.objects.filter(follower=entity, followee=user.entity).exists()
+                if isinstance(entity, Entity)
+                else False
+            )
 
             # Format birthdate parts
             birthdate = user.birthdate
@@ -219,6 +236,7 @@ class UserAuthentication(APIView):
                         "is_connection_handshaked": is_connection_handshaked,
                         "is_user_connection_initiator": is_user_connection_initiator,
                     },
+                    "is_follower": is_follower,
                     "id": str(user.id),
                     "entityID": str(user.entity.id),
                     "userID": user.username,
@@ -247,7 +265,7 @@ class UserAuthentication(APIView):
 
             realm_queryset = get_object_or_404(
                 Realm.objects.annotate(
-                    followers_count=Count("followers"),
+                    followers_count=Count("entity__followers"),
                     # A page's own entity can never appear as a Member row of
                     # its own realm (Member rows only ever represent personal
                     # accounts) - so while switched to act as this exact page,
@@ -279,8 +297,8 @@ class UserAuthentication(APIView):
                         output_field=BooleanField(),
                     ),
                     is_follower=Exists(
-                        RealmFollow.objects.filter(
-                            realm=OuterRef("pk"), follower=entity
+                        Follow.objects.filter(
+                            followee=OuterRef("entity_id"), follower=entity
                         )
                     ),
                 ),
@@ -293,8 +311,44 @@ class UserAuthentication(APIView):
                     entity.id, realm_queryset.entity.id, "PROFILE_VISIT", False
                 )
 
+            # Connection state for the realm, mirroring the `connection` block
+            # the user branch returns. A Connection is entity<->entity, so a
+            # page can be a contact - this is what lets the realm profile
+            # render Add / Pending / Connected instead of nothing.
+            realm_connection_id = None
+            realm_is_connected = None
+            realm_is_initiator = None
+            realm_has_connection = False
+
+            if isinstance(entity, Entity) and realm_queryset.entity_id != entity.id:
+                realm_connection = (
+                    Connection.objects.filter(
+                        Q(action_by=realm_queryset.entity, involved_entity=entity)
+                        | Q(action_by=entity, involved_entity=realm_queryset.entity),
+                        ~Q(action_by=F("involved_entity")),
+                    )
+                    .order_by("action_date")
+                    .first()
+                )
+
+                if realm_connection:
+                    realm_has_connection = True
+                    realm_connection_id = realm_connection.connection_id
+                    realm_is_connected = realm_connection.status
+                    realm_is_initiator = realm_connection.action_by_id == entity.id
+
             serialized_realm = RealmSerializer(realm_queryset)
-            data = {"data": {**serialized_realm.data}}
+            data = {
+                "data": {
+                    **serialized_realm.data,
+                    "connection": {
+                        "connection_id": realm_connection_id,
+                        "is_connection_present": realm_has_connection,
+                        "is_connection_handshaked": realm_is_connected,
+                        "is_user_connection_initiator": realm_is_initiator,
+                    },
+                }
+            }
 
             return Response(data, status=status.HTTP_200_OK)
 
@@ -346,8 +400,8 @@ class UserAuthentication(APIView):
                     # frontend doesn't need a separate follow-up call to
                     # /api/entity/me/modules just to learn allowed_modules/
                     # active_entity, same data MyAllowedModules resolves.
-                    allowed_modules, active_entity = resolve_allowed_modules_and_context(
-                        user.entity, user
+                    allowed_modules, active_entity = (
+                        resolve_allowed_modules_and_context(user.entity, user)
                     )
 
                     return Response(
@@ -439,8 +493,8 @@ class ThirdPartyAuthentication(APIView):
                         if not session.exists(device_token, user.entity.id):
                             session.add_session(request, user.entity.id, device_token)
 
-                        allowed_modules, active_entity = resolve_allowed_modules_and_context(
-                            user.entity, user
+                        allowed_modules, active_entity = (
+                            resolve_allowed_modules_and_context(user.entity, user)
                         )
 
                         return Response(
@@ -508,8 +562,10 @@ class ThirdPartyAuthentication(APIView):
                                     request, create_user_query.entity.id, device_token
                                 )
 
-                            allowed_modules, active_entity = resolve_allowed_modules_and_context(
-                                create_user_query.entity, create_user_query
+                            allowed_modules, active_entity = (
+                                resolve_allowed_modules_and_context(
+                                    create_user_query.entity, create_user_query
+                                )
                             )
 
                             return Response(
@@ -579,42 +635,52 @@ class UserContacts(APIView):
             search = request.query_params.get("search", None)
             paginated_header = request.headers.get("paginated", "true")
 
-            # 1. PRE-FILTER VALID USERS (Drastically cuts down join complexity)
-            active_verified_users = Account.objects.filter(
-                is_active=True, is_verified=True
-            )
-
-            # 2. OPTIMIZED BASE QUERY WITH DEEP PREFETCHING
+            # 1. OPTIMIZED BASE QUERY
+            # entity_side_is_visible(): each side must be an active+verified
+            # user OR an active realm. `users`/`realms` are reverse OneToOne
+            # accessors on Entity, so each is at most one row - no fan-out.
+            # select_related (not prefetch) on the reverse OneToOnes - they are
+            # 1:1, so this is a plain LEFT JOIN and keeps EntitySerializer's
+            # get_details() from issuing a query per row for either branch.
             queryset = (
                 Connection.objects.filter(
                     Q(action_by=entity)
                     | Q(
                         involved_entity=entity
                     ),  # Re-added your original target entity filter
-                    action_by__users__in=active_verified_users,
-                    involved_entity__users__in=active_verified_users,
+                    entity_side_is_visible("action_by"),
+                    entity_side_is_visible("involved_entity"),
                     status=True,
                 )
                 .exclude(action_by=F("involved_entity"))
-                .select_related("action_by", "involved_entity")
-                .prefetch_related(
-                    Prefetch("action_by__users", queryset=active_verified_users),
-                    Prefetch("involved_entity__users", queryset=active_verified_users),
+                .select_related(
+                    "action_by",
+                    "action_by__users",
+                    "action_by__realms",
+                    "involved_entity",
+                    "involved_entity__users",
+                    "involved_entity__realms",
                 )
             )
 
             # --- SEARCH EXTENSION ---
+            # Mirrors each user-only lookup with its realm equivalent so a page
+            # is findable by the same query the client already sends:
+            # "@handle" -> username or realm slug, plain text -> person name or
+            # realm name.
             if search:
                 if search.startswith("@"):
                     domain = search[1:]
                     queryset = queryset.filter(
-                        involved_entity__users__username__icontains=domain
+                        Q(involved_entity__users__username__icontains=domain)
+                        | Q(involved_entity__realms__slug__icontains=domain)
                     )
                 else:
                     queryset = queryset.filter(
                         Q(involved_entity__users__first_name__icontains=search)
                         | Q(involved_entity__users__middle_name__icontains=search)
                         | Q(involved_entity__users__last_name__icontains=search)
+                        | Q(involved_entity__realms__name__icontains=search)
                     )
 
             # --- CRITICAL FIX: COLLAPSE DUPLICATES BEFORE ORDERING ---
@@ -637,22 +703,70 @@ class UserContacts(APIView):
                 {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+    @staticmethod
+    def _resolve_target_entity(raw_id):
+        """
+        Resolve a contact target to its Entity.
+
+        A Connection is entity<->entity, so an entity id is the canonical
+        input and is tried FIRST - clients now send entity ids everywhere, so
+        the backend never has to translate. Account and Realm ids are still
+        accepted so older clients (and any mobile build not yet updated) keep
+        working. Returns None when nothing matches.
+        """
+        if not raw_id:
+            return None
+
+        # Canonical path: the id IS an entity id.
+        entity = Entity.objects.filter(id=raw_id).first()
+        if entity:
+            return entity
+
+        # Legacy: an Account pk. uuid() raises on a realm's 15-digit id, so
+        # guard rather than letting it 500.
+        try:
+            return Account.objects.get(id=uuid.UUID(str(raw_id))).entity
+        except (ValueError, TypeError, AttributeError, Account.DoesNotExist):
+            pass
+
+        # Legacy: a Realm pk / realm_id.
+        realm = Realm.objects.filter(Q(realm_id=raw_id) | Q(id=raw_id)).first()
+        if realm:
+            return realm.entity
+
+        return None
+
     def post(self, request):
         user = self.request.user  # This is an Account
         entity = self.request.entity  # This is the current user's Entity
 
         try:
-            addUsername = request.data.get("addUsername")  # Target Account ID
+            # entity_id is the canonical field; addUsername is the legacy key
+            # (older clients send an account id under it). Either resolves.
+            addUsername = request.data.get("entity_id") or request.data.get(
+                "addUsername"
+            )
             if not addUsername:
                 return Response(
                     {"status": False, "message": "Target user ID required."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            adduser = Account.objects.get(id=uuid.UUID(addUsername))
+            target_entity = self._resolve_target_entity(addUsername)
+            if target_entity is None:
+                return Response(
+                    {"status": False, "message": "Target not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            if target_entity.id == entity.id:
+                return Response(
+                    {"status": False, "message": "You cannot add yourself."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
             # MongoDB aggregation pipeline for existing conversations
-            users = [adduser.entity.id, entity.id]  # entity based
+            users = [target_entity.id, entity.id]  # entity based
             # pipeline = [
             #     {"$match": {"conversationType": "single"}},
             #     {"$match": {"$expr": {"$setEquals": ["$participant_ids", users]}}},
@@ -677,9 +791,7 @@ class UserContacts(APIView):
                 else generate_random_digit(20)
             )
 
-            # Fetch target account and extract its corresponding entity
-            pending_involved_user = Account.objects.get(id=addUsername)
-            target_entity = pending_involved_user.entity
+            # target_entity was already resolved above (users OR realms).
 
             if is_blocked(entity, target_entity):
                 return Response(
@@ -743,17 +855,28 @@ class UserContacts(APIView):
 
                 RedisPubSubClient.publish_json(f"events_{sse_sendToUser}", data)
 
-                emailer.send_contact_request_notification(
-                    to_email=pending_involved_user.email,
-                    from_entity_id=entity.id,
-                    to_entity_id=target_entity.id,
-                    from_username=get_entity_profile_path(entity),
-                )
+                # Only personal accounts get the email - a page has no inbox
+                # to notify (Realm.email is optional and is not a user's
+                # address). `users` is the reverse OneToOne from Account, so
+                # this is None when the target is a realm.
+                target_account = getattr(target_entity, "users", None)
+                if target_account is not None and target_account.email:
+                    emailer.send_contact_request_notification(
+                        to_email=target_account.email,
+                        from_entity_id=entity.id,
+                        to_entity_id=target_entity.id,
+                        from_username=get_entity_profile_path(entity),
+                    )
 
             return Response(
                 {
                     "status": True,
-                    "message": f"You have sent a contact request to @{pending_involved_user.username}",
+                    # Resolves to "@username" for a person and "@slug" for a
+                    # page - already carries the "@", so none is added here.
+                    "message": (
+                        "You have sent a contact request to "
+                        f"{get_entity_display_username(target_entity)}"
+                    ),
                     "connection_id": new_connection_id,
                 },
                 status=status.HTTP_200_OK,
@@ -766,7 +889,12 @@ class UserContacts(APIView):
         entity = self.request.entity
         try:
             connection_id = request.data.get("connection_id")
-            to_user_id = request.data.get("to_user_id")
+            # Canonically an ENTITY id. Only used to route the SSE publish -
+            # the actual participants are derived from the connection rows
+            # below, which overwrite this with entity ids anyway.
+            to_user_id = request.data.get("entity_id") or request.data.get(
+                "to_user_id"
+            )
             now = datetime.now()
 
             with transaction.atomic():
@@ -800,33 +928,43 @@ class UserContacts(APIView):
 
                     if updated:
 
-                        accepter_update = Account.objects.select_for_update().get(
-                            entity_id=entity.id
+                        # Either side of a connection can be a page now, and
+                        # connection_count / email only exist on Account.
+                        # filter().first() instead of get() so a realm side is
+                        # a no-op rather than Account.DoesNotExist.
+                        accepter_update = (
+                            Account.objects.select_for_update()
+                            .filter(entity_id=entity.id)
+                            .first()
                         )
-                        accepter_update.connection_count += 1
-                        accepter_update.save()
+                        if accepter_update:
+                            accepter_update.connection_count += 1
+                            accepter_update.save()
 
                         for other_user in other_users:
-                            acceptee_update = Account.objects.select_for_update().get(
-                                entity_id=other_user.id
+                            acceptee_update = (
+                                Account.objects.select_for_update()
+                                .filter(entity_id=other_user.id)
+                                .first()
                             )
-                            acceptee_update.connection_count += 1
-                            acceptee_update.save()
+                            if acceptee_update:
+                                acceptee_update.connection_count += 1
+                                acceptee_update.save()
 
+                            # Entity-keyed, so this is correct for both kinds.
                             backfill_new_friend_feed(entity.id, other_user.id)
                             backfill_new_friend_feed(other_user.id, entity.id)
 
-                            emailer.send_contact_accepted_email(
-                                to_email=acceptee_update.email,
-                                from_entity_id=entity.id,
-                                to_entity_id=other_user.id,
-                                from_username=get_entity_profile_path(entity),
-                            )
+                            if acceptee_update and acceptee_update.email:
+                                emailer.send_contact_accepted_email(
+                                    to_email=acceptee_update.email,
+                                    from_entity_id=entity.id,
+                                    to_entity_id=other_user.id,
+                                    from_username=get_entity_profile_path(entity),
+                                )
 
                         notifHeadline = "Accepted Request"
-                        notifContent = (
-                            f"{get_entity_display_username(entity)} accepted your request"
-                        )
+                        notifContent = f"{get_entity_display_username(entity)} accepted your request"
 
                         service = NotificationService()
                         service.add_notification(
@@ -907,7 +1045,12 @@ class UserContacts(APIView):
         entity = self.request.entity
         try:
             connection_id = request.data.get("connection_id")
-            to_user_id = request.data.get("to_user_id")
+            # Canonically an ENTITY id. Only used to route the SSE publish -
+            # the actual participants are derived from the connection rows
+            # below, which overwrite this with entity ids anyway.
+            to_user_id = request.data.get("entity_id") or request.data.get(
+                "to_user_id"
+            )
             action = request.headers.get("action")
             now = datetime.now()
 
@@ -941,24 +1084,31 @@ class UserContacts(APIView):
                     updated = service.update_reference_status(connection_id, True)
 
                     if updated and not action == "decline":
-                        accepter_update = Account.objects.select_for_update().get(
-                            entity_id=entity.id
+                        # Same as the accept path: connection_count lives on
+                        # Account only, so a page side is skipped rather than
+                        # raising Account.DoesNotExist.
+                        accepter_update = (
+                            Account.objects.select_for_update()
+                            .filter(entity_id=entity.id)
+                            .first()
                         )
-                        accepter_update.connection_count -= 1
-                        accepter_update.save()
+                        if accepter_update:
+                            accepter_update.connection_count -= 1
+                            accepter_update.save()
 
                         for other_user in other_users:
-                            acceptee_update = Account.objects.select_for_update().get(
-                                entity_id=other_user.id
+                            acceptee_update = (
+                                Account.objects.select_for_update()
+                                .filter(entity_id=other_user.id)
+                                .first()
                             )
-                            acceptee_update.connection_count -= 1
-                            acceptee_update.save()
+                            if acceptee_update:
+                                acceptee_update.connection_count -= 1
+                                acceptee_update.save()
 
                     if updated and action == "decline":
                         notifHeadline = "Declined Request"
-                        notifContent = (
-                            f"{get_entity_display_username(entity)} declined your request"
-                        )
+                        notifContent = f"{get_entity_display_username(entity)} declined your request"
 
                         service = NotificationService()
                         service.add_notification(
@@ -1057,18 +1207,24 @@ class UserSearch(APIView):
                 Q(action_by=entity, involved_entity=OuterRef("entity_id"))
                 | Q(action_by=OuterRef("entity_id"), involved_entity=entity),
                 ~Q(action_by=F("involved_entity")),
-                action_by__users__is_active=True,
-                action_by__users__is_verified=True,
-                involved_entity__users__is_active=True,
-                involved_entity__users__is_verified=True,
+                # Entity-generic: while acting as a page the old user-only
+                # form matched nothing, so every result came back as "New"
+                # even where a connection existed.
+                entity_side_is_visible("action_by"),
+                entity_side_is_visible("involved_entity"),
             )
 
             # Drive specialized sub-filters off the base QuerySet safely
             connection_active_qs = base_connection_qs.filter(status=True)
-            connection_action_by_qs = base_connection_qs.filter(
-                action_by=entity
-            )  # Checks if current user initiated it
             connection_id_subquery = base_connection_qs.values("connection_id")[:1]
+            # Who actually initiated: the action_by of the EARLIEST of the two
+            # mirrored rows a connection is stored as. The previous
+            # Exists(filter(action_by=entity)) was ALWAYS true - both
+            # directions exist - so every result claimed the viewer was the
+            # requester, showing Accept/Decline to the wrong side.
+            connection_initiator_subquery = base_connection_qs.order_by(
+                "action_date"
+            ).values("action_by_id")[:1]
 
             blocked_account_ids = get_blocked_account_ids(entity)
 
@@ -1098,12 +1254,11 @@ class UserSearch(APIView):
                     output_field=BooleanField(),
                 ),
                 connection_id=Subquery(connection_id_subquery),
-                # CHANGE THIS KEY NAME TO MATCH YOUR SERIALIZER:
+                connection_initiator_id=Subquery(connection_initiator_subquery),
+            ).annotate(
+                # Chained so it can reference the annotation above.
                 is_action_by_entity=Case(
-                    When(
-                        Exists(connection_action_by_qs),
-                        then=Value(True),
-                    ),
+                    When(connection_initiator_id=str(entity.id), then=Value(True)),
                     default=Value(False),
                     output_field=BooleanField(),
                 ),
