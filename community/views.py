@@ -29,8 +29,9 @@ from user.utils.external_requests import emailer
 from user_service.services.redis import RedisPubSubClient
 from entity.permissions import Permission
 from entity.services.permission_resolver import has_permission
-from entity.utils import resolve_entity_target
+from entity.utils import get_entity_display_username, resolve_entity_target
 from entity.services.follows import follow_entity, unfollow_entity
+from user.services.mongohelpers import NotificationService
 from user.utils.blocking import is_blocked
 
 
@@ -276,6 +277,53 @@ class FollowRealmView(APIView):
             or request.data.get("target_id")
         )
 
+    @staticmethod
+    def _notify_new_follower(follower, followee):
+        """
+        Persist a "started following you" notification and push the SSE that
+        makes the client refresh - same two-step (Mongo write + Redis publish
+        on `events_<entity id>`) every other notification site uses.
+
+        Entity-generic on both ends: the follower may be a person or a page
+        (get_entity_display_username resolves either), and so may the
+        followee - a page's admins see it once switched to that page.
+
+        Best-effort by design: the follow edge and its feed backfill are
+        already committed by the time this runs, so a Mongo/Redis hiccup must
+        not turn a successful follow into a 500.
+        """
+        try:
+            details = f"{get_entity_display_username(follower)} started following you."
+
+            service = NotificationService()
+            service.add_notification(
+                referenceID=str(follower.id),
+                referenceStatus=True,
+                toUserID=followee.id,
+                fromUserID=follower.id,
+                content_headline="New Follower",
+                content_details=details,
+                type="follow",
+                isRead=False,
+            )
+
+            now = datetime.now()
+            data = {
+                "logType": None,
+                "pod": "podless",
+                "event": "notifications",
+                "message": {
+                    "status": True,
+                    "auth": True,
+                    "message": details,
+                    "result": "",
+                },
+                "dateTime": now.isoformat(),
+            }
+            RedisPubSubClient.publish_json(f"events_{followee.id}", data)
+        except Exception as err:
+            print(f"Failed to send follow notification: {err}")
+
     def post(self, request):
         user = self.request.user
         entity = self.request.entity
@@ -300,7 +348,23 @@ class FollowRealmView(APIView):
             # followee's recent posts - the feed is fan-out-on-write keyed on
             # the follow graph. Idempotent, so a double-tap neither raises on
             # the unique constraint nor re-backfills.
-            follow_entity(entity, followee)
+            created = follow_entity(entity, followee)
+
+            # Notify the followee - but ONLY when a new edge was actually
+            # created, so a double-tap (or a re-follow of someone already
+            # followed) cannot spam them. Deliberately placed in the endpoint
+            # rather than inside follow_entity(): the contact-request flow
+            # auto-follows too (user/views.py), and that already sends its own
+            # contact_request notification - notifying from the service would
+            # double up there.
+            #
+            # type="follow" puts these in the Connections section of the
+            # redesigned Notifications page (see NOTIF_CONNECTION_TYPES in
+            # server/routes/users/index.js). referenceStatus=True because
+            # there is nothing to act on; referenceID is the follower's entity
+            # id, which is what a future "Follow back" button would address.
+            if created:
+                self._notify_new_follower(entity, followee)
 
             return Response(
                 {"status": True, "message": f"Followed {raw_target}"},
