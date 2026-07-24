@@ -11,6 +11,13 @@ app_name = "newsfeed"
 urlpatterns = [
     re_path("", include((router.urls, "newsfeed-routes"))),
     re_path("default", views.NewsfeedView.as_view(), name="newsfeed-default"),
+    # Search v2 (redesigned Search page) - NEW route; every pre-existing
+    # newsfeed route is pinned by the live mobile app and stays untouched.
+    path(
+        "search/v2/posts/<str:query>/",
+        views.NewsfeedPostSearchView.as_view(),
+        name="newsfeed-post-search-v2",
+    ),
     path(
         "profile/<str:username>/",
         views.NewsfeedProfileView.as_view(),

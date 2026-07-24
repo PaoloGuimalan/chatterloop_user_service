@@ -1059,3 +1059,42 @@ class LinkPreviewImageProxyView(APIView):
         response = HttpResponse(body, content_type=content_type)
         response["Cache-Control"] = "public, max-age=86400"
         return response
+
+
+class NewsfeedPostSearchView(APIView):
+    """
+    Content search for the redesigned Search page - NEW endpoint, versioned
+    v2 alongside the entity search v2 family. Nothing searched post captions
+    before this, and the live mobile app pins every pre-existing newsfeed
+    route, so this is purely additive.
+
+    GET /api/newsfeed/search/v2/posts/<query>/?page=&page_size=
+
+    Paginated (drives the Content "See all" infinite scroll). Results are
+    RANKED - PostScore.ranking_score DESC then recency - so relevant posts
+    land on top rather than plain newest-first. Queryset + card shape live
+    in services/post_search.py because the entity app's search overview
+    endpoint reuses them for the page-init call.
+    """
+
+    permission_classes = [IsAuthenticated]
+    pagination_class = Pagination
+
+    def get(self, request, query):
+        entity = self.request.entity
+        try:
+            from .services.post_search import (
+                build_post_search_queryset,
+                serialize_post_hit,
+            )
+
+            blocked_ids = get_blocked_account_ids(entity)
+            queryset = build_post_search_queryset(entity, query, blocked_ids)
+
+            paginator = self.pagination_class()
+            page = paginator.paginate_queryset(queryset, request, view=self)
+            return paginator.get_paginated_response(
+                [serialize_post_hit(post) for post in page]
+            )
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)

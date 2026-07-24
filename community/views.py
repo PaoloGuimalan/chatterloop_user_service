@@ -31,6 +31,7 @@ from entity.permissions import Permission
 from entity.services.permission_resolver import has_permission
 from entity.utils import resolve_entity_target
 from entity.services.follows import follow_entity, unfollow_entity
+from user.utils.blocking import is_blocked
 
 
 class Pagination(PageNumberPagination):
@@ -330,6 +331,98 @@ class FollowRealmView(APIView):
             return Response(
                 {"status": True, "message": f"Unfollowed {raw_target}"},
                 status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class JoinGroupRealmV2(APIView):
+    """
+    One-click join for PUBLIC GROUP realms - NEW endpoint for the redesigned
+    Search page's group cards (versioned v2 because the existing membership
+    entry points - InviteView's invite/request flows - stay untouched for
+    the live mobile app).
+
+    POST /api/realm/join/v2  {realm_id}
+
+    Group chats have no join gate today beyond being public: membership is a
+    community_member row, which the Node messaging side reads LIVE (its
+    GetAllReceivers queries community_member by realm_id, and a group's
+    conversationID IS its realm_id) - so creating the row here is the whole
+    join. Deliberately group-only: servers/pages have their own entry flows,
+    and channels/conferences/voice are not search-discoverable at all.
+
+    Idempotent - re-joining reports already_member instead of erroring.
+    Returns conversation_id (== realm_id) so the client can open
+    /messages/<conversation_id> directly.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        entity = self.request.entity
+
+        try:
+            realm_id = request.data.get("realm_id")
+            if not realm_id:
+                return Response(
+                    {"status": False, "message": "realm_id is required"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Member rows only ever represent personal accounts (see the
+            # TopRealms annotation notes) - a page can't sit in a group chat.
+            if getattr(entity, "type", None) != "user":
+                return Response(
+                    {"status": False, "message": "Only users can join groups"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            realm = Realm.objects.filter(
+                Q(realm_id=realm_id) | Q(id=realm_id),
+                is_active=True,
+            ).first()
+            if realm is None:
+                return Response(
+                    {"status": False, "message": "Group not found"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            if realm.type != "group" or realm.is_private:
+                return Response(
+                    {"status": False, "message": "This realm cannot be joined here"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if is_blocked(entity, realm.entity):
+                return Response(
+                    {"status": False, "message": "You cannot join this group"},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            _, created = Member.objects.get_or_create(
+                entity=entity,
+                realm=realm,
+                defaults={
+                    "added_by": entity,
+                    "role": "member",
+                    "date_joined": now(),
+                },
+            )
+
+            return Response(
+                {
+                    "status": True,
+                    "message": "Joined group" if created else "Already a member",
+                    "result": {
+                        "already_member": not created,
+                        # A group's conversationID is its realm_id - what the
+                        # client feeds straight into /messages/<id>.
+                        "conversation_id": realm.realm_id,
+                        "realm_id": realm.realm_id,
+                    },
+                },
+                status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
             )
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
