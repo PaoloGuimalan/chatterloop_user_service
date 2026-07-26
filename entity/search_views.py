@@ -41,6 +41,7 @@ from django.db.models.functions import Coalesce
 
 from community.models import Realm, Member
 from entity.models import Connection, Follow
+from entity.utils import mutual_count_subquery
 from user.models import Account
 from user.utils.blocking import get_blocked_account_ids
 
@@ -104,27 +105,10 @@ def build_people_queryset(entity, query, blocked_ids):
         ~Q(action_by=F("involved_entity")),
     )
 
-    # Mutual connections: my accomplished counterparts who ALSO have an
-    # accomplished edge with the candidate. Connections are stored as two
-    # mirrored rows, so one direction per hop is sufficient: rows where I am
-    # action_by give my friends F, and F's connections_as_involved_entity
-    # rows with action_by = candidate prove the F<->candidate edge.
-    # .values("action_by") groups the whole thing to a single COUNT row.
-    mutual_qs = (
-        Connection.objects.filter(
-            action_by=entity,
-            status=True,
-            involved_entity__connections_as_involved_entity__action_by=OuterRef(
-                "entity_id"
-            ),
-            involved_entity__connections_as_involved_entity__status=True,
-        )
-        .exclude(involved_entity=entity)
-        .order_by()
-        .values("action_by")
-        .annotate(n=Count("involved_entity", distinct=True))
-        .values("n")[:1]
-    )
+    # Mutual connections - shared with the Contacts page's network sections,
+    # see entity/utils.mutual_count_subquery() for how the mirrored-rows
+    # model is collapsed into a single scalar COUNT.
+    mutual_qs = mutual_count_subquery(entity)
 
     return (
         Account.objects.filter(

@@ -121,3 +121,44 @@ def entity_side_is_visible(field):
             f"{field}__users__is_verified": True,
         }
     ) | Q(**{f"{field}__realms__is_active": True})
+
+
+def mutual_count_subquery(entity, outer_field="entity_id"):
+    """
+    Subquery counting mutual connections between `entity` and each outer row
+    - i.e. "N mutual" on a person card.
+
+    Connections are stored as TWO mirrored rows, so one direction per hop is
+    enough: rows where I am action_by give my counterparts F, and F's
+    `connections_as_involved_entity` rows with action_by = the candidate
+    prove the F<->candidate edge. `.values("action_by")` collapses the whole
+    thing to a single COUNT row so this stays one scalar subquery rather
+    than a join that fans out the outer query.
+
+    `outer_field` is the OuterRef target holding the candidate's ENTITY id -
+    "entity_id" when the outer query is over Account, but a Connection/Follow
+    query points at its own entity column instead.
+
+    Shared by the Search page's people cards (entity/search_views.py) and the
+    Contacts page's network sections (entity/network_views.py) - it is subtle
+    enough that two copies would drift.
+    """
+    from django.db.models import Count, OuterRef
+
+    from entity.models import Connection
+
+    return (
+        Connection.objects.filter(
+            action_by=entity,
+            status=True,
+            involved_entity__connections_as_involved_entity__action_by=OuterRef(
+                outer_field
+            ),
+            involved_entity__connections_as_involved_entity__status=True,
+        )
+        .exclude(involved_entity=entity)
+        .order_by()
+        .values("action_by")
+        .annotate(n=Count("involved_entity", distinct=True))
+        .values("n")[:1]
+    )

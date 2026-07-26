@@ -1,6 +1,6 @@
 from django.urls import path
 
-from entity import search_views, views
+from entity import network_views, search_views, views
 
 app_name = "entity"
 
@@ -23,5 +23,27 @@ urlpatterns = [
         "search/v2/realms/<str:query>/",
         search_views.SearchRealmsV2.as_view(),
         name="entity-search-v2-realms",
+    ),
+    # Network section endpoints (redesigned Contacts page) - NEW routes;
+    # /api/user/contacts is pinned by mobile and stays as-is.
+    path(
+        "network/overview",
+        network_views.NetworkOverview.as_view(),
+        name="entity-network-overview",
+    ),
+    path(
+        "network/connections",
+        network_views.NetworkConnections.as_view(),
+        name="entity-network-connections",
+    ),
+    path(
+        "network/followers",
+        network_views.NetworkFollowers.as_view(),
+        name="entity-network-followers",
+    ),
+    path(
+        "network/following",
+        network_views.NetworkFollowing.as_view(),
+        name="entity-network-following",
     ),
 ]
