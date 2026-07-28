@@ -222,9 +222,7 @@ class NewsfeedView(APIView):
                     post_id__in=post_ids, entity_id=getattr(entity, "id", None)
                 ).count()
                 if entity is None or owned_count != len(post_ids):
-                    raise PermissionDenied(
-                        "You do not own all of the specified posts."
-                    )
+                    raise PermissionDenied("You do not own all of the specified posts.")
 
                 Post.objects.filter(post_id__in=post_ids).update(
                     deleted_at=now(), deleted_by=user
@@ -478,7 +476,10 @@ class PostReactionsView(APIView):
                         entity.id, post.entity.id, "LIKE", False
                     )
                 bump_interest_affinity(
-                    entity.id, post.interests.values_list("id", flat=True), "LIKE", False
+                    entity.id,
+                    post.interests.values_list("id", flat=True),
+                    "LIKE",
+                    False,
                 )
 
                 if post.entity.id != entity.id:
@@ -495,9 +496,7 @@ class PostReactionsView(APIView):
                     )
 
                     sse_sendToUser = post.entity.id
-                    sse_sendToDetails = (
-                        f"{get_entity_display_username(entity)} reacted {emoji.emoji_content} to your post."
-                    )
+                    sse_sendToDetails = f"{get_entity_display_username(entity)} reacted {emoji.emoji_content} to your post."
 
                     now = datetime.now()
                     data = {
@@ -690,7 +689,12 @@ class CommentsView(APIView):
             if parent_id:
                 comment = Comment.objects.get(comment_id=parent_id)
                 queryset = (
-                    Comment.objects.filter(post=post, parent_comment=comment)
+                    # Soft-deleted comments are excluded: delete() below only
+                    # stamps deleted_at, so without this a deleted comment
+                    # came straight back on the next fetch.
+                    Comment.objects.filter(
+                        post=post, parent_comment=comment, deleted_at__isnull=True
+                    )
                     .select_related("entity")
                     .order_by("created_at")
                 )
@@ -706,7 +710,10 @@ class CommentsView(APIView):
                 return data
             else:
                 queryset = (
-                    Comment.objects.filter(post=post, parent_comment=None)
+                    # Same soft-delete exclusion as the replies branch above.
+                    Comment.objects.filter(
+                        post=post, parent_comment=None, deleted_at__isnull=True
+                    )
                     .select_related("entity")
                     .order_by("created_at")
                 )
@@ -756,7 +763,10 @@ class CommentsView(APIView):
 
                     update_ranking_score(post_id, "comment", False)
                     bump_interest_affinity(
-                        entity.id, post.interests.values_list("id", flat=True), "COMMENT", False
+                        entity.id,
+                        post.interests.values_list("id", flat=True),
+                        "COMMENT",
+                        False,
                     )
 
                     truncated_comment = (
@@ -813,7 +823,10 @@ class CommentsView(APIView):
 
                     update_ranking_score(post_id, "comment", False)
                     bump_interest_affinity(
-                        entity.id, post.interests.values_list("id", flat=True), "COMMENT", False
+                        entity.id,
+                        post.interests.values_list("id", flat=True),
+                        "COMMENT",
+                        False,
                     )
 
                     if post.entity != entity:
@@ -875,6 +888,7 @@ class CommentsView(APIView):
     def delete(self, request):
         try:
             user = self.request.user
+            entity = self.request.entity
             comment_id = request.data.get("comment_id")
 
             with transaction.atomic():
@@ -882,7 +896,7 @@ class CommentsView(APIView):
                 assert_owns(request, current_comment)
 
                 current_comment.deleted_at = now()
-                current_comment.deleted_by = user
+                current_comment.deleted_by = entity
                 current_comment.save()
 
             return Response("OK", status=status.HTTP_200_OK)
