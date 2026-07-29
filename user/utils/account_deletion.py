@@ -18,7 +18,15 @@ def delete_account(account, entity):
     """
     from community.models import Member, Follow, Invite
     from diary.models import Entry
-    from newsfeed.models import Post, Comment, Reaction, PostSave, PostTag, PostPrivacy
+    from newsfeed.models import (
+        Post,
+        Comment,
+        CommentReaction,
+        Reaction,
+        PostSave,
+        PostTag,
+        PostPrivacy,
+    )
 
     account_id = account.id
 
@@ -30,6 +38,11 @@ def delete_account(account, entity):
             deleted_at=now(), deleted_by=entity
         )
         Reaction.objects.filter(entity=entity).delete()
+        # Mirrors the line above, including its known gap: neither decrements
+        # the matching PreviewCount / CommentPreviewCount tally, so an erased
+        # account leaves its reactions counted. Rare enough to have been lived
+        # with on the post side; worth fixing on both together, not one.
+        CommentReaction.objects.filter(entity=entity).delete()
         PostSave.objects.filter(entity=entity).delete()
         PostTag.objects.filter(entity=entity).delete()
         PostPrivacy.objects.filter(allowed_entity=entity).delete()

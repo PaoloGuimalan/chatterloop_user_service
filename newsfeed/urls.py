@@ -53,6 +53,18 @@ urlpatterns = [
         views.CommentsView.as_view(),
         name="newsfeed-comments",
     ),
+    # Comment reactions - mirrors reaction / total_reactions above one level
+    # down. NEW routes; nothing the live mobile app calls is touched.
+    path(
+        "comment_reaction",
+        views.CommentReactionsView.as_view(),
+        name="newsfeed-comment-reactions",
+    ),
+    path(
+        "comment_total_reactions/<str:comment_id>/",
+        views.CommentReactionsCountView.as_view(),
+        name="newsfeed-comment-total-reactions",
+    ),
     path(
         "saves",
         views.PostSaveView.as_view(),

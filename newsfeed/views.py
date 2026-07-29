@@ -7,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.db import models
 from django.db.models import (
     Q,
+    CharField,
     Count,
     Exists,
     OuterRef,
@@ -26,6 +27,8 @@ from .models import (
     Reaction,
     PreviewCount,
     Comment,
+    CommentReaction,
+    CommentPreviewCount,
     ActivityCount,
     PostScore,
     PostSave,
@@ -37,6 +40,7 @@ from .serializers import (
     EmojiSerializer,
     PreviewCountSerializer,
     CommentSerializer,
+    CommentPreviewCountSerializer,
     ActivityCountSerializer,
     PostScoreSerializer,
     PostSaveSerializer,
@@ -660,6 +664,211 @@ class ReactionsCountView(APIView):
             return Response({"error": str(e)}, status=500)
 
 
+class CommentReactionsView(APIView):
+    """
+    Reactions on a comment - PostReactionsView one level down, same verbs and
+    same payload keys (`emoji_id` plus `comment_id` where the post view takes
+    `post_id`), so the client's reaction flow is identical either side.
+
+    Two deliberate differences from the post version:
+
+    * PostScore is NOT touched. Reacting to a comment is not a reaction to the
+      post, and PostScore.likes_count is what the card renders as the post's
+      like count - feeding comment reactions into it would inflate a number
+      the user can see and cross-check. Ranking is left alone for the same
+      reason.
+    * CommentPreviewCount rows are created on demand from the start (the post
+      side only got there after the seeding was removed).
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsAuthenticated(), RequiresPermission(Permission.COMMENTS_CREATE)()]
+        return super().get_permissions()
+
+    def _notify_comment_author(self, comment, entity, emoji, reaction_id, verb):
+        """
+        Ping the comment's author, unless they are the one reacting.
+
+        `verb` differs only in wording between a new reaction and a changed
+        one; the reference id stays the reaction's, so update_content() can
+        rewrite the same notification instead of stacking a second.
+        """
+        if comment.entity_id == entity.id:
+            return
+
+        details = (
+            f"{get_entity_display_username(entity)} reacted "
+            f"{emoji.emoji_content} to your comment."
+        )
+
+        service = NotificationService()
+        if verb == "updated":
+            service.update_content(reaction_id=reaction_id, new_content=details)
+        else:
+            service.add_notification(
+                referenceID=reaction_id,
+                referenceStatus=True,
+                toUserID=comment.entity_id,
+                fromUserID=entity.id,
+                content_headline="Comment Reaction",
+                content_details=details,
+                type="comment_reaction",
+                isRead=False,
+            )
+
+        RedisPubSubClient.publish_json(
+            f"events_{comment.entity_id}",
+            {
+                "logType": None,
+                "pod": "podless",
+                "event": "notifications",
+                "message": {
+                    "status": True,
+                    "auth": True,
+                    "message": details,
+                    "result": "",
+                },
+                "dateTime": datetime.now().isoformat(),
+            },
+        )
+
+    def post(self, request, *args, **kwargs):
+        try:
+            user = self.request.user
+            entity = self.request.entity
+            comment_id = request.data.get("comment_id")
+            emoji_id = request.data.get("emoji_id")
+
+            comment = Comment.objects.get(comment_id=comment_id, deleted_at__isnull=True)
+            emoji = Emoji.objects.get(emoji_id=emoji_id)
+
+            new_reaction_id = str(uuid.uuid4())
+
+            with transaction.atomic():
+                CommentReaction.objects.create(
+                    reaction_id=new_reaction_id,
+                    comment=comment,
+                    entity=entity,
+                    emoji=emoji,
+                )
+
+                preview_count_obj, _ = CommentPreviewCount.objects.get_or_create(
+                    comment=comment, emoji=emoji, defaults={"count": 0}
+                )
+                preview_count_obj.count += 1
+                preview_count_obj.save()
+
+                # The reactor is engaging with the comment's AUTHOR, so the
+                # interaction bump is between those two entities - not the
+                # post's author, who may be someone else entirely.
+                if comment.entity_id != entity.id:
+                    interaction_score_bump(entity.id, comment.entity_id, "LIKE", False)
+
+                self._notify_comment_author(
+                    comment, entity, emoji, new_reaction_id, "added"
+                )
+
+            return Response(
+                {"message": "Reaction has been added"}, status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+    def put(self, request, *args, **kwargs):
+        try:
+            user = self.request.user
+            entity = self.request.entity
+            comment_id = request.data.get("comment_id")
+            emoji_id = request.data.get("emoji_id")
+
+            comment = Comment.objects.get(comment_id=comment_id, deleted_at__isnull=True)
+            new_emoji = Emoji.objects.get(emoji_id=emoji_id)
+
+            with transaction.atomic():
+                reaction = CommentReaction.objects.get(comment=comment, entity=entity)
+                old_emoji = reaction.emoji
+                reaction.emoji = new_emoji
+                reaction.save()
+
+                old_preview = CommentPreviewCount.objects.filter(
+                    comment=comment, emoji=old_emoji
+                ).first()
+                if old_preview:
+                    old_preview.count = max(old_preview.count - 1, 0)
+                    old_preview.save()
+
+                new_preview, _ = CommentPreviewCount.objects.get_or_create(
+                    comment=comment, emoji=new_emoji, defaults={"count": 0}
+                )
+                new_preview.count += 1
+                new_preview.save()
+
+                self._notify_comment_author(
+                    comment, entity, new_emoji, reaction.reaction_id, "updated"
+                )
+
+            return Response(
+                {"message": "Reaction has been updated"}, status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+    def delete(self, request, *args, **kwargs):
+        try:
+            user = self.request.user
+            entity = self.request.entity
+            comment_id = request.data.get("comment_id")
+
+            comment = Comment.objects.get(comment_id=comment_id)
+
+            with transaction.atomic():
+                reaction = CommentReaction.objects.get(comment=comment, entity=entity)
+
+                service = NotificationService()
+                service.delete_notification_by_reference_id(
+                    reaction_id=reaction.reaction_id,
+                )
+
+                if comment.entity_id != entity.id:
+                    interaction_score_bump(entity.id, comment.entity_id, "LIKE", True)
+
+                emoji = reaction.emoji
+                reaction.delete()
+
+                preview_count = CommentPreviewCount.objects.filter(
+                    comment=comment, emoji=emoji
+                ).first()
+                if preview_count:
+                    preview_count.count = max(preview_count.count - 1, 0)
+                    preview_count.save()
+
+            return Response(
+                {"message": "Reaction has been deleted"}, status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+
+class CommentReactionsCountView(APIView):
+    """ReactionsCountView for a comment - the tallies behind its reaction row."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, comment_id):
+        try:
+            user = self.request.user
+            comment = Comment.objects.get(comment_id=comment_id)
+            query_set = CommentPreviewCount.objects.filter(comment=comment)
+
+            serialized_result = CommentPreviewCountSerializer(query_set, many=True)
+            return Response(serialized_result.data, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+
+
 class ActivityCountView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -703,6 +912,40 @@ class CommentsView(APIView):
 
         return super().get_authenticators()
 
+    @staticmethod
+    def _with_reactions(queryset, entity):
+        """
+        Attach each comment's reaction tallies and the viewer's own reaction,
+        the same two things PostSerializer gets for a post.
+
+        `preview` is prefetched rather than joined so a comment with several
+        emoji tallies doesn't fan the page out into duplicate rows. The
+        entity_reaction subquery is skipped entirely for guests - this GET is
+        AllowAny, so `entity` is None for them and there is no "your reaction"
+        to look up.
+        """
+        queryset = queryset.prefetch_related("preview")
+
+        if entity is None:
+            return queryset
+
+        return queryset.annotate(
+            entity_reaction=Coalesce(
+                Subquery(
+                    CommentReaction.objects.filter(
+                        comment=OuterRef("pk"), entity=entity
+                    ).values("emoji_id")[:1]
+                ),
+                Value(None),
+                # On the Coalesce, not on the Value: the subquery resolves to
+                # the FK field while a typed Value resolves to CharField, and
+                # Django refuses to infer an output_field from the two
+                # ("mixed types: ForeignKey, CharField"). Emoji's pk IS a
+                # CharField, so naming it here is just making that explicit.
+                output_field=CharField(),
+            )
+        )
+
     def get(self, request):
         try:
             user = self.request.user
@@ -714,16 +957,15 @@ class CommentsView(APIView):
 
             if parent_id:
                 comment = Comment.objects.get(comment_id=parent_id)
-                queryset = (
+                queryset = self._with_reactions(
                     # Soft-deleted comments are excluded: delete() below only
                     # stamps deleted_at, so without this a deleted comment
                     # came straight back on the next fetch.
                     Comment.objects.filter(
                         post=post, parent_comment=comment, deleted_at__isnull=True
-                    )
-                    .select_related("entity")
-                    .order_by("created_at")
-                )
+                    ).select_related("entity"),
+                    entity,
+                ).order_by("created_at")
 
                 paginator = self.pagination_class()
                 paginated_queryset = paginator.paginate_queryset(
@@ -736,17 +978,23 @@ class CommentsView(APIView):
                 return data
             else:
                 queryset = (
-                    # Same soft-delete exclusion as the replies branch above.
-                    Comment.objects.filter(
-                        post=post, parent_comment=None, deleted_at__isnull=True
+                    self._with_reactions(
+                        # Same soft-delete exclusion as the replies branch above.
+                        Comment.objects.filter(
+                            post=post, parent_comment=None, deleted_at__isnull=True
+                        ).select_related("entity"),
+                        entity,
                     )
-                    .select_related("entity")
                     # Drives the "View N replies" affordance, so the client
                     # knows a thread HAS children without fetching them. The
                     # filter matches the replies branch above (soft-deleted
                     # replies are not returned, so they must not be counted
                     # either) - a plain Count("replies") would promise replies
                     # that then come back as an empty page.
+                    #
+                    # distinct=True matters more now: `preview` is prefetched
+                    # rather than joined, but any future join here would
+                    # otherwise multiply this count.
                     .annotate(
                         reply_count=Count(
                             "replies",

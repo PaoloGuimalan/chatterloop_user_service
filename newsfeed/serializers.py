@@ -8,6 +8,7 @@ from .models import (
     Emoji,
     PreviewCount,
     Comment,
+    CommentPreviewCount,
     ActivityCount,
     CountType,
     PostScore,
@@ -112,10 +113,26 @@ class EmojiSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class CommentPreviewCountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CommentPreviewCount
+        # Same shape as PreviewCountSerializer so the client can render a
+        # comment's reaction row with the post's component unchanged.
+        fields = ["count", "emoji"]
+
+
 class CommentSerializer(serializers.ModelSerializer):
     entity = EntitySerializer(read_only=True)
     link_preview = serializers.SerializerMethodField()
     reply_count = serializers.SerializerMethodField()
+    preview = CommentPreviewCountSerializer(read_only=True, many=True)
+    entity_reaction = serializers.SerializerMethodField()
+
+    def get_entity_reaction(self, obj):
+        # Annotated by CommentsView for the viewer; absent for a guest (the
+        # comments GET is AllowAny) and for any other consumer, where "no
+        # reaction" is the right answer anyway.
+        return getattr(obj, "entity_reaction", None)
 
     def get_link_preview(self, obj):
         url = extract_first_url(obj.text or "")

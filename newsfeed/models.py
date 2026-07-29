@@ -182,6 +182,60 @@ class Comment(models.Model):
     deleted_at = models.DateTimeField(blank=True, null=True)
 
 
+class CommentReaction(models.Model):
+    """
+    A reaction on a COMMENT - the Reaction model above, one level down.
+
+    Deliberately a separate table rather than a nullable `comment` column on
+    Reaction: that would make Reaction's unique_together meaningless (a row
+    would need to be unique per post OR per comment, which one constraint
+    cannot express) and every existing post-reaction query would have to start
+    filtering `comment__isnull=True`.
+    """
+
+    reaction_id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
+    comment = models.ForeignKey(
+        Comment, on_delete=models.CASCADE, related_name="reactions"
+    )
+    entity = models.ForeignKey(Entity, on_delete=models.DO_NOTHING)
+    emoji = models.ForeignKey(Emoji, on_delete=models.DO_NOTHING, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        # One reaction per entity per comment - changing your mind updates the
+        # row's emoji rather than adding a second (see CommentReactionsView.put).
+        unique_together = ("comment", "entity")
+
+
+class CommentPreviewCount(models.Model):
+    """
+    Per-emoji tally for a comment, the CommentReaction counterpart of
+    PreviewCount.
+
+    Created ON DEMAND by the reaction endpoints, never pre-seeded: a missing
+    row and a count=0 row mean the same thing to every reader, and seeding
+    would make this table comments x emojis. See newsfeed/signals.py for the
+    longer version of why the post-side seeding was removed.
+    """
+
+    preview_id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
+    comment = models.ForeignKey(
+        Comment, on_delete=models.CASCADE, related_name="preview"
+    )
+    emoji = models.ForeignKey(Emoji, on_delete=models.CASCADE, null=True)
+    count = models.IntegerField(default=0)
+
+    class Meta:
+        constraints = [
+            # What lets get_or_create resolve a concurrent first-reaction race
+            # instead of splitting the tally across two rows.
+            models.UniqueConstraint(
+                fields=["comment", "emoji"],
+                name="unique_comment_preview_count_per_emoji",
+            )
+        ]
+
+
 class PreviewCount(models.Model):
     preview_id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
     post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="preview")
