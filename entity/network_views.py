@@ -24,7 +24,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
-from django.db.models import Exists, OuterRef, Value, IntegerField
+from django.db.models import Exists, F, OuterRef, Q, Value, IntegerField
 from django.db.models.functions import Coalesce
 
 from entity.models import Connection, Follow
@@ -111,26 +111,53 @@ def _counterpart_select_related(queryset, *fields):
     return queryset.select_related(*paths)
 
 
+def connection_counterpart(row, entity):
+    """The OTHER side of a connection row, whichever column `entity` sits in."""
+    if str(row.action_by_id) == str(entity.id):
+        return row.involved_entity
+    return row.action_by
+
+
 def build_connections_queryset(entity, blocked_ids):
     """
     Settled connections involving `entity`, ranked by interaction.
 
-    A connection is stored as two mirrored rows (one per direction), so this
-    filters to the rows where the ACTING entity is `action_by` - that alone
-    yields each connection exactly once with the counterpart sitting in
-    `involved_entity`, which is far cheaper than fetching both directions
-    and de-duplicating in Python the way the v1 list endpoint does.
+    Matched from BOTH sides - `Q(action_by=entity) | Q(involved_entity=entity)`,
+    the same predicate /api/user/contacts uses. A connection is *supposed* to
+    be two mirrored rows, so filtering to `action_by=entity` alone looks like
+    it yields each connection exactly once; in practice it silently drops
+    connections whose mirror row is missing (legacy rows imported one-sided,
+    see user/scripts/import_legacy_accounts.py - prod had an ODD count of
+    accepted directions, which a fully mirrored table cannot produce). Those
+    connections show up on /contacts and vanished here.
+
+    Mirrored pairs still have to collapse to one row, so where BOTH directions
+    exist the `action_by=entity` one wins and its twin is dropped; a one-sided
+    row is kept regardless of which column `entity` landed in. The counterpart
+    is therefore not always `involved_entity` - read it via
+    connection_counterpart().
     """
-    return _counterpart_select_related(
-        Connection.objects.filter(
-            entity_side_is_visible("involved_entity"),
-            action_by=entity,
-            status=True,
+    own_direction = Connection.objects.filter(
+        connection_id=OuterRef("connection_id"), action_by=entity
+    )
+    return (
+        _counterpart_select_related(
+            Connection.objects.filter(
+                Q(action_by=entity) | Q(involved_entity=entity),
+                entity_side_is_visible("action_by"),
+                entity_side_is_visible("involved_entity"),
+                status=True,
+            )
+            .exclude(action_by=F("involved_entity"))
+            .exclude(action_by__in=blocked_ids)
+            .exclude(involved_entity__in=blocked_ids),
+            "action_by",
+            "involved_entity",
         )
-        .exclude(involved_entity=entity)
-        .exclude(involved_entity__in=blocked_ids),
-        "involved_entity",
-    ).order_by("-interaction_score", "-last_interaction_at", "connection_id")
+        .annotate(has_own_direction=Exists(own_direction))
+        .filter(Q(action_by=entity) | Q(has_own_direction=False))
+        .order_by("-interaction_score", "-last_interaction_at", "connection_id")
+    )
 
 
 def build_followers_queryset(entity, blocked_ids):
@@ -174,8 +201,8 @@ def build_following_queryset(entity, blocked_ids):
     ).order_by("-interaction_score", "-last_interaction_at", "follow_id")
 
 
-def serialize_connection(row, mutual_by_entity=None):
-    counterpart = normalize_network_entity(row.involved_entity)
+def serialize_connection(row, entity, mutual_by_entity=None):
+    counterpart = normalize_network_entity(connection_counterpart(row, entity))
     if counterpart is None:
         return None
     return {
@@ -211,9 +238,15 @@ def mutual_counts_for(entity, rows):
     subquery run for every candidate row before pagination; this instead
     resolves it only for the ~12 rows actually being returned.
     """
-    entity_ids = [
-        str(row.involved_entity_id) for row in rows if row.involved_entity_id
-    ]
+    entity_ids = []
+    for row in rows:
+        counterpart_id = (
+            row.involved_entity_id
+            if str(row.action_by_id) == str(entity.id)
+            else row.action_by_id
+        )
+        if counterpart_id:
+            entity_ids.append(str(counterpart_id))
     if not entity_ids:
         return {}
 
@@ -278,7 +311,7 @@ class NetworkOverview(APIView):
                     "connections": section(
                         connection_rows,
                         CONNECTIONS_PREVIEW,
-                        lambda row: serialize_connection(row, mutuals),
+                        lambda row: serialize_connection(row, entity, mutuals),
                         connections_qs.count(),
                     ),
                     "followers": section(
@@ -317,7 +350,9 @@ class NetworkConnections(APIView):
             mutuals = mutual_counts_for(entity, page)
             results = [
                 item
-                for item in (serialize_connection(row, mutuals) for row in page)
+                for item in (
+                    serialize_connection(row, entity, mutuals) for row in page
+                )
                 if item is not None
             ]
             return paginator.get_paginated_response(results)
