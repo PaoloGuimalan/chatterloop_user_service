@@ -467,7 +467,16 @@ class PostReactionsView(APIView):
                     emoji=emoji,
                 )
 
-                preview_count_obj = PreviewCount.objects.get(post=post, emoji=emoji)
+                # Created on first use rather than pre-seeded for every
+                # (post, emoji) pair - a zero row is indistinguishable from no
+                # row to every reader (the clients filter count > 0, and the
+                # emoji picker reads the Emoji table, not this one). The
+                # unique constraint on (post, emoji) is what makes this safe
+                # under concurrent reactions: get_or_create catches the
+                # IntegrityError and re-reads instead of double-counting.
+                preview_count_obj, _ = PreviewCount.objects.get_or_create(
+                    post=post, emoji=emoji, defaults={"count": 0}
+                )
                 preview_count_obj.count += 1
                 preview_count_obj.save()
 
@@ -542,11 +551,19 @@ class PostReactionsView(APIView):
                 reaction.emoji = new_emoji
                 reaction.save()
 
-                old_preview = PreviewCount.objects.get(post_id=post, emoji_id=old_emoji)
-                old_preview.count = max(old_preview.count - 1, 0)
-                old_preview.save()
+                # Decrement side is tolerant of a missing row: with rows
+                # created on demand, "no row" already means zero, so there is
+                # nothing to take away.
+                old_preview = PreviewCount.objects.filter(
+                    post=post, emoji=old_emoji
+                ).first()
+                if old_preview:
+                    old_preview.count = max(old_preview.count - 1, 0)
+                    old_preview.save()
 
-                new_preview = PreviewCount.objects.get(post_id=post, emoji_id=new_emoji)
+                new_preview, _ = PreviewCount.objects.get_or_create(
+                    post=post, emoji=new_emoji, defaults={"count": 0}
+                )
                 new_preview.count += 1
                 new_preview.save()
 
@@ -614,9 +631,12 @@ class PostReactionsView(APIView):
                 emoji = reaction.emoji
                 reaction.delete()
 
-                preview_count = PreviewCount.objects.get(post=post, emoji=emoji)
-                preview_count.count = max(preview_count.count - 1, 0)
-                preview_count.save()
+                preview_count = PreviewCount.objects.filter(
+                    post=post, emoji=emoji
+                ).first()
+                if preview_count:
+                    preview_count.count = max(preview_count.count - 1, 0)
+                    preview_count.save()
 
                 return Response(
                     {"message": "Reaction has been deleted"}, status=status.HTTP_200_OK

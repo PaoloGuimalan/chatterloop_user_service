@@ -188,6 +188,18 @@ class PreviewCount(models.Model):
     emoji = models.ForeignKey(Emoji, on_delete=models.CASCADE, null=True)
     count = models.IntegerField(null=False)
 
+    class Meta:
+        constraints = [
+            # Rows are created on demand by the reaction endpoints now (see
+            # newsfeed/signals.py for why the pre-seeding went away), so two
+            # simultaneous first-reactions with the same emoji would otherwise
+            # race into two rows and split the count. This is also what lets
+            # get_or_create resolve that race instead of double-counting.
+            models.UniqueConstraint(
+                fields=["post", "emoji"], name="unique_preview_count_per_post_emoji"
+            )
+        ]
+
 
 class CountType(models.TextChoices):
     COMMENT_CHOICE = "comment", "Comment"

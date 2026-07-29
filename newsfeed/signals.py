@@ -2,9 +2,7 @@ from django.db.models.signals import post_save, post_delete
 from django.utils.timezone import now
 from django.dispatch import receiver
 from .models import (
-    Emoji,
     Post,
-    PreviewCount,
     PostReference,
     PostScore,
     Comment,
@@ -18,34 +16,23 @@ from .helpers.query_functions import (
     follower_interaction_score_bump,
 )
 from django.core.cache import cache
-import uuid
 
 
-@receiver(post_save, sender=Emoji)
-def create_post_preview_counts(sender, instance, created, **kwargs):
-    if created:
-        # For each existing post, create a PreviewCount with count=0 for the new emoji
-        posts = Post.objects.all()
-        post_preview_counts = [
-            PreviewCount(
-                preview_id=str(uuid.uuid4()), post=post, emoji=instance, count=0
-            )
-            for post in posts
-        ]
-        PreviewCount.objects.bulk_create(post_preview_counts)
+# PreviewCount rows are NOT pre-seeded any more - neither per new emoji
+# (which wrote one row per existing post, so adding an emoji cost a write per
+# post and got worse as the site grew) nor per new post (which made the table
+# posts x emojis, almost entirely zeros).
+#
+# A zero row and a missing row are indistinguishable to every reader: the
+# clients render `preview.filter(count > 0)`, totals sum to the same number,
+# and the emoji picker reads the Emoji table rather than this one. So the
+# reaction endpoints create the row on first use via get_or_create instead,
+# and the (post, emoji) unique constraint keeps that safe under concurrency.
 
 
 @receiver(post_save, sender=Post)
-def create_preview_counts_for_new_post(sender, instance, created, **kwargs):
+def create_post_score_for_new_post(sender, instance, created, **kwargs):
     if created:
-        emojis = Emoji.objects.all()
-        preview_counts = [
-            PreviewCount(
-                preview_id=str(uuid.uuid4()), post=instance, emoji=emoji, count=0
-            )
-            for emoji in emojis
-        ]
-        PreviewCount.objects.bulk_create(preview_counts)
         references = PostReference.objects.filter(post=instance)
 
         content_t_m = 1.0
