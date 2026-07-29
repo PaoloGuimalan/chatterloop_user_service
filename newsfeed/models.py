@@ -154,8 +154,17 @@ class Reaction(models.Model):
 
 class Comment(models.Model):
     comment_id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
+    # Threads are flattened to TWO levels: a top-level comment (parent_comment
+    # None) and its replies. Replying to a reply re-parents to that reply's
+    # top-level ancestor and mentions its author instead of nesting deeper -
+    # see CommentsView.post(). So `replies` is always the full thread under a
+    # top-level comment and never itself has children.
     parent_comment = models.ForeignKey(
-        "self", on_delete=models.DO_NOTHING, null=True, blank=True
+        "self",
+        on_delete=models.DO_NOTHING,
+        null=True,
+        blank=True,
+        related_name="replies",
     )
     post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="comments")
     text = models.TextField(blank=True, null=True)

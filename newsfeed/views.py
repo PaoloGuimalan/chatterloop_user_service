@@ -7,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.db import models
 from django.db.models import (
     Q,
+    Count,
     Exists,
     OuterRef,
     Subquery,
@@ -46,7 +47,12 @@ from user.services.connections import ConnectionHelpers
 from user.services.mongohelpers import NotificationService
 from .drf_permissions import AllowsInternalService
 from .services.link_preview import extract_first_url, get_preview, fetch_image
-from entity.utils import get_entity_display_username
+from .services.comment_mentions import (
+    extract_mention_handles,
+    notify_comment_mentions,
+    resolve_mentioned_entities,
+)
+from entity.utils import get_entity_display_username, get_entity_profile_path
 from interests.services.affinity import bump_interest_affinity
 from user_service.services.redis import RedisPubSubClient
 from django.utils.timezone import now
@@ -715,6 +721,19 @@ class CommentsView(APIView):
                         post=post, parent_comment=None, deleted_at__isnull=True
                     )
                     .select_related("entity")
+                    # Drives the "View N replies" affordance, so the client
+                    # knows a thread HAS children without fetching them. The
+                    # filter matches the replies branch above (soft-deleted
+                    # replies are not returned, so they must not be counted
+                    # either) - a plain Count("replies") would promise replies
+                    # that then come back as an empty page.
+                    .annotate(
+                        reply_count=Count(
+                            "replies",
+                            filter=Q(replies__deleted_at__isnull=True),
+                            distinct=True,
+                        )
+                    )
                     .order_by("created_at")
                 )
                 paginator = self.pagination_class()
@@ -740,50 +759,85 @@ class CommentsView(APIView):
 
             post = Post.objects.get(post_id=post_id)
 
-            if new_comment.strip() == "" and new_attachment is None:
+            # `or ""` because text is nullable: an attachment-only comment
+            # legitimately sends no text, and .strip() on None is a 500.
+            if (new_comment or "").strip() == "" and new_attachment is None:
                 raise ValueError("No comment to save.")
 
+            # `replied_to` is the comment the user actually aimed at;
+            # `parent_comment` is where the new row is stored. They differ only
+            # when replying to a REPLY: threads are flattened to two levels, so
+            # the row re-parents to that reply's top-level ancestor rather than
+            # nesting a third time. The thread then stays one paginated list
+            # per top-level comment, and a soft-deleted middle comment cannot
+            # strand grandchildren with no reachable parent.
+            replied_to = None
+            parent_comment = None
+            if parent_id:
+                replied_to = Comment.objects.select_related(
+                    "entity", "parent_comment"
+                ).get(comment_id=parent_id)
+                parent_comment = replied_to.parent_comment or replied_to
+
+            # A mention IS the text (see services/comment_mentions.py) - the
+            # text is parsed for "@handle" purely to send the notification,
+            # and nothing about the parse is stored. The text itself is never
+            # rewritten here: when a reply gets flattened, it is the CLIENT
+            # that pre-fills "@handle " in the compose box, exactly as the
+            # messenger does. The person actually replied to is notified
+            # either way by the "Replied Comment" branch below.
+            mention_entities = resolve_mentioned_entities(new_comment, entity)
+
             with transaction.atomic():
-                if parent_id:
-                    new_comment_id = str(uuid.uuid4())
-                    parent_comment = Comment.objects.get(comment_id=parent_id)
+                new_comment_id = str(uuid.uuid4())
+                comment = Comment.objects.create(
+                    comment_id=new_comment_id,
+                    parent_comment=parent_comment,
+                    post=post,
+                    text=new_comment,
+                    attachment=new_attachment,
+                    entity=entity,
+                )
 
-                    Comment.objects.create(
-                        comment_id=new_comment_id,
-                        parent_comment=parent_comment,
-                        post=post,
-                        text=new_comment,
-                        attachment=new_attachment,
-                        entity=entity,
-                    )
+                reaction_ranking = PostScore.objects.get(post=post)
+                reaction_ranking.comments_count += 1
+                reaction_ranking.save()
 
-                    reaction_ranking = PostScore.objects.get(post=post)
-                    reaction_ranking.comments_count += 1
-                    reaction_ranking.save()
+                update_ranking_score(post_id, "comment", False)
+                bump_interest_affinity(
+                    entity.id,
+                    post.interests.values_list("id", flat=True),
+                    "COMMENT",
+                    False,
+                )
 
-                    update_ranking_score(post_id, "comment", False)
-                    bump_interest_affinity(
-                        entity.id,
-                        post.interests.values_list("id", flat=True),
-                        "COMMENT",
-                        False,
-                    )
+                # Entities already pinged for THIS comment, so a mention does
+                # not arrive as a second notification for the same event.
+                notified_ids = []
 
+                if replied_to is not None:
+                    # `or ""` guards an attachment-only parent, whose text is
+                    # None - len(None) used to 500 the whole reply.
+                    parent_text = replied_to.text or ""
                     truncated_comment = (
-                        (parent_comment.text[:30] + "...")
-                        if len(parent_comment.text) > 30
-                        else parent_comment.text
+                        (parent_text[:30] + "...")
+                        if len(parent_text) > 30
+                        else parent_text
                     )
 
-                    if parent_comment.entity != entity and post.entity != entity:
+                    if replied_to.entity != entity and post.entity != entity:
+                        reply_text = (
+                            f"{get_entity_display_username(entity)} replied to your "
+                            f'comment "{truncated_comment}"'
+                        )
                         service = NotificationService()
                         service.add_notification(
                             referenceID=new_comment_id,
                             referenceStatus=True,
-                            toUserID=parent_comment.entity.id,
+                            toUserID=replied_to.entity.id,
                             fromUserID=entity.id,
                             content_headline="Replied Comment",
-                            content_details=f'{get_entity_display_username(entity)} replied to your comment "{truncated_comment}"',
+                            content_details=reply_text,
                             type="post_comment",
                             isRead=False,
                         )
@@ -796,39 +850,18 @@ class CommentsView(APIView):
                             "message": {
                                 "status": True,
                                 "auth": True,
-                                "message": f'{get_entity_display_username(entity)} replied to your comment "{truncated_comment}"',
+                                "message": reply_text,
                                 "result": "",
                             },
                             "dateTime": now.isoformat(),
                         }
 
                         RedisPubSubClient.publish_json(
-                            f"events_{parent_comment.entity.id}", data
+                            f"events_{replied_to.entity.id}", data
                         )
+                        notified_ids.append(replied_to.entity.id)
 
                 else:
-                    new_comment_id = str(uuid.uuid4())
-                    Comment.objects.create(
-                        comment_id=new_comment_id,
-                        parent_comment=None,
-                        post=post,
-                        text=new_comment,
-                        attachment=new_attachment,
-                        entity=entity,
-                    )
-
-                    reaction_ranking = PostScore.objects.get(post=post)
-                    reaction_ranking.comments_count += 1
-                    reaction_ranking.save()
-
-                    update_ranking_score(post_id, "comment", False)
-                    bump_interest_affinity(
-                        entity.id,
-                        post.interests.values_list("id", flat=True),
-                        "COMMENT",
-                        False,
-                    )
-
                     if post.entity != entity:
                         service = NotificationService()
                         service.add_notification(
@@ -857,6 +890,11 @@ class CommentsView(APIView):
                         }
 
                         RedisPubSubClient.publish_json(f"events_{post.entity.id}", data)
+                        notified_ids.append(post.entity.id)
+
+                notify_comment_mentions(
+                    comment, entity, mention_entities, notified_ids
+                )
 
             return Response("OK", status=status.HTTP_200_OK)
         except Exception as e:
@@ -865,6 +903,7 @@ class CommentsView(APIView):
     def put(self, request):
         try:
             user = self.request.user
+            entity = getattr(self.request, "entity", None)
             comment_id = request.data.get("comment_id")
             updated_comment = request.data.get("updated_comment")
 
@@ -872,12 +911,26 @@ class CommentsView(APIView):
                 current_comment = Comment.objects.get(comment_id=comment_id)
                 assert_owns(request, current_comment)
 
-                if updated_comment.strip() == "" and current_comment.attachment is None:
+                if (
+                    updated_comment or ""
+                ).strip() == "" and current_comment.attachment is None:
                     raise ValueError("No comment to save.")
+
+                # Handles the text ALREADY had, captured before the edit is
+                # applied. An edit only notifies people the edit newly names -
+                # fixing a typo must not re-ping everyone in the comment.
+                previous_handles = set(extract_mention_handles(current_comment.text))
 
                 current_comment.text = updated_comment
                 current_comment.updated_at = now()
                 current_comment.save()
+
+                newly_mentioned = [
+                    mentioned
+                    for mentioned in resolve_mentioned_entities(updated_comment, entity)
+                    if get_entity_profile_path(mentioned).lower() not in previous_handles
+                ]
+                notify_comment_mentions(current_comment, entity, newly_mentioned)
 
             return Response("OK", status=status.HTTP_200_OK)
         except PermissionDenied:
@@ -895,9 +948,81 @@ class CommentsView(APIView):
                 current_comment = Comment.objects.get(comment_id=comment_id)
                 assert_owns(request, current_comment)
 
-                current_comment.deleted_at = now()
+                deleted_at = now()
+                current_comment.deleted_at = deleted_at
                 current_comment.deleted_by = entity
                 current_comment.save()
+
+                # Deleting a top-level comment takes its thread with it.
+                # Replies are only reachable through their parent (the GET
+                # needs a parent_id, and the top-level list excludes deleted
+                # rows), so leaving them alive just hides them forever while
+                # they keep counting toward the post's comment total.
+                #
+                # Ids are collected BEFORE the cascade: .update() reports how
+                # many rows it touched, not which, and afterwards the filter
+                # no longer matches them.
+                deleted_ids = [current_comment.comment_id]
+                if current_comment.parent_comment_id is None:
+                    reply_ids = list(
+                        current_comment.replies.filter(
+                            deleted_at__isnull=True
+                        ).values_list("comment_id", flat=True)
+                    )
+                    if reply_ids:
+                        Comment.objects.filter(comment_id__in=reply_ids).update(
+                            deleted_at=deleted_at, deleted_by=entity
+                        )
+                        deleted_ids.extend(reply_ids)
+
+                # post() counts EVERY comment, replies included, so removal has
+                # to give back the same amount - the whole thread, not just the
+                # row that was clicked. Without this the post's comment count
+                # only ever grew.
+                reaction_ranking = PostScore.objects.filter(
+                    post_id=current_comment.post_id
+                ).first()
+                if reaction_ranking:
+                    reaction_ranking.comments_count = max(
+                        0, reaction_ranking.comments_count - len(deleted_ids)
+                    )
+                    reaction_ranking.save()
+
+                    # Recomputes ranking_score off the count just written, so
+                    # this has to follow the save above, not precede it.
+                    update_ranking_score(current_comment.post_id, "comment", True)
+
+            # Deliberately AFTER the atomic block: Mongo is not part of the
+            # Postgres transaction, so doing this inside would leave the
+            # notifications gone but the comment restored if the transaction
+            # rolled back. Same treatment a removed reaction gets - every
+            # comment notification (post comment, reply, mention) carries its
+            # comment_id as referenceID, so the whole thread's worth goes in
+            # one call.
+            service = NotificationService()
+            notified_entities = service.delete_notifications_by_reference_ids(
+                deleted_ids
+            )
+
+            # Tell anyone holding a now-stale list to refetch, otherwise the
+            # notification sits on their screen pointing at a deleted comment
+            # until they reload the app themselves.
+            for notified_entity_id in notified_entities:
+                RedisPubSubClient.publish_json(
+                    f"events_{notified_entity_id}",
+                    {
+                        "logType": None,
+                        "pod": "podless",
+                        "event": "notifications_reload",
+                        "message": {
+                            "status": True,
+                            "auth": True,
+                            "message": "",
+                            "result": "",
+                        },
+                        "dateTime": datetime.now().isoformat(),
+                    },
+                )
 
             return Response("OK", status=status.HTTP_200_OK)
         except PermissionDenied:

@@ -115,10 +115,19 @@ class EmojiSerializer(serializers.ModelSerializer):
 class CommentSerializer(serializers.ModelSerializer):
     entity = EntitySerializer(read_only=True)
     link_preview = serializers.SerializerMethodField()
+    reply_count = serializers.SerializerMethodField()
 
     def get_link_preview(self, obj):
         url = extract_first_url(obj.text or "")
         return get_preview(url) if url else None
+
+    def get_reply_count(self, obj):
+        # Annotated by the view for the top-level list ("View 3 replies").
+        # Read defensively: the replies list doesn't annotate it (a reply
+        # never has children - threads are two levels deep, see
+        # Comment.parent_comment), and neither does any other consumer, but
+        # the key should still be present and 0 rather than missing.
+        return getattr(obj, "reply_count", 0)
 
     class Meta:
         model = Comment

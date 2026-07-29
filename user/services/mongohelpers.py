@@ -71,6 +71,34 @@ class NotificationService:
         result = Notification.objects(referenceID=reaction_id).delete()
         return result > 0
 
+    def delete_notifications_by_reference_ids(self, reference_ids):
+        """
+        Bulk delete_notification_by_reference_id, returning the entity ids that
+        had been notified.
+
+        Deleting a comment takes its whole reply thread with it, and each of
+        those comments is its own referenceID, so the single-id form would be
+        one Mongo round-trip per reply.
+
+        The recipients come back because a notification vanishing from the
+        database is only half the job: whoever is looking at their list right
+        now still has it on screen until they are told to reload. Read before
+        the delete, since afterwards there is nothing left to read them from.
+        """
+        ids = [str(reference_id) for reference_id in reference_ids if reference_id]
+        if not ids:
+            return []
+
+        recipients = [
+            recipient
+            for recipient in Notification.objects(referenceID__in=ids).distinct(
+                "toUserID"
+            )
+            if recipient
+        ]
+        Notification.objects(referenceID__in=ids).delete()
+        return recipients
+
 
 class SessionService:
     _instance = None
