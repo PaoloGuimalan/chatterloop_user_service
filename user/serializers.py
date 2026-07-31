@@ -26,6 +26,7 @@ class AccountSerializer(serializers.ModelSerializer):
             "is_active",
             "is_verified",
             "is_badged",
+            "is_private",
             "is_complete",
             "pending_consents",
             # "entity",
@@ -74,6 +75,7 @@ class AccountPreviewSerializer(serializers.ModelSerializer):
             "profile",
             "gender",
             "is_badged",
+            "is_private",
             "entity",
         ]
 
@@ -113,6 +115,7 @@ class AccountSearchSerializer(serializers.ModelSerializer):
             "date_created",
             "is_active",
             "is_verified",
+            "is_private",
             "has_connection",
             "connection_accomplished",
             "connection_id",

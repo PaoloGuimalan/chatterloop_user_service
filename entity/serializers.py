@@ -17,6 +17,7 @@ class EmbeddedAccountSerializer(serializers.ModelSerializer):
             "is_active",
             "gender",
             "is_badged",
+            "is_private",
             "middle_name",
         ]
 

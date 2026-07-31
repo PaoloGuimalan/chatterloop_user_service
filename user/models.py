@@ -70,6 +70,7 @@ class Account(models.Model):
     is_active = models.BooleanField(default=True)
     is_verified = models.BooleanField(default=False)
     is_badged = models.BooleanField(default=False)
+    is_private = models.BooleanField(default=False)
     is_default_user = models.BooleanField(default=False)
     is_superuser = models.BooleanField(default=False)
     user_type = models.CharField(default="user", max_length=150, null=False)
@@ -125,9 +126,7 @@ class Verification(models.Model):
         max_length=150, default=uuid.uuid4, unique=True, primary_key=True
     )
     user = models.ForeignKey(Account, null=False, on_delete=models.DO_NOTHING)
-    ver_code = models.CharField(
-        max_length=6, default=generate_ver_code, null=False
-    )
+    ver_code = models.CharField(max_length=6, default=generate_ver_code, null=False)
     date_generated = models.DateTimeField(default=now)
     is_used = models.BooleanField(default=False)
 
