@@ -294,7 +294,15 @@ class NewsfeedProfileView(APIView):
             realm_match = Realm.objects.filter(slug=username).first()
             target_account = Account.objects.filter(username=username).first()
 
-            state = get_profile_relationship_state(entity, target_account.entity)
+            target_entity = None
+            if target_account:
+                target_entity = target_account.entity
+            elif realm_match:
+                target_entity = realm_match.entity
+            else:
+                target_entity = None
+
+            state = get_profile_relationship_state(entity, target_entity)
             can_view = state["can_view"]
 
             if not can_view:
