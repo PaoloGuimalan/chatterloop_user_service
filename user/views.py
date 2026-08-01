@@ -59,7 +59,11 @@ from newsfeed.helpers.query_functions import (
     interaction_score_bump,
     follower_interaction_score_bump,
 )
-from entity.services.follows import follow_entity, purge_between
+from entity.services.follows import (
+    follow_entity,
+    purge_between,
+    get_profile_relationship_state,
+)
 from community.models import Realm, Member, Follow, Invite
 from entity.models import Entity
 from entity.permissions import Permission, MemberRole
@@ -135,59 +139,21 @@ class UserAuthentication(APIView):
             # otherwise which row comes back is arbitrary and
             # is_user_connection_initiator flips depending on query order.
 
-            connection_exists = (
-                Connection.objects.select_related("action_by", "involved_entity")
-                .filter(
-                    Q(action_by=user.entity, involved_entity=entity)
-                    | Q(action_by=entity, involved_entity=user.entity),
-                    ~Q(action_by=F("involved_entity")),
-                    # Each side is valid as an active+verified USER or an
-                    # active REALM. The old user-only predicate matched
-                    # nothing while acting as a page, so a real user<->page
-                    # connection reported is_connection_present=false and the
-                    # page saw "Add Contact" for an existing contact.
-                    entity_side_is_visible("action_by"),
-                    entity_side_is_visible("involved_entity"),
-                    # status=True,
-                )
-                .order_by("action_date")
-            )
+            state = get_profile_relationship_state(entity, user.entity)
 
             is_connection_present = (
                 None
                 if username == self.request.user.username
-                else True if len(connection_exists) >= 1 else False
+                else state["is_connection_present"]
             )
+            is_connection_handshaked = state["is_connection_handshaked"]
+            is_user_connection_initiator = state["is_user_connection_initiator"]
+            connection_id = state["connection_id"]
+            is_follower = state["is_follower"]
+            can_view = state["can_view"]
 
-            is_connection_handshaked = None
-            is_user_connection_initiator = None
-            connection_id = None
-
-            if connection_exists:
-                # 1. Fetch the first connection record from the queryset
-                connection_record = connection_exists[0]
-
-                connection_id = connection_record.connection_id
-                is_connection_handshaked = connection_record.status
-
-                # "Did the ACTING entity initiate this?" - compared on entity
-                # ids so it is valid whether acting as a person or a page.
-                # (Was comparing action_by.users.username to the human's
-                # username, which is always False when acting as a page, since
-                # a realm entity has no Account.)
-                is_user_connection_initiator = (
-                    connection_record.action_by_id == entity.id
-                    if isinstance(entity, Entity)
-                    else False
-                )
-
-            # Following is entity->entity now, so a person can be followed the
-            # same way a page can. Drives the Follow button on user profiles.
-            is_follower = (
-                Follow.objects.filter(follower=entity, followee=user.entity).exists()
-                if isinstance(entity, Entity)
-                else False
-            )
+            # private data block
+            email = user.email
 
             # Format birthdate parts
             birthdate = user.birthdate
@@ -197,16 +163,32 @@ class UserAuthentication(APIView):
                 birth_day = str(birthdate.day)
                 birth_year = str(birthdate.year)
 
+            final_birthdate = (
+                {
+                    "month": birth_month,
+                    "day": birth_day,
+                    "year": birth_year,
+                }
+                if birthdate
+                else None
+            )
+
             # Format dateCreated parts (local timestamp)
             date_created = localtime(user.date_created)
             date_str = date_created.strftime("%m/%d/%Y")
             time_str = date_created.strftime("%I:%M:%S %p").lower()
+
+            # END: private data block
 
             if entity:
                 save_profile_visit(entity, user.entity.id, "profile")
                 interaction_score_bump(
                     entity.id, user.entity.id, "PROFILE_VISIT", False
                 )
+
+            if not can_view:
+                email = "..."
+                final_birthdate = None
 
             # Build response JSON matching your example
             data = {
@@ -216,15 +198,7 @@ class UserAuthentication(APIView):
                         "middleName": user.middle_name,
                         "lastName": user.last_name,
                     },
-                    "birthdate": (
-                        {
-                            "month": birth_month,
-                            "day": birth_day,
-                            "year": birth_year,
-                        }
-                        if birthdate
-                        else None
-                    ),
+                    "birthdate": final_birthdate,
                     "dateCreated": {
                         "date": date_str,
                         "time": time_str,
@@ -244,10 +218,12 @@ class UserAuthentication(APIView):
                     "gender": (
                         user.gender.title() if user.gender else None
                     ),  # Capitalize first letter, e.g. "Male"
-                    "email": user.email,
+                    "email": email,
                     "isActivated": user.is_active,
                     "isVerified": user.is_verified,
                     "isBadged": user.is_badged,
+                    "isPrivate": user.is_private,
+                    "canView": can_view,
                     "type": "user",
                 }
             }
@@ -900,9 +876,7 @@ class UserContacts(APIView):
             # Canonically an ENTITY id. Only used to route the SSE publish -
             # the actual participants are derived from the connection rows
             # below, which overwrite this with entity ids anyway.
-            to_user_id = request.data.get("entity_id") or request.data.get(
-                "to_user_id"
-            )
+            to_user_id = request.data.get("entity_id") or request.data.get("to_user_id")
             now = datetime.now()
 
             with transaction.atomic():
@@ -1063,9 +1037,7 @@ class UserContacts(APIView):
             # Canonically an ENTITY id. Only used to route the SSE publish -
             # the actual participants are derived from the connection rows
             # below, which overwrite this with entity ids anyway.
-            to_user_id = request.data.get("entity_id") or request.data.get(
-                "to_user_id"
-            )
+            to_user_id = request.data.get("entity_id") or request.data.get("to_user_id")
             action = request.headers.get("action")
             now = datetime.now()
 
@@ -1272,28 +1244,32 @@ class UserSearch(APIView):
                 )
 
             # Build unified QuerySet execution
-            users_qs = Account.objects.filter(
-                search_filter,
-                ~Q(id=user.id),
-                ~Q(entity_id__in=blocked_account_ids),
-                is_active=True,
-                is_verified=True,
-            ).annotate(
-                has_connection=Exists(base_connection_qs),
-                connection_accomplished=Case(
-                    When(Exists(connection_active_qs), then=Value(True)),
-                    default=Value(False),
-                    output_field=BooleanField(),
-                ),
-                connection_id=Subquery(connection_id_subquery),
-                connection_initiator_id=Subquery(connection_initiator_subquery),
-            ).annotate(
-                # Chained so it can reference the annotation above.
-                is_action_by_entity=Case(
-                    When(connection_initiator_id=str(entity.id), then=Value(True)),
-                    default=Value(False),
-                    output_field=BooleanField(),
-                ),
+            users_qs = (
+                Account.objects.filter(
+                    search_filter,
+                    ~Q(id=user.id),
+                    ~Q(entity_id__in=blocked_account_ids),
+                    is_active=True,
+                    is_verified=True,
+                )
+                .annotate(
+                    has_connection=Exists(base_connection_qs),
+                    connection_accomplished=Case(
+                        When(Exists(connection_active_qs), then=Value(True)),
+                        default=Value(False),
+                        output_field=BooleanField(),
+                    ),
+                    connection_id=Subquery(connection_id_subquery),
+                    connection_initiator_id=Subquery(connection_initiator_subquery),
+                )
+                .annotate(
+                    # Chained so it can reference the annotation above.
+                    is_action_by_entity=Case(
+                        When(connection_initiator_id=str(entity.id), then=Value(True)),
+                        default=Value(False),
+                        output_field=BooleanField(),
+                    ),
+                )
             )
 
             # Paginate and serialize output records

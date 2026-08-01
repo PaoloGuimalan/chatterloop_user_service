@@ -79,6 +79,7 @@ from rest_framework.exceptions import PermissionDenied
 from entity.ownership import assert_owns
 from entity.permissions import Permission
 from entity.drf_permissions import RequiresPermission
+from entity.services.follows import get_profile_relationship_state
 
 
 class Pagination(PageNumberPagination):
@@ -291,9 +292,21 @@ class NewsfeedProfileView(APIView):
                 save_viewcache_engagements(entity, viewcache)
 
             realm_match = Realm.objects.filter(slug=username).first()
+            target_account = Account.objects.filter(username=username).first()
+
+            state = get_profile_relationship_state(entity, target_account.entity)
+            can_view = state["can_view"]
+
+            if not can_view:
+                empty_paginator = self.pagination_class()
+                empty_page = empty_paginator.paginate_queryset(
+                    Post.objects.none(), request, view=self
+                )
+                return empty_paginator.get_paginated_response(
+                    PostSerializer(empty_page, many=True).data
+                )
 
             if not realm_match and isinstance(entity, Entity):
-                target_account = Account.objects.filter(username=username).first()
                 if target_account and is_blocked(entity, target_account.entity):
                     empty_paginator = self.pagination_class()
                     empty_page = empty_paginator.paginate_queryset(
@@ -742,7 +755,9 @@ class CommentReactionsView(APIView):
             comment_id = request.data.get("comment_id")
             emoji_id = request.data.get("emoji_id")
 
-            comment = Comment.objects.get(comment_id=comment_id, deleted_at__isnull=True)
+            comment = Comment.objects.get(
+                comment_id=comment_id, deleted_at__isnull=True
+            )
             emoji = Emoji.objects.get(emoji_id=emoji_id)
 
             new_reaction_id = str(uuid.uuid4())
@@ -784,7 +799,9 @@ class CommentReactionsView(APIView):
             comment_id = request.data.get("comment_id")
             emoji_id = request.data.get("emoji_id")
 
-            comment = Comment.objects.get(comment_id=comment_id, deleted_at__isnull=True)
+            comment = Comment.objects.get(
+                comment_id=comment_id, deleted_at__isnull=True
+            )
             new_emoji = Emoji.objects.get(emoji_id=emoji_id)
 
             with transaction.atomic():
@@ -1001,8 +1018,7 @@ class CommentsView(APIView):
                             filter=Q(replies__deleted_at__isnull=True),
                             distinct=True,
                         )
-                    )
-                    .order_by("created_at")
+                    ).order_by("created_at")
                 )
                 paginator = self.pagination_class()
                 paginated_queryset = paginator.paginate_queryset(
@@ -1160,9 +1176,7 @@ class CommentsView(APIView):
                         RedisPubSubClient.publish_json(f"events_{post.entity.id}", data)
                         notified_ids.append(post.entity.id)
 
-                notify_comment_mentions(
-                    comment, entity, mention_entities, notified_ids
-                )
+                notify_comment_mentions(comment, entity, mention_entities, notified_ids)
 
             return Response("OK", status=status.HTTP_200_OK)
         except Exception as e:
@@ -1196,7 +1210,8 @@ class CommentsView(APIView):
                 newly_mentioned = [
                     mentioned
                     for mentioned in resolve_mentioned_entities(updated_comment, entity)
-                    if get_entity_profile_path(mentioned).lower() not in previous_handles
+                    if get_entity_profile_path(mentioned).lower()
+                    not in previous_handles
                 ]
                 notify_comment_mentions(current_comment, entity, newly_mentioned)
 

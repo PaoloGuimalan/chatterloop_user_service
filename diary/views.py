@@ -17,6 +17,7 @@ from django.shortcuts import get_object_or_404
 from .serializers import EntrySerializer, TagSerializer, MoodSerializer
 from django.utils import timezone
 from datetime import datetime
+from entity.services.follows import get_profile_relationship_state
 
 
 class Pagination(PageNumberPagination):
@@ -32,20 +33,40 @@ class DiaryTotalView(APIView):
         return super().get_permissions()
 
     def get_authenticators(self):
-        """Disable authentication completely for GET and POST requests"""
+        """
+        VIEW LEVEL FIX: If a guest visits without an 'x-access-token' header,
+        completely strip the authentication class out of this execution thread.
+        This stops the custom backend from throwing "Token not defined" errors!
+        """
         if self.request.method in ["GET"]:
-            return (
-                []
-            )  # Returns an empty list, skipping your AuthenticationBackend completely
+            token = self.request.headers.get("x-access-token")
+            if not token:
+                return ()  # Returns an empty tuple, bypassing your custom backend entirely for guests!
+
         return super().get_authenticators()
 
     pagination_class = Pagination
 
     def get(self, request, username):
         user = self.request.user
+        entity = getattr(self.request, "entity", None)
 
         try:
             current_user = Account.objects.get(username=username)
+
+            state = get_profile_relationship_state(entity, current_user.entity)
+            can_view = state["can_view"]
+
+            if not can_view:
+                return Response(
+                    {
+                        "user": current_user.username,
+                        "total_entries": 0,
+                        "latest_entry": None,
+                        "top_tags": [],
+                    },
+                    status=status.HTTP_200_OK,
+                )
 
             limit_tags = 3
             query_set = Entry.objects.filter(account=current_user)

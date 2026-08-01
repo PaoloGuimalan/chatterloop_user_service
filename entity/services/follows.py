@@ -17,9 +17,10 @@ helpers import back into user.models, so a module-scope import would close a
 cycle.
 """
 
-from django.db.models import Q
+from django.db.models import Q, F
 
-from entity.models import Follow
+from entity.models import Follow, Connection, Entity
+from ..utils import entity_side_is_visible
 
 
 def get_follower_ids(entity_id, limit=500):
@@ -39,6 +40,75 @@ def get_follower_ids(entity_id, limit=500):
     if limit:
         qs = qs[:limit]
     return [str(fid) for fid in qs]
+
+
+def get_profile_relationship_state(viewer_entity, target_entity):
+
+    connection_qs = (
+        Connection.objects.select_related("action_by", "involved_entity")
+        .filter(
+            Q(action_by=viewer_entity, involved_entity=target_entity)
+            | Q(action_by=target_entity, involved_entity=viewer_entity),
+            ~Q(action_by=F("involved_entity")),
+            entity_side_is_visible("action_by"),
+            entity_side_is_visible("involved_entity"),
+        )
+        .order_by("action_date")
+    )
+
+    connection_record = connection_qs.first()
+
+    is_connection_present = connection_record is not None
+    connection_id = connection_record.connection_id if connection_record else None
+    is_user_connection_initiator = (
+        connection_record.action_by_id == viewer_entity.id
+        if connection_record
+        else None
+    )
+
+    is_follower = (
+        Follow.objects.filter(
+            follower=viewer_entity,
+            followee=target_entity,
+        ).exists()
+        if isinstance(viewer_entity, Entity) and isinstance(target_entity, Entity)
+        else False
+    )
+
+    # Resolve privacy status via OneToOne relations (users or realms)
+    is_private = False
+    if hasattr(target_entity, "users"):
+        is_private = target_entity.users.is_private
+    elif hasattr(target_entity, "realms"):
+        is_private = target_entity.realms.is_private
+
+    connection_list = list(connection_qs)
+    is_connection_handshaked = len(connection_list) == 2 and all(
+        conn.status for conn in connection_list
+    )
+
+    # Define access criteria based on entity type rules
+    is_self = viewer_entity == target_entity
+    has_relationship = is_connection_handshaked or is_follower
+
+    if is_self:
+        can_view = True
+    elif is_private:
+        can_view = has_relationship
+    else:
+        can_view = True
+
+    return {
+        "connection_exists": connection_qs,
+        "connection_record": connection_record,
+        "connection_id": connection_id,
+        "is_connection_present": is_connection_present,
+        "is_connection_handshaked": is_connection_handshaked,
+        "is_user_connection_initiator": is_user_connection_initiator,
+        "is_follower": is_follower,
+        "is_private": is_private,
+        "can_view": can_view,
+    }
 
 
 def follow_entity(follower, followee, backfill=True):
@@ -81,9 +151,7 @@ def unfollow_entity(follower, followee):
     if follower is None or followee is None:
         return False
 
-    deleted, _ = Follow.objects.filter(
-        follower=follower, followee=followee
-    ).delete()
+    deleted, _ = Follow.objects.filter(follower=follower, followee=followee).delete()
 
     if deleted:
         from newsfeed.helpers.query_functions import remove_feed_on_unfriend
