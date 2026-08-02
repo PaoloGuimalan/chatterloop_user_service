@@ -120,7 +120,23 @@ def build_people_queryset(entity, query, blocked_ids):
         .exclude(entity_id__in=blocked_ids)
         .annotate(
             is_followed=Exists(
-                Follow.objects.filter(follower=entity, followee=OuterRef("entity_id"))
+                Follow.objects.filter(
+                    follower=entity,
+                    followee=OuterRef("entity_id"),
+                    status=True,
+                )
+            ),
+            # A follow of a PRIVATE profile is created pending and stays that
+            # way until its owner approves it. Without this the card falls
+            # back to "Follow" for someone you have already asked, and tapping
+            # again is a no-op - follow_entity is idempotent and will not
+            # re-notify, so the button would look permanently broken.
+            is_follow_pending=Exists(
+                Follow.objects.filter(
+                    follower=entity,
+                    followee=OuterRef("entity_id"),
+                    status=False,
+                )
             ),
             has_connection=Exists(base_connection_qs),
             connection_accomplished=Exists(base_connection_qs.filter(status=True)),
@@ -153,6 +169,7 @@ def build_people_queryset(entity, query, blocked_ids):
             "profile",
             "is_badged",
             "is_followed",
+            "is_follow_pending",
             "has_connection",
             "connection_accomplished",
             "connection_id",
@@ -179,6 +196,9 @@ def normalize_person(row, acting_entity_id):
         "is_verified": bool(row.get("is_badged")),
         "mutual_count": row.get("mutual_count") or 0,
         "is_followed": bool(row.get("is_followed")),
+        # Mutually exclusive with is_followed - the pair is what distinguishes
+        # Follow / Requested / Following on the card.
+        "is_follow_pending": bool(row.get("is_follow_pending")),
         "id": row.get("id"),
         "has_connection": bool(row.get("has_connection")),
         "connection_accomplished": bool(row.get("connection_accomplished")),
@@ -225,9 +245,17 @@ def build_realms_queryset(entity, query, blocked_ids, realm_types):
         .exclude(entity_id__in=blocked_ids)
         .annotate(
             members_count=Count("member", distinct=True),
-            followers_count=Count("entity__followers", distinct=True),
+            followers_count=Count(
+                "entity__followers",
+                filter=Q(entity__followers__status=True),
+                distinct=True,
+            ),
             is_follower=Exists(
-                Follow.objects.filter(followee=OuterRef("entity_id"), follower=entity)
+                Follow.objects.filter(
+                    followee=OuterRef("entity_id"),
+                    follower=entity,
+                    status=True,
+                )
             ),
             # A page's own entity is never a Member row of its own realm, so
             # Q(entity=entity) catches the self-administration case (same

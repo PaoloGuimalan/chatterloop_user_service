@@ -80,6 +80,7 @@ from entity.ownership import assert_owns
 from entity.permissions import Permission
 from entity.drf_permissions import RequiresPermission
 from entity.services.follows import get_profile_relationship_state
+from newsfeed.services.post_visibility import visible_posts_filter, can_view_post
 
 
 class Pagination(PageNumberPagination):
@@ -103,7 +104,7 @@ class NewsfeedView(APIView):
             # entity's own id for every row rather than the things it follows -
             # so this list was effectively useless. followee_id is the target.
             followed_realm_ids = list(
-                Follow.objects.filter(follower=entity).values_list(
+                Follow.objects.filter(follower=entity, status=True).values_list(
                     "followee_id", flat=True
                 )
             )
@@ -170,9 +171,18 @@ class NewsfeedView(APIView):
                     ),
                 )
                 .filter(
-                    post_id__in=candidate_post_ids, deleted_at=None, is_archived=False
+                    visible_posts_filter(entity),
+                    post_id__in=candidate_post_ids,
+                    deleted_at=None,
+                    is_archived=False,
                 )
                 .exclude(entity_id__in=blocked_account_ids)
+                # The bucket is fanned out on write, so a post can sit in it
+                # from before its author narrowed their audience (going
+                # private rewrites existing posts). The filter above is what
+                # keeps those from being served; the bucket row is harmless
+                # once it can never hydrate.
+                .distinct()
                 .order_by(
                     "-is_friend",
                     "-is_friend_tagged",
@@ -294,13 +304,13 @@ class NewsfeedProfileView(APIView):
             realm_match = Realm.objects.filter(slug=username).first()
             target_account = Account.objects.filter(username=username).first()
 
-            target_entity = None
-            if target_account:
-                target_entity = target_account.entity
-            elif realm_match:
-                target_entity = realm_match.entity
-            else:
-                target_entity = None
+            # Profile privacy is a USER setting, so only a user profile is
+            # gated here. A realm falls through: Realm.is_private means
+            # "invite-only group" and is enforced by the join/invite rules,
+            # and membership is a Member row rather than a Follow - running
+            # realms through this gate hid every private group's feed from
+            # its own members.
+            target_entity = target_account.entity if target_account else None
 
             state = get_profile_relationship_state(entity, target_entity)
             can_view = state["can_view"]
@@ -356,7 +366,17 @@ class NewsfeedProfileView(APIView):
                         Subquery(user_reaction_subquery), Value(None)
                     ),
                 )
-                .filter(deleted_at=None, is_archived=archive)
+                # can_view above answers "may I see this PROFILE"; this
+                # answers "may I see each POST". They are separate: a public
+                # profile can still hold connections-only posts, which is
+                # exactly what an author who went private and back leaves
+                # behind.
+                .filter(
+                    visible_posts_filter(entity),
+                    deleted_at=None,
+                    is_archived=archive,
+                )
+                .distinct()
                 .order_by("-date_posted")
             )
 
@@ -420,6 +440,16 @@ class NewsfeedPostPreviewView(APIView):
                 )
                 .get(post_id=post_id)
             )
+
+            # Reachable by post id alone, with no auth for guests, so this is
+            # the one path where a restricted post would otherwise be a
+            # public link. 404 rather than 403: whether a given post id
+            # exists is itself part of what is being withheld.
+            if not can_view_post(queryset, entity):
+                return Response(
+                    {"message": "Post not available"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
             serialized_result = PostSerializer(queryset)
 
@@ -979,6 +1009,15 @@ class CommentsView(APIView):
             parent_id = request.GET.get("parent_id")
 
             post = Post.objects.get(post_id=post_id)
+
+            # Comments inherit the post's audience - otherwise a restricted
+            # post's discussion (including who engaged with it) stays
+            # readable to anyone holding the post id.
+            if not can_view_post(post, entity):
+                return Response(
+                    {"message": "Post not available"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
             if parent_id:
                 comment = Comment.objects.get(comment_id=parent_id)

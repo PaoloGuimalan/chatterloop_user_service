@@ -1,4 +1,5 @@
 from django_redis import get_redis_connection
+from django.db import transaction
 import json
 
 
@@ -21,6 +22,30 @@ class RedisPubSubClient:
         redis_conn = cls.get_redis_connection()
         message = json.dumps(data)  # Serialize Python dict to JSON string
         redis_conn.publish(channel, message)
+
+    @classmethod
+    def publish_json_on_commit(cls, channel, data):
+        """
+        publish_json deferred until the surrounding transaction COMMITS.
+
+        Use this for any event that makes the receiver come back and read the
+        rows this request is writing. Publishing inline from inside
+        `with transaction.atomic()` is a race the receiver usually wins: the
+        SSE frame leaves immediately, the client refetches on a different
+        connection, and it reads the PRE-change rows because the writer has
+        not committed yet. Accepting a contact request looked exactly like
+        this - the requester's page reloaded and showed the old state.
+
+        Outside a transaction, Django runs the callable immediately, so this
+        is always safe to use in place of publish_json.
+
+        `data` is bound as a default argument rather than captured by the
+        closure, so publishing in a loop cannot end up sending the last
+        iteration's payload to every channel.
+        """
+        transaction.on_commit(
+            lambda channel=channel, data=data: cls.publish_json(channel, data)
+        )
 
     @classmethod
     def subscribe(cls, channel):

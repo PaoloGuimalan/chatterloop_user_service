@@ -321,6 +321,19 @@ class Follow(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # False means the edge exists but is still awaiting the followee's
+    # approval - the "requested" state a private profile creates. Public
+    # targets auto-approve on create, so the overwhelming majority of rows
+    # are True and the default keeps every pre-existing follow accepted.
+    #
+    # A pending row is deliberately a real row rather than a separate
+    # request table: unfollow/cancel is then the same delete, and the
+    # unique_together below still stops a double-tap from queueing two
+    # requests. Everything that treats a follow as a *relationship*
+    # (follower counts, feed fan-out, private-profile access) must filter
+    # status=True - see get_follower_ids / accepted_follow_exists.
+    status = models.BooleanField(default=True)
+
     interaction_score = models.FloatField(default=10.0)
     last_interaction_at = models.DateTimeField(auto_now=True)
 

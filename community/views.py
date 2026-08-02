@@ -30,7 +30,13 @@ from user_service.services.redis import RedisPubSubClient
 from entity.permissions import Permission
 from entity.services.permission_resolver import has_permission
 from entity.utils import get_entity_display_username, resolve_entity_target
-from entity.services.follows import follow_entity, unfollow_entity
+from entity.services.follows import (
+    follow_entity,
+    unfollow_entity,
+    approve_follow_request,
+    decline_follow_request,
+)
+from entity.services.realtime import publish_profile_relationship_update
 from user.services.mongohelpers import NotificationService
 from user.utils.blocking import is_blocked
 
@@ -53,7 +59,14 @@ class TopRealms(APIView):
             type = request.query_params.get("type", None)
 
             top_realm_queryset = Realm.objects.annotate(
-                followers_count=Count("entity__followers", distinct=True),
+                followers_count=Count(
+                    "entity__followers",
+                    # Accepted followers only - a pending follow request
+                    # is not a follower yet and must not inflate the
+                    # public count.
+                    filter=Q(entity__followers__status=True),
+                    distinct=True,
+                ),
                 members=Count("member", distinct=True),
                 # A page's own entity is never itself a Member row of its
                 # realm (Member rows only ever represent personal accounts),
@@ -80,7 +93,11 @@ class TopRealms(APIView):
                     output_field=BooleanField(),
                 ),
                 is_follower=Exists(
-                    Follow.objects.filter(followee=OuterRef("entity_id"), follower=entity)
+                    Follow.objects.filter(
+                        followee=OuterRef("entity_id"),
+                        follower=entity,
+                        status=True,
+                    )
                 ),
             ).filter(type=type, is_private=False)
 
@@ -115,7 +132,14 @@ class MyRealms(APIView):
             type = request.query_params.get("type", None)
 
             my_realm_queryset = Realm.objects.annotate(
-                followers_count=Count("entity__followers", distinct=True),
+                followers_count=Count(
+                    "entity__followers",
+                    # Accepted followers only - a pending follow request
+                    # is not a follower yet and must not inflate the
+                    # public count.
+                    filter=Q(entity__followers__status=True),
+                    distinct=True,
+                ),
                 members=Count("member", distinct=True),
                 # See TopRealms.get() above: `Q(entity=entity)` covers acting
                 # as a page whose own entity can never be a Member row of
@@ -139,7 +163,11 @@ class MyRealms(APIView):
                     output_field=BooleanField(),
                 ),
                 is_follower=Exists(
-                    Follow.objects.filter(followee=OuterRef("entity_id"), follower=entity)
+                    Follow.objects.filter(
+                        followee=OuterRef("entity_id"),
+                        follower=entity,
+                        status=True,
+                    )
                 ),
             ).filter(is_member=True, type=type)
 
@@ -208,7 +236,14 @@ class FollowRealmView(APIView):
 
             followed_realm_queryset = (
                 Realm.objects.annotate(
-                    followers_count=Count("entity__followers", distinct=True),
+                    followers_count=Count(
+                    "entity__followers",
+                    # Accepted followers only - a pending follow request
+                    # is not a follower yet and must not inflate the
+                    # public count.
+                    filter=Q(entity__followers__status=True),
+                    distinct=True,
+                ),
                     members=Count("member", distinct=True),
                     # See TopRealms.get() above: `Q(entity=entity)` covers
                     # acting as a page whose own entity can never be a
@@ -278,11 +313,17 @@ class FollowRealmView(APIView):
         )
 
     @staticmethod
-    def _notify_new_follower(follower, followee):
+    def _notify_new_follower(follower, followee, is_pending=False):
         """
         Persist a "started following you" notification and push the SSE that
         makes the client refresh - same two-step (Mongo write + Redis publish
         on `events_<entity id>`) every other notification site uses.
+
+        A pending request notifies differently: it is ACTIONABLE, so it goes
+        out with referenceStatus=False and type="follow_request" so the
+        client renders Approve/Decline rather than a passive "new follower"
+        line. referenceID stays the follower's entity id either way - that is
+        what the approve/decline call addresses.
 
         Entity-generic on both ends: the follower may be a person or a page
         (get_entity_display_username resolves either), and so may the
@@ -293,17 +334,27 @@ class FollowRealmView(APIView):
         not turn a successful follow into a 500.
         """
         try:
-            details = f"{get_entity_display_username(follower)} started following you."
+            if is_pending:
+                details = (
+                    f"{get_entity_display_username(follower)} "
+                    "requested to follow you."
+                )
+            else:
+                details = (
+                    f"{get_entity_display_username(follower)} started following you."
+                )
 
             service = NotificationService()
             service.add_notification(
                 referenceID=str(follower.id),
-                referenceStatus=True,
+                referenceStatus=not is_pending,
                 toUserID=followee.id,
                 fromUserID=follower.id,
-                content_headline="New Follower",
+                content_headline=(
+                    "Follow Request" if is_pending else "New Follower"
+                ),
                 content_details=details,
-                type="follow",
+                type="follow_request" if is_pending else "follow",
                 isRead=False,
             )
 
@@ -348,7 +399,11 @@ class FollowRealmView(APIView):
             # followee's recent posts - the feed is fan-out-on-write keyed on
             # the follow graph. Idempotent, so a double-tap neither raises on
             # the unique constraint nor re-backfills.
-            created = follow_entity(entity, followee)
+            #
+            # Against a PRIVATE user profile it parks the edge as pending and
+            # seeds nothing; is_pending is what turns the button into
+            # "Requested" and keeps the profile shut until they approve.
+            created, is_pending = follow_entity(entity, followee)
 
             # Notify the followee - but ONLY when a new edge was actually
             # created, so a double-tap (or a re-follow of someone already
@@ -364,14 +419,165 @@ class FollowRealmView(APIView):
             # there is nothing to act on; referenceID is the follower's entity
             # id, which is what a future "Follow back" button would address.
             if created:
-                self._notify_new_follower(entity, followee)
+                self._notify_new_follower(entity, followee, is_pending=is_pending)
+
+            # The followee may be on the follower's profile - their follower
+            # count, and any "follows you" indicator, just changed. Also fires
+            # for a pending request, which is what surfaces it while they are
+            # already looking at that profile.
+            if created:
+                publish_profile_relationship_update(
+                    followee.id,
+                    entity.id,
+                    "follow_requested" if is_pending else "followed",
+                )
 
             return Response(
-                {"status": True, "message": f"Followed {raw_target}"},
+                {
+                    "status": True,
+                    "is_pending": is_pending,
+                    "message": (
+                        f"Requested to follow {raw_target}"
+                        if is_pending
+                        else f"Followed {raw_target}"
+                    ),
+                },
                 status=status.HTTP_201_CREATED,
             )
         except Exception as e:
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def put(self, request):
+        """
+        Followee-side approve/decline of a follow request.
+
+        The ACTING entity is always the one being followed - you can only
+        answer requests addressed to you, so the target here is the
+        REQUESTER, not the profile. `action` mirrors the contact-request
+        accept/reject header so the clients handle both the same way.
+
+        IDEMPOTENT. Answering settles the notification whether or not a
+        pending row was actually found, and re-answering succeeds instead of
+        erroring. The notification and the follow row can legitimately fall
+        out of step - accepting a CONTACT request auto-approves any pending
+        follow (link_follows_for_connection), and a requester can cancel by
+        unfollowing - which used to leave a permanently unanswerable
+        notification: the 404 returned before the notification was touched,
+        so its Confirm/Decline buttons came back on every refetch and could
+        never be cleared.
+
+        The notification is therefore settled FIRST, and the follow row is
+        only mutated when there is genuinely something pending.
+        """
+        entity = self.request.entity
+
+        try:
+            raw_target = self._target_id(request)
+            follower = resolve_entity_target(raw_target)
+            action = (
+                request.headers.get("action") or request.data.get("action") or "approve"
+            ).lower()
+
+            if follower is None:
+                return Response(
+                    {"status": False, "message": "Requester not found"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            is_decline = action in ("decline", "reject")
+
+            # Settle the notification unconditionally. This is the part the
+            # user actually sees, and it must clear even when the underlying
+            # request is already gone. Scoped by type (a follow request's
+            # referenceID is an entity id, not unique across types) and by
+            # recipient (one requester may have open requests against several
+            # profiles; answering here must not clear the others).
+            NotificationService().update_reference_status_by_type(
+                str(follower.id), "follow_request", True, to_user_id=entity.id
+            )
+
+            if is_decline:
+                # Only ever removes a PENDING row - declining must not be
+                # usable to drop an established follower.
+                handled = decline_follow_request(follower, entity)
+                message = "Follow request declined"
+
+                # The requester's profile view of us still reads "Requested";
+                # there is deliberately no notification for a decline, so this
+                # is the only thing that corrects their button.
+                if handled:
+                    publish_profile_relationship_update(
+                        follower.id, entity.id, "follow_request_declined"
+                    )
+            else:
+                handled = approve_follow_request(follower, entity)
+                message = "Follow request approved"
+
+                if handled:
+                    self._notify_request_approved(entity, follower)
+                else:
+                    message = "Follow request already settled"
+
+            return Response(
+                {
+                    "status": True,
+                    # False means the notification was stale - nothing was
+                    # pending to act on. The call still succeeded.
+                    "changed": handled,
+                    "message": message,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @staticmethod
+    def _notify_request_approved(followee, follower):
+        """
+        Tell the requester their pending follow went through - without it a
+        private profile silently opens up and they never look again.
+        """
+        try:
+            details = (
+                f"{get_entity_display_username(followee)} approved your follow request."
+            )
+
+            service = NotificationService()
+            service.add_notification(
+                referenceID=str(followee.id),
+                referenceStatus=True,
+                toUserID=follower.id,
+                fromUserID=followee.id,
+                content_headline="Follow Request Approved",
+                content_details=details,
+                type="follow",
+                isRead=False,
+            )
+
+            now = datetime.now()
+            RedisPubSubClient.publish_json(
+                f"events_{follower.id}",
+                {
+                    "logType": None,
+                    "pod": "podless",
+                    "event": "notifications",
+                    "message": {
+                        "status": True,
+                        "auth": True,
+                        "message": details,
+                        "result": "",
+                    },
+                    "dateTime": now.isoformat(),
+                },
+            )
+
+            # If they are still sitting on this profile, its button says
+            # "Requested" and its feed is empty - both now wrong.
+            publish_profile_relationship_update(
+                follower.id, followee.id, "follow_request_approved"
+            )
+        except Exception as err:
+            print(f"Failed to send follow approval notification: {err}")
 
     def delete(self, request):
         user = self.request.user
@@ -390,7 +596,33 @@ class FollowRealmView(APIView):
             # Also pulls the followee's fanned-out posts back out of this
             # follower's feed bucket. Unfollowing something you do not follow
             # is a no-op, not a 500.
+            #
+            # Deliberately status-agnostic: this is also how the REQUESTER
+            # cancels a follow request they no longer want pending, which is
+            # the same gesture (un-tap the button) on the client.
             unfollow_entity(entity, followee)
+
+            # Withdrawing leaves the followee holding a notification that
+            # still offers Confirm/Decline for a request that no longer
+            # exists. Settle it here so the buttons go away - the approve and
+            # decline paths do the same, and this is the third way a request
+            # can end.
+            #
+            # referenceID is the REQUESTER's entity id (us), scoped to this
+            # recipient so it cannot clear our pending requests to anyone
+            # else. Unconditional: unfollow_entity does not report whether the
+            # row it removed was pending, and settling an already-settled
+            # notification is a no-op.
+            NotificationService().update_reference_status_by_type(
+                str(entity.id), "follow_request", True, to_user_id=followee.id
+            )
+
+            # Mirrors the post path: whoever we just unfollowed (or withdrew a
+            # request from) may have our profile open, where the follower
+            # count and any pending-request row are now wrong.
+            publish_profile_relationship_update(
+                followee.id, entity.id, "unfollowed"
+            )
 
             return Response(
                 {"status": True, "message": f"Unfollowed {raw_target}"},
@@ -563,7 +795,13 @@ class FollowersView(APIView):
                 Follow.objects.prefetch_related("follower")
                 # Follow targets an entity now; a realm's entity is reachable
                 # via Realm.entity's reverse accessor ("realms").
-                .filter(followee__realms__id=str(realm_id))
+                #
+                # status=True for consistency with every other follower
+                # surface. A realm can never hold a pending follow (only a
+                # private USER profile gates follows), so this changes
+                # nothing today - it just means the list stays correct if
+                # that ever stops being true.
+                .filter(followee__realms__id=str(realm_id), status=True)
                 .order_by("-created_at")
             )
 

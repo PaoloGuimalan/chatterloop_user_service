@@ -18,6 +18,7 @@ from django.db.models.functions import Coalesce
 
 from entity.utils import entity_side_is_visible
 from newsfeed.models import Post
+from newsfeed.services.post_visibility import visible_posts_filter
 
 
 def build_post_search_queryset(entity, query, blocked_ids):
@@ -25,10 +26,18 @@ def build_post_search_queryset(entity, query, blocked_ids):
     Public, live posts whose caption matches `query`, ranked so relevant
     items land on top.
 
-    Visibility mirrors what the feed itself enforces: public privacy only,
-    not archived/deleted, author still a usable entity (active + verified
-    user OR active realm - entity_side_is_visible), and nobody in a block
-    relationship with the searcher in either direction.
+    Visibility mirrors what the feed itself enforces: the searcher's own
+    post audience (visible_posts_filter - public, plus their own posts and
+    their connections' connections-only ones), not archived/deleted, author
+    still a usable entity (active + verified user OR active realm -
+    entity_side_is_visible), and nobody in a block relationship with the
+    searcher in either direction.
+
+    Search deliberately shares the ONE audience definition rather than
+    hard-coding privacy_status="public": doing the latter meant a private
+    profile's posts were still searchable the moment they were public-by-
+    default, and it would have silently hidden connections-only posts from
+    the very people allowed to read them.
 
     NOTE: from_system is deliberately NOT filtered - despite the name, the
     Node createpost route stamps from_system=TRUE on every ordinary post
@@ -41,12 +50,13 @@ def build_post_search_queryset(entity, query, blocked_ids):
     return (
         Post.objects.filter(
             entity_side_is_visible("entity"),
+            visible_posts_filter(entity),
             caption__icontains=query,
-            privacy_status="public",
             is_archived=False,
             deleted_at__isnull=True,
         )
         .exclude(entity_id__in=blocked_ids)
+        .distinct()
         .select_related("entity", "entity__users", "entity__realms", "score")
         .annotate(
             rank=Coalesce("score__ranking_score", Value(0.0), output_field=FloatField())

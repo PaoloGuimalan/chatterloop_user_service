@@ -46,4 +46,9 @@ urlpatterns = [
         network_views.NetworkFollowing.as_view(),
         name="entity-network-following",
     ),
+    path(
+        "network/follow-requests",
+        network_views.NetworkFollowRequests.as_view(),
+        name="entity-network-follow-requests",
+    ),
 ]

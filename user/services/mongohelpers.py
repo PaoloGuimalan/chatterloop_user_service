@@ -61,6 +61,33 @@ class NotificationService:
         )
         return result > 0
 
+    def update_reference_status_by_type(
+        self, reference_id, notif_type, new_status, to_user_id=None
+    ):
+        """
+        Same as update_reference_status, but scoped to ONE notification type
+        and optionally to ONE recipient.
+
+        Needed where referenceID is not globally unique. A follow request
+        carries the requester's ENTITY id as its referenceID (there is no
+        connection row to point at), and other types key on an entity id too,
+        so the unscoped version would settle unrelated notifications from the
+        same person.
+
+        `to_user_id` narrows it further to the answering recipient: one
+        requester can have open requests against several profiles at once,
+        and approving on one of them must not clear the buttons on the
+        others.
+        """
+        query = {"referenceID": reference_id, "type": notif_type}
+        if to_user_id:
+            query["toUserID"] = str(to_user_id)
+
+        result = Notification.objects(**query).update(
+            set__referenceStatus=new_status, multi=True
+        )
+        return result > 0
+
     def update_content(self, reaction_id, new_content):
         result = Notification.objects(referenceID=reaction_id).update(
             set__content__details=new_content, multi=True

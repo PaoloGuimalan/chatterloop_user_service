@@ -63,7 +63,10 @@ from entity.services.follows import (
     follow_entity,
     purge_between,
     get_profile_relationship_state,
+    link_follows_for_connection,
 )
+from newsfeed.services.post_visibility import apply_profile_privacy_to_posts
+from entity.services.realtime import publish_profile_relationship_update
 from community.models import Realm, Member, Follow, Invite
 from entity.models import Entity
 from entity.permissions import Permission, MemberRole
@@ -150,9 +153,14 @@ class UserAuthentication(APIView):
             is_user_connection_initiator = state["is_user_connection_initiator"]
             connection_id = state["connection_id"]
             is_follower = state["is_follower"]
+            is_follow_pending = state["is_follow_pending"]
             can_view = state["can_view"]
 
-            # private data block
+            # Fields withheld when can_view is False, below. Everything
+            # outside this block is the profile HEADER - name, photos,
+            # gender, join date - which stays visible so a locked profile is
+            # still identifiable enough to send a request to.
+            # START: private data block
             email = user.email
 
             # Format birthdate parts
@@ -173,12 +181,12 @@ class UserAuthentication(APIView):
                 else None
             )
 
+            # END: private data block
+
             # Format dateCreated parts (local timestamp)
             date_created = localtime(user.date_created)
             date_str = date_created.strftime("%m/%d/%Y")
             time_str = date_created.strftime("%I:%M:%S %p").lower()
-
-            # END: private data block
 
             if entity:
                 save_profile_visit(entity, user.entity.id, "profile")
@@ -210,6 +218,9 @@ class UserAuthentication(APIView):
                         "is_user_connection_initiator": is_user_connection_initiator,
                     },
                     "is_follower": is_follower,
+                    # Drives the "Requested" button state - the follow edge
+                    # exists but is waiting on this profile's approval.
+                    "is_follow_pending": is_follow_pending,
                     "id": str(user.id),
                     "entityID": str(user.entity.id),
                     "userID": user.username,
@@ -804,6 +815,13 @@ class UserContacts(APIView):
                 # so there is something to see while the request is pending.
                 # Deliberately one-directional: the target has not agreed to
                 # anything yet, so nothing is created on their side.
+                #
+                # Against a PRIVATE target the follow is parked as pending
+                # and seeds nothing. That is the point: this auto-follow used
+                # to hand out access to a private profile - and backfill its
+                # posts into the requester's feed - on the strength of an
+                # unanswered contact request. The connection accept below is
+                # what promotes it (link_follows_for_connection).
                 follow_entity(entity, target_entity)
 
                 # Notification Saving and relay
@@ -837,7 +855,17 @@ class UserContacts(APIView):
                     "dateTime": now.isoformat(),
                 }
 
-                RedisPubSubClient.publish_json(f"events_{sse_sendToUser}", data)
+                RedisPubSubClient.publish_json_on_commit(
+                    f"events_{sse_sendToUser}", data
+                )
+
+                # The TARGET may be sitting on the requester's profile, where
+                # the button still offers "Add Contact" and there is now an
+                # incoming request to answer instead. Subject is the
+                # requester, since that is whose profile went stale for them.
+                publish_profile_relationship_update(
+                    target_entity.id, entity.id, "contact_request_received"
+                )
 
                 # Only personal accounts get the email - a page has no inbox
                 # to notify (Realm.email is optional and is not a user's
@@ -934,15 +962,31 @@ class UserContacts(APIView):
                                 acceptee_update.save()
 
                             # Accepting implies interest in return, so the
-                            # accepter now follows the requester. The
-                            # requester already followed at request time, so
-                            # this completes the pair without touching their
-                            # side. follow_entity backfills the feed itself -
-                            # which is why the explicit symmetric
+                            # accepter now follows the requester - and the
+                            # requester's own follow, which may still be
+                            # sitting pending because the accepter is
+                            # private, is approved at the same time.
+                            # Accepting a contact request already answers the
+                            # question a follow request asks, so making them
+                            # approve it twice would be pure friction (and
+                            # would leave a new connection with an empty
+                            # feed). Backfills both buckets itself - which is
+                            # why the explicit symmetric
                             # backfill_new_friend_feed() calls that used to
                             # live here are gone: the feed is driven by the
                             # follow graph now, not by connections.
-                            follow_entity(entity, other_user)
+                            link_follows_for_connection(entity, other_user)
+
+                            # That may have auto-approved a follow request
+                            # this person had open against us, so settle its
+                            # notification too - otherwise it keeps offering
+                            # Confirm/Decline for something already granted.
+                            service.update_reference_status_by_type(
+                                str(other_user.id),
+                                "follow_request",
+                                True,
+                                to_user_id=entity.id,
+                            )
 
                             if acceptee_update and acceptee_update.email:
                                 emailer.send_contact_accepted_email(
@@ -993,10 +1037,12 @@ class UserContacts(APIView):
                             "dateTime": now.isoformat(),
                         }
 
-                        RedisPubSubClient.publish_json(
+                        RedisPubSubClient.publish_json_on_commit(
                             f"events_{entity.id}", data_reload
                         )
-                        RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
+                        RedisPubSubClient.publish_json_on_commit(
+                            f"events_{to_user_id}", data
+                        )
                     else:
                         return Response(
                             {"message": "Notification Error has occured"},
@@ -1008,19 +1054,40 @@ class UserContacts(APIView):
                         status=status.HTTP_401_UNAUTHORIZED,
                     )
 
-                data = {
-                    "logType": None,
-                    "pod": "podless",
-                    "event": "contactslist",
-                    "message": {"status": True, "auth": True, "result": ""},
-                    "dateTime": now.isoformat(),
-                }
+                # `result` names the OTHER party from the recipient's point
+                # of view, so a client can tell whether the profile it has
+                # open is the one that changed. Built per recipient rather
+                # than shared, because "the other party" differs for each.
+                def contactslist_payload(subject_entity_id):
+                    return {
+                        "logType": None,
+                        "pod": "podless",
+                        "event": "contactslist",
+                        "message": {
+                            "status": True,
+                            "auth": True,
+                            "result": {"entity_id": str(subject_entity_id)},
+                        },
+                        "dateTime": now.isoformat(),
+                    }
 
-                RedisPubSubClient.publish_json(f"events_{to_user_id}", data)
-                RedisPubSubClient.publish_json(f"events_{entity.id}", data)
+                # To the accepter: the subject is the requester. To each
+                # requester: the subject is the accepter.
+                RedisPubSubClient.publish_json_on_commit(
+                    f"events_{entity.id}", contactslist_payload(to_user_id)
+                )
 
                 for other in other_users:
-                    RedisPubSubClient.publish_json(f"events_{other.id}", data)
+                    RedisPubSubClient.publish_json_on_commit(
+                        f"events_{other.id}", contactslist_payload(entity.id)
+                    )
+
+                    # The requester may still be on the accepter's profile,
+                    # where the button reads "Pending" and - if the accepter
+                    # is private - the feed is empty. Both just changed.
+                    publish_profile_relationship_update(
+                        other.id, entity.id, "contact_request_accepted"
+                    )
 
                 return Response(
                     {"status": True, "message": "Contact has been accepted"},
@@ -1135,10 +1202,12 @@ class UserContacts(APIView):
                             "dateTime": now.isoformat(),
                         }
 
-                        RedisPubSubClient.publish_json(
+                        RedisPubSubClient.publish_json_on_commit(
                             f"events_{entity.id}", data_reload
                         )
-                        RedisPubSubClient.publish_json(f"events_{to_entity_id}", data)
+                        RedisPubSubClient.publish_json_on_commit(
+                            f"events_{to_entity_id}", data
+                        )
                     else:
                         if action == "decline":
                             return Response(
@@ -1151,18 +1220,28 @@ class UserContacts(APIView):
                         status=status.HTTP_401_UNAUTHORIZED,
                     )
 
-                data = {
-                    "logType": None,
-                    "pod": "podless",
-                    "event": "contactslist",
-                    "message": {"status": True, "auth": True, "result": ""},
-                    "dateTime": now.isoformat(),
-                }
-
-                RedisPubSubClient.publish_json(f"events_{entity.id}", data)
+                # See the accept path: addressed per recipient so an open
+                # profile page can tell whether it is the one affected.
+                def contactslist_payload(subject_entity_id):
+                    return {
+                        "logType": None,
+                        "pod": "podless",
+                        "event": "contactslist",
+                        "message": {
+                            "status": True,
+                            "auth": True,
+                            "result": {"entity_id": str(subject_entity_id)},
+                        },
+                        "dateTime": now.isoformat(),
+                    }
 
                 for other in other_users:
-                    RedisPubSubClient.publish_json(f"events_{other.id}", data)
+                    RedisPubSubClient.publish_json_on_commit(
+                        f"events_{entity.id}", contactslist_payload(other.id)
+                    )
+                    RedisPubSubClient.publish_json_on_commit(
+                        f"events_{other.id}", contactslist_payload(entity.id)
+                    )
 
                 message_response = (
                     "You have successfully removed connection"
@@ -1189,6 +1268,21 @@ class UserContacts(APIView):
                 # bucket.
                 for other in other_users:
                     purge_between(entity, other)
+
+                # Published only once the teardown above is DONE. This signal
+                # makes the counterpart's open profile page refetch, so it
+                # has to come after both the connection rows and the follow
+                # edges are gone - firing it earlier raced purge_between and
+                # served a page that had lost its posts but still showed
+                # "Following".
+                #
+                # Covers decline AND remove: either way the counterpart's
+                # view of this profile (button state, and access if this
+                # profile is private) is now wrong.
+                for other in other_users:
+                    publish_profile_relationship_update(
+                        other.id, entity.id, f"contact_{action}"
+                    )
 
                 return Response(
                     {"message": message_response}, status=status.HTTP_200_OK
@@ -1456,7 +1550,14 @@ class UserAccountManagement(APIView):
                 "gender",
                 "email",
                 "username",
+                # Settings > Data and Privacy > Private profile.
+                "is_private",
             ]
+
+            # Captured BEFORE the setattr loop below: the side effects only
+            # fire on an actual transition, and after the loop the old value
+            # is gone.
+            was_private = account.is_private
 
             if "birthdate" in data and data["birthdate"]:
                 from django.utils.dateparse import parse_datetime
@@ -1478,16 +1579,40 @@ class UserAccountManagement(APIView):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
+            if "is_private" in data and not isinstance(data["is_private"], bool):
+                return Response(
+                    {"status": False, "message": "is_private must be a boolean"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             for field in editable_fields:
                 if field in data:
                     setattr(account, field, data[field])
 
-            account.save()
+            narrowed_posts = 0
+
+            # Both the save and the post rewrite land together - a partial
+            # apply would leave the profile private while its back catalogue
+            # is still public, which is the exact state the toggle exists to
+            # prevent.
+            with transaction.atomic():
+                account.save()
+
+                if not was_private and account.is_private:
+                    # Going private narrows the existing PUBLIC back
+                    # catalogue to connections-only. Going public again does
+                    # NOT widen it back - see apply_profile_privacy_to_posts
+                    # for why that asymmetry is deliberate.
+                    narrowed_posts = apply_profile_privacy_to_posts(account.entity)
 
             return Response(
                 {
                     "status": True,
                     "message": "Account updated successfully",
+                    # Surfaced so Settings can tell the user what the toggle
+                    # actually did to their existing posts instead of leaving
+                    # a silent bulk rewrite.
+                    "posts_restricted": narrowed_posts,
                     "data": AccountSerializer(account).data,
                 },
                 status=status.HTTP_200_OK,

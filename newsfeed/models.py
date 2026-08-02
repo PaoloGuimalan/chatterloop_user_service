@@ -25,8 +25,14 @@ def generate_post_id():
 
 
 class Post(models.Model):
+    # "connections" is the audience a private profile writes with: visible
+    # to the author's accepted contacts, nobody else. It is a distinct
+    # level from "private" (author only) and from "custom" (an explicit
+    # allow-list in PostPrivacy) - see newsfeed/services/post_visibility.py,
+    # which is the single place these are turned into a queryset filter.
     PRIVACY_STATUS_CHOICES = [
         ("public", "Public"),
+        ("connections", "Connections"),
         ("private", "Private"),
         ("custom", "Custom"),
     ]

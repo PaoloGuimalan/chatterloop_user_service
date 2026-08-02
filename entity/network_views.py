@@ -166,12 +166,19 @@ def build_followers_queryset(entity, blocked_ids):
 
     `is_followed_back` drives the Follow back / Following button without a
     second round-trip.
+
+    Approved follows only. Pending requests against a private profile are
+    real Follow rows, but they belong in the requests inbox
+    (build_follow_requests_queryset), not in the followers list - listing
+    them here would show a private profile people who cannot actually see
+    it.
     """
     return (
         _counterpart_select_related(
             Follow.objects.filter(
                 entity_side_is_visible("follower"),
                 followee=entity,
+                status=True,
             )
             .exclude(follower=entity)
             .exclude(follower__in=blocked_ids),
@@ -180,7 +187,9 @@ def build_followers_queryset(entity, blocked_ids):
         .annotate(
             is_followed_back=Exists(
                 Follow.objects.filter(
-                    follower=entity, followee=OuterRef("follower_id")
+                    follower=entity,
+                    followee=OuterRef("follower_id"),
+                    status=True,
                 )
             )
         )
@@ -189,16 +198,45 @@ def build_followers_queryset(entity, blocked_ids):
 
 
 def build_following_queryset(entity, blocked_ids):
-    """Entities `entity` follows, ranked by interaction."""
+    """
+    Entities `entity` follows, ranked by interaction.
+
+    Approved only - a follow request still awaiting approval is reported as
+    "Requested" on the profile itself, not as someone you follow.
+    """
     return _counterpart_select_related(
         Follow.objects.filter(
             entity_side_is_visible("followee"),
             follower=entity,
+            status=True,
         )
         .exclude(followee=entity)
         .exclude(followee__in=blocked_ids),
         "followee",
     ).order_by("-interaction_score", "-last_interaction_at", "follow_id")
+
+
+def build_follow_requests_queryset(entity, blocked_ids):
+    """
+    Follow requests awaiting THIS entity's approval - the inbox side of a
+    private profile.
+
+    Newest first rather than interaction-ranked: these are an action queue,
+    not a relationship list, and there is no interaction history with someone
+    who cannot see you yet.
+    """
+    return (
+        _counterpart_select_related(
+            Follow.objects.filter(
+                entity_side_is_visible("follower"),
+                followee=entity,
+                status=False,
+            )
+            .exclude(follower=entity)
+            .exclude(follower__in=blocked_ids),
+            "follower",
+        )
+    ).order_by("-created_at", "follow_id")
 
 
 def serialize_connection(row, entity, mutual_by_entity=None):
@@ -218,6 +256,22 @@ def serialize_follower(row):
     if counterpart is None:
         return None
     return {**counterpart, "is_followed_back": bool(row.is_followed_back)}
+
+
+def serialize_follow_request(row):
+    """
+    Pending-request card. Same counterpart shape as a follower row so the
+    inbox reuses the Contacts card, plus the requester's entity id spelled
+    out - that is what the approve/decline call addresses.
+    """
+    counterpart = normalize_network_entity(row.follower)
+    if counterpart is None:
+        return None
+    return {
+        **counterpart,
+        "is_pending": True,
+        "requested_at": row.created_at,
+    }
 
 
 def serialize_following(row):
@@ -287,6 +341,13 @@ class NetworkOverview(APIView):
             connections_qs = build_connections_queryset(entity, blocked_ids)
             followers_qs = build_followers_queryset(entity, blocked_ids)
             following_qs = build_following_queryset(entity, blocked_ids)
+            # Count only - the requests themselves come from
+            # /network/follow-requests. This is what puts a badge on the
+            # inbox without a second page-init call, and it is 0 for every
+            # public profile since nothing can be pending against one.
+            follow_requests_count = build_follow_requests_queryset(
+                entity, blocked_ids
+            ).count()
 
             connection_rows = list(connections_qs[: CONNECTIONS_PREVIEW + 1])
             follower_rows = list(followers_qs[: FOLLOWERS_PREVIEW + 1])
@@ -326,6 +387,7 @@ class NetworkOverview(APIView):
                         serialize_following,
                         following_qs.count(),
                     ),
+                    "follow_requests_count": follow_requests_count,
                 },
                 status=status.HTTP_200_OK,
             )
@@ -377,6 +439,33 @@ class NetworkFollowers(APIView):
             results = [
                 item
                 for item in (serialize_follower(row) for row in page)
+                if item is not None
+            ]
+            return paginator.get_paginated_response(results)
+        except Exception as e:
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class NetworkFollowRequests(APIView):
+    """
+    Pending follow requests addressed to the acting entity - what a private
+    profile approves or declines, via PUT /api/community/follow.
+    """
+
+    permission_classes = [IsAuthenticated]
+    pagination_class = Pagination
+
+    def get(self, request):
+        entity = request.entity
+        try:
+            blocked_ids = get_blocked_account_ids(entity)
+            queryset = build_follow_requests_queryset(entity, blocked_ids)
+
+            paginator = self.pagination_class()
+            page = paginator.paginate_queryset(queryset, request, view=self)
+            results = [
+                item
+                for item in (serialize_follow_request(row) for row in page)
                 if item is not None
             ]
             return paginator.get_paginated_response(results)
