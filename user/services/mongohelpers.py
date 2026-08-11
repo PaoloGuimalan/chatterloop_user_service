@@ -1,4 +1,9 @@
-from ..ext_models.mongomodels import Notification, DateInfo, Content
+from ..ext_models.mongomodels import (
+    Notification,
+    NotificationTarget,
+    DateInfo,
+    Content,
+)
 from ..utils.generators import generate_random_digit
 from datetime import datetime
 from ..ext_models.mongomodels import Session
@@ -26,7 +31,17 @@ class NotificationService:
         content_details,
         type,
         isRead=True,
+        target_type=None,
+        target_id=None,
+        target_anchor=None,
     ):
+        """
+        ``target_*`` describe where the CLIENT should go when the row is tapped,
+        and are independent of ``referenceID`` (which is the backend's id for
+        the action). Optional and keyword-only in practice: a call site that
+        omits them writes no target, and the Node read path falls back to what
+        it can infer from the notification type.
+        """
         notification_id = f"NTF_{generate_random_digit(20)}"
 
         while self.exists(notification_id):
@@ -41,6 +56,19 @@ class NotificationService:
         content = Content(headline=content_headline, details=content_details)
         date = DateInfo(date=str(new_now), time=None)
 
+        # Only written when a call site actually supplied one - an empty
+        # embedded document would be indistinguishable from "no target" to the
+        # reader, and it treats absent as "infer from type".
+        target = (
+            NotificationTarget(
+                type=target_type,
+                supportingID=str(target_id) if target_id is not None else None,
+                anchor=str(target_anchor) if target_anchor is not None else None,
+            )
+            if target_type and target_id is not None
+            else None
+        )
+
         notif = Notification(
             notificationID=notification_id,
             referenceID=referenceID,
@@ -51,6 +79,7 @@ class NotificationService:
             date=date,
             type=type,
             isRead=isRead,
+            target=target,
         )
         notif.save()
         return notif

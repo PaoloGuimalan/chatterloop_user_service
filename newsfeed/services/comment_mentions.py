@@ -149,6 +149,11 @@ def notify_comment_mentions(comment, author_entity, entities, already_notified_i
 
         service.add_notification(
             referenceID=comment.comment_id,
+            # The post the comment lives on, anchored at the comment doing the
+            # mentioning.
+            target_type="post",
+            target_id=comment.post_id,
+            target_anchor=comment.comment_id,
             referenceStatus=True,
             toUserID=entity.id,
             fromUserID=author_entity.id,

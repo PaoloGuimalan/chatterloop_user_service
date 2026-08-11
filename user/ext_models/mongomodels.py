@@ -105,8 +105,32 @@ class DateInfo(EmbeddedDocument):
     time = StringField()
 
 
+class NotificationTarget(EmbeddedDocument):
+    """WHERE the notification points, for the client.
+
+    Deliberately separate from ``referenceID``, which is a BACKEND field: it
+    holds whatever id the server-side action needs (a connection id to accept,
+    a requester's entity id to approve), its meaning changes per notification
+    type, and it is frequently not the thing the user wants to look at - a
+    post_reaction stores the REACTION id, a post_comment the COMMENT id. Routing
+    a client off that produced either no link or a confidently wrong one.
+    """
+
+    # "post" | "profile" | "conversation" | "realm" | "server" | ...
+    type = StringField()
+    # The id of that thing - the POST id for a comment notification, not the
+    # comment's.
+    supportingID = StringField()
+    # Optional: what to scroll to once there. A comment notification opens the
+    # post (supportingID) at that comment (anchor). Clients that do not
+    # implement anchoring just open the target.
+    anchor = StringField()
+
+
 class Notification(Document):
     notificationID = StringField(required=True, unique=True)
+    # BACKEND id - see NotificationTarget for why the client does not route
+    # off this.
     referenceID = StringField(required=True)
     referenceStatus = BooleanField(default=False)
     toUserID = StringField(required=True)
@@ -115,6 +139,9 @@ class Notification(Document):
     date = EmbeddedDocumentField(DateInfo, required=True)
     type = StringField(required=True)
     isRead = BooleanField(default=False)
+    # Optional: rows written before this existed have none, and the Node read
+    # path falls back to what it can infer from `type` + `referenceID`.
+    target = EmbeddedDocumentField(NotificationTarget)
     __v = IntField(db_field="__v")
 
     meta = {"collection": "notifications"}

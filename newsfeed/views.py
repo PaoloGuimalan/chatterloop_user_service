@@ -563,6 +563,11 @@ class PostReactionsView(APIView):
                         content_details=f"{get_entity_display_username(entity)} reacted {emoji.emoji_content} to your post.",
                         type="post_reaction",
                         isRead=False,
+                        # referenceID is the REACTION id - the thing that was
+                        # created - so it cannot open anything. The post is what
+                        # the reader wants.
+                        target_type="post",
+                        target_id=post.post_id,
                     )
 
                     sse_sendToUser = post.entity.id
@@ -768,6 +773,11 @@ class CommentReactionsView(APIView):
                 content_details=details,
                 type="comment_reaction",
                 isRead=False,
+                # Opens the POST, anchored at the comment that was reacted to -
+                # referenceID here is the reaction, which addresses neither.
+                target_type="post",
+                target_id=comment.post_id,
+                target_anchor=comment.comment_id,
             )
 
         RedisPubSubClient.publish_json(
@@ -1164,6 +1174,12 @@ class CommentsView(APIView):
                         service = NotificationService()
                         service.add_notification(
                             referenceID=new_comment_id,
+                            # Opens the post at the REPLY, which is the new
+                            # thing to read - referenceID is that comment's id
+                            # but says nothing about which post it lives on.
+                            target_type="post",
+                            target_id=post.post_id,
+                            target_anchor=new_comment_id,
                             referenceStatus=True,
                             toUserID=replied_to.entity.id,
                             fromUserID=entity.id,
@@ -1197,6 +1213,11 @@ class CommentsView(APIView):
                         service = NotificationService()
                         service.add_notification(
                             referenceID=new_comment_id,
+                            # Same as the reply case above: the post, anchored
+                            # at the new comment.
+                            target_type="post",
+                            target_id=post.post_id,
+                            target_anchor=new_comment_id,
                             referenceStatus=True,
                             toUserID=post.entity.id,
                             fromUserID=entity.id,
