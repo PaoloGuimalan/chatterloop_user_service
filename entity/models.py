@@ -339,3 +339,138 @@ class Follow(models.Model):
 
     class Meta:
         unique_together = ("follower", "followee")
+
+
+class Block(models.Model):
+    """
+    Block edge, entity -> entity. Relocated here from the `user` app; both
+    sides were already Entity FKs, so a page can be blocked exactly like a
+    person and a page you administer can block on its own behalf.
+
+    Table is Django's default for this app/model, i.e. entity_block.
+    """
+
+    id = models.CharField(
+        max_length=150, default=uuid.uuid4, unique=True, primary_key=True
+    )
+    blocker = models.ForeignKey(
+        Entity,
+        null=False,
+        on_delete=models.DO_NOTHING,
+        related_name="blocks_made",
+    )
+    blocked = models.ForeignKey(
+        Entity,
+        null=False,
+        on_delete=models.DO_NOTHING,
+        related_name="blocked_by",
+    )
+    created_at = models.DateTimeField(default=now)
+
+    class Meta:
+        unique_together = ("blocker", "blocked")
+
+    def __str__(self):
+        return f"{self.blocker_id} blocked {self.blocked_id}"
+
+
+class Report(models.Model):
+    """
+    Abuse report against any entity, optionally narrowed to one piece of
+    content that entity owns.
+
+    Two axes, deliberately kept separate:
+
+    * `reported_entity` is always the entity held responsible - the account,
+      the page, the realm. This is what moderation acts on, and it is what
+      makes the model generic: a post report and a profile report both land
+      on the same entity.
+    * `target_type` / `target_id` narrow the report to the specific artefact.
+      `target_id` is NULL when the whole entity is the subject (target_type
+      "user" or "realm"), and holds the post/comment/message id otherwise.
+
+    Relocated here from the `user` app; the FKs were already entity-keyed.
+    Table is Django's default for this app/model, i.e. entity_report.
+    """
+
+    TARGET_TYPE_CHOICES = [
+        ("user", "User"),
+        ("realm", "Realm"),
+        ("post", "Post"),
+        ("comment", "Comment"),
+        ("message", "Message"),
+    ]
+
+    # Target types that name the entity itself rather than one of its
+    # artefacts - for these, target_id carries no extra information and is
+    # normalised to NULL on write (see entity.services.reporting).
+    ENTITY_LEVEL_TARGET_TYPES = ("user", "realm")
+
+    REASON_CHOICES = [
+        ("spam", "Spam"),
+        ("harassment", "Harassment or bullying"),
+        ("hate_speech", "Hate speech"),
+        ("violence", "Violence or dangerous behavior"),
+        ("nudity", "Nudity or sexual content"),
+        ("csae", "Child sexual abuse or exploitation"),
+        ("impersonation", "Impersonation"),
+        ("misinformation", "Misinformation"),
+        ("other", "Other"),
+    ]
+
+    STATUS_CHOICES = [
+        ("pending", "Pending"),
+        ("reviewed", "Reviewed"),
+        ("actioned", "Actioned"),
+        ("dismissed", "Dismissed"),
+    ]
+
+    id = models.CharField(
+        max_length=150, default=uuid.uuid4, unique=True, primary_key=True
+    )
+    reporter = models.ForeignKey(
+        Entity,
+        null=False,
+        on_delete=models.DO_NOTHING,
+        related_name="reports_filed",
+    )
+    reported_entity = models.ForeignKey(
+        Entity,
+        null=False,
+        on_delete=models.DO_NOTHING,
+        related_name="reports_received",
+    )
+    target_type = models.CharField(max_length=20, choices=TARGET_TYPE_CHOICES)
+    target_id = models.CharField(max_length=150, null=True, blank=True)
+    reason = models.CharField(max_length=20, choices=REASON_CHOICES)
+    description = models.TextField(blank=True, default="")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    created_at = models.DateTimeField(default=now)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        Entity,
+        null=True,
+        blank=True,
+        on_delete=models.DO_NOTHING,
+        related_name="reports_reviewed",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        # Names are pinned rather than auto-derived so the migration that
+        # creates them (entity/0014) stays byte-stable - an auto name is a
+        # hash of the model/field set and would drift on any later rename.
+        indexes = [
+            models.Index(
+                fields=["status", "created_at"], name="report_status_created_idx"
+            ),
+            models.Index(
+                fields=["reported_entity", "status"], name="report_entity_status_idx"
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.reporter_id} reported {self.target_type}:"
+            f"{self.target_id or self.reported_entity_id}"
+        )

@@ -54,7 +54,8 @@ from .utils.consent import (
 )
 from .utils.account_deletion import delete_account
 from .utils.data_export import export_account_data
-from .utils.blocking import get_blocked_account_ids, is_blocked
+from entity.services.blocking import get_blocked_account_ids, is_blocked
+from entity.services.reporting import ReportTargetError, create_report
 from newsfeed.helpers.query_functions import (
     interaction_score_bump,
     follower_interaction_score_bump,
@@ -68,7 +69,7 @@ from entity.services.follows import (
 from newsfeed.services.post_visibility import apply_profile_privacy_to_posts
 from entity.services.realtime import publish_profile_relationship_update
 from community.models import Realm, Member, Follow, Invite
-from entity.models import Entity
+from entity.models import Entity, EntityType
 from entity.permissions import Permission, MemberRole
 from entity.drf_permissions import RequiresPermission
 from entity.services.allowed_modules import resolve_allowed_modules_and_context
@@ -1772,23 +1773,63 @@ class CodeVerification(APIView):
 class BlockedUserList(APIView):
     permission_classes = [IsAuthenticated]
 
+    @staticmethod
+    def _serialize_blocked(block):
+        """One blocked row, whichever kind of entity it points at.
+
+        A page and a person carry different name fields, so both are flattened
+        onto the same shape the clients already read (username / first_name /
+        last_name / profile) and `entityType` says which it really is. Falling
+        back rather than raising matters here: a blocked entity whose account
+        or realm row has since gone is still a block the user must be able to
+        see and lift.
+        """
+        blocked = block.blocked
+        base = {
+            "entityID": blocked.id,
+            "entityType": blocked.type,
+            "created_at": block.created_at,
+        }
+
+        realm = getattr(blocked, "realms", None)
+        if realm is not None:
+            return {
+                **base,
+                "id": realm.id,
+                "username": realm.slug or realm.name,
+                "first_name": realm.name,
+                "last_name": "",
+                "profile": realm.profile,
+                "realmType": realm.type,
+            }
+
+        account = getattr(blocked, "users", None)
+        if account is not None:
+            return {
+                **base,
+                "id": account.id,
+                "username": account.username,
+                "first_name": account.first_name,
+                "last_name": account.last_name,
+                "profile": account.profile,
+            }
+
+        return {
+            **base,
+            "id": blocked.id,
+            "username": "",
+            "first_name": "Unavailable",
+            "last_name": "",
+            "profile": "none",
+        }
+
     def get(self, request):
         try:
-            account = self.request.user
             entity = self.request.entity
-            blocks = Block.objects.filter(blocker=entity).select_related("blocked")
-            data = [
-                {
-                    "id": block.blocked.users.id,
-                    "entityID": block.blocked.id,
-                    "username": block.blocked.users.username,
-                    "first_name": block.blocked.users.first_name,
-                    "last_name": block.blocked.users.last_name,
-                    "profile": block.blocked.users.profile,
-                    "created_at": block.created_at,
-                }
-                for block in blocks
-            ]
+            blocks = Block.objects.filter(blocker=entity).select_related(
+                "blocked", "blocked__users", "blocked__realms"
+            )
+            data = [self._serialize_blocked(block) for block in blocks]
             return Response({"status": True, "data": data}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response(
@@ -1829,8 +1870,22 @@ class BlockedUserList(APIView):
                     | Q(created_by=target, target_entity=entity)
                 ).delete()
 
+                # Follow edges are the relationship that actually matters for
+                # pages: blocking one while still following it would leave its
+                # posts in the feed, which is the one outcome a block must not
+                # produce. purge_between clears both directions and the seeded
+                # feed rows.
+                purge_between(entity, target)
+
             return Response(
-                {"status": True, "message": "User blocked"},
+                {
+                    "status": True,
+                    "message": (
+                        "Page blocked"
+                        if target.type == EntityType.REALM_CHOICE
+                        else "User blocked"
+                    ),
+                },
                 status=status.HTTP_201_CREATED,
             )
         except Exception as e:
@@ -2038,78 +2093,73 @@ class PokeUser(APIView):
 
 
 class ReportCreate(APIView):
+    """POST /api/user/reports - file a report against any entity or one piece
+    of its content.
+
+    Target resolution lives in entity.services.reporting so the same rules
+    apply wherever a report can be filed from: whatever the target_type, the
+    report is stored against the responsible Entity.
+    """
+
     permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """The reason list, so clients stop hardcoding their own copy."""
+        return Response(
+            {
+                "status": True,
+                "data": {
+                    "target_types": [t for t, _ in Report.TARGET_TYPE_CHOICES],
+                    "reasons": [
+                        {"value": value, "label": label}
+                        for value, label in Report.REASON_CHOICES
+                    ],
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
 
     def post(self, request):
         try:
-            account = self.request.user
+            entity = self.request.entity
             data = request.data
 
-            target_type = data.get("target_type")
-            target_id = data.get("target_id")
-            reason = data.get("reason")
-            description = data.get("description", "")
-
-            valid_target_types = dict(Report.TARGET_TYPE_CHOICES)
-            if target_type not in valid_target_types:
+            try:
+                report, created = create_report(
+                    reporter_entity=entity,
+                    target_type=data.get("target_type"),
+                    target_id=data.get("target_id"),
+                    reason=data.get("reason"),
+                    description=data.get("description", ""),
+                )
+            except ReportTargetError as e:
                 return Response(
-                    {"status": False, "message": "Invalid target_type"},
-                    status=status.HTTP_400_BAD_REQUEST,
+                    {"status": False, "message": e.message},
+                    status=(
+                        status.HTTP_404_NOT_FOUND
+                        if e.not_found
+                        else status.HTTP_400_BAD_REQUEST
+                    ),
                 )
-
-            valid_reasons = dict(Report.REASON_CHOICES)
-            if reason not in valid_reasons:
-                return Response(
-                    {"status": False, "message": "Invalid reason"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            if target_type == "user":
-                reported_user = get_object_or_404(Account, id=target_id)
-                target_id = None
-            elif target_type == "post":
-                from newsfeed.models import Post
-
-                post = get_object_or_404(Post, post_id=target_id)
-                reported_user = post.user
-            elif target_type == "comment":
-                from newsfeed.models import Comment
-
-                comment = get_object_or_404(Comment, comment_id=target_id)
-                reported_user = comment.user
-            elif target_type == "message":
-                message_doc = Message._get_collection().find_one(
-                    {"messageID": target_id}
-                )
-                if not message_doc:
-                    return Response(
-                        {"status": False, "message": "Message not found"},
-                        status=status.HTTP_404_NOT_FOUND,
-                    )
-                reported_user = get_object_or_404(Account, id=message_doc["sender"])
-
-            if reported_user.id == account.id:
-                return Response(
-                    {"status": False, "message": "You cannot report yourself"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            report = Report.objects.create(
-                reporter=account,
-                reported_user=reported_user,
-                target_type=target_type,
-                target_id=target_id,
-                reason=reason,
-                description=description,
-            )
 
             return Response(
                 {
                     "status": True,
-                    "message": "Report submitted",
-                    "data": {"id": report.id},
+                    "message": (
+                        "Report submitted"
+                        if created
+                        else "You have already reported this"
+                    ),
+                    "data": {
+                        "id": report.id,
+                        "target_type": report.target_type,
+                        "target_id": report.target_id,
+                        "created": created,
+                    },
                 },
-                status=status.HTTP_201_CREATED,
+                status=(
+                    status.HTTP_201_CREATED if created else status.HTTP_200_OK
+                ),
             )
         except Exception as e:
             return Response(

@@ -12,7 +12,18 @@ from core.models import PolicyDocument
 # Connection now lives in the entity app (it is an entity<->entity edge, not a
 # user-only one). Re-exported here because historical migration user/0003
 # references `user.models.generate_connection_id` and must stay resolvable.
-from entity.models import Entity, Connection, generate_connection_id  # noqa: F401
+#
+# Block and Report moved the same way and for the same reason - every side of
+# both is an Entity, so a page can be blocked or reported like a person.
+# Re-exported so existing `from user.models import Block, Report` imports keep
+# resolving; new code should import them from entity.models directly.
+from entity.models import (  # noqa: F401
+    Entity,
+    Connection,
+    Block,
+    Report,
+    generate_connection_id,
+)
 
 MINIMUM_AGE = 13
 
@@ -129,96 +140,6 @@ class Verification(models.Model):
     ver_code = models.CharField(max_length=6, default=generate_ver_code, null=False)
     date_generated = models.DateTimeField(default=now)
     is_used = models.BooleanField(default=False)
-
-
-class Block(models.Model):
-    id = models.CharField(
-        max_length=150, default=uuid.uuid4, unique=True, primary_key=True
-    )
-    blocker = models.ForeignKey(
-        Entity,
-        null=False,
-        on_delete=models.DO_NOTHING,
-        related_name="blocks_made",
-    )
-    blocked = models.ForeignKey(
-        Entity,
-        null=False,
-        on_delete=models.DO_NOTHING,
-        related_name="blocked_by",
-    )
-    created_at = models.DateTimeField(default=now)
-
-    class Meta:
-        unique_together = ("blocker", "blocked")
-
-    def __str__(self):
-        return f"{self.blocker_id} blocked {self.blocked_id}"
-
-
-class Report(models.Model):
-
-    TARGET_TYPE_CHOICES = [
-        ("user", "User"),
-        ("post", "Post"),
-        ("comment", "Comment"),
-        ("message", "Message"),
-    ]
-
-    REASON_CHOICES = [
-        ("spam", "Spam"),
-        ("harassment", "Harassment or bullying"),
-        ("hate_speech", "Hate speech"),
-        ("violence", "Violence or dangerous behavior"),
-        ("nudity", "Nudity or sexual content"),
-        ("csae", "Child sexual abuse or exploitation"),
-        ("impersonation", "Impersonation"),
-        ("misinformation", "Misinformation"),
-        ("other", "Other"),
-    ]
-
-    STATUS_CHOICES = [
-        ("pending", "Pending"),
-        ("reviewed", "Reviewed"),
-        ("actioned", "Actioned"),
-        ("dismissed", "Dismissed"),
-    ]
-
-    id = models.CharField(
-        max_length=150, default=uuid.uuid4, unique=True, primary_key=True
-    )
-    reporter = models.ForeignKey(
-        Entity,
-        null=False,
-        on_delete=models.DO_NOTHING,
-        related_name="reports_filed",
-    )
-    reported_entity = models.ForeignKey(
-        Entity,
-        null=False,
-        on_delete=models.DO_NOTHING,
-        related_name="reports_received",
-    )
-    target_type = models.CharField(max_length=20, choices=TARGET_TYPE_CHOICES)
-    target_id = models.CharField(max_length=150, null=True, blank=True)
-    reason = models.CharField(max_length=20, choices=REASON_CHOICES)
-    description = models.TextField(blank=True, default="")
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
-    created_at = models.DateTimeField(default=now)
-    reviewed_at = models.DateTimeField(null=True, blank=True)
-    reviewed_by = models.ForeignKey(
-        Entity,
-        null=True,
-        blank=True,
-        on_delete=models.DO_NOTHING,
-        related_name="reports_reviewed",
-    )
-
-    class Meta:
-        ordering = ["-created_at"]
-
-    def __str__(self):
-        return f"{self.reporter_id} reported {self.target_type}:{self.target_id or self.reported_user_id}"
 
 
 class UserEngagementLog(DjangoCassandraModel):
