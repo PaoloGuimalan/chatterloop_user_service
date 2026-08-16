@@ -58,6 +58,7 @@ from .services.comment_mentions import (
 )
 from entity.utils import get_entity_display_username, get_entity_profile_path
 from interests.services.affinity import bump_interest_affinity
+from user_service.services.rabbitmq import RabbitMQClient, Queues
 from user_service.services.redis import RedisPubSubClient
 from django.utils.timezone import now
 from datetime import datetime
@@ -113,7 +114,13 @@ class NewsfeedView(APIView):
             current_mode = RedisPubSubClient.get_and_toggle_feed_mode(entity.id)
 
             viewcache = request.data.get("viewcache", [])
-            save_viewcache_engagements(entity, viewcache)
+            if viewcache:
+                # The worker's handler bumps interest affinity for these views
+                # too, so this one message replaces both calls.
+                RabbitMQClient.publish_on_commit(
+                    Queues.SAVE_VIEWCACHE_ENGAGEMENTS,
+                    {"entity_id": entity.id, "view_cache": viewcache},
+                )
 
             if current_mode == "friends":
                 candidate_post_ids = fetch_friends_posts(entity.id, page_size)
@@ -298,8 +305,11 @@ class NewsfeedProfileView(APIView):
 
             viewcache = request.data.get("viewcache", [])
 
-            if user.username != username:
-                save_viewcache_engagements(entity, viewcache)
+            if user.username != username and viewcache:
+                RabbitMQClient.publish_on_commit(
+                    Queues.SAVE_VIEWCACHE_ENGAGEMENTS,
+                    {"entity_id": entity.id, "view_cache": viewcache},
+                )
 
             realm_match = Realm.objects.filter(slug=username).first()
             target_account = Account.objects.filter(username=username).first()
@@ -535,21 +545,49 @@ class PostReactionsView(APIView):
                 preview_count_obj.count += 1
                 preview_count_obj.save()
 
-                reaction_ranking = PostScore.objects.get(post=post)
-                reaction_ranking.likes_count += 1
-                reaction_ranking.save()
-
-                update_ranking_score(post_id, "react", False)
-                interaction_score_bump(entity.id, post.entity.id, "LIKE", False)
+                # likes_count is NOT incremented here any more. The worker's
+                # UpdateRankingScore adjusts the counter itself as part of
+                # recomputing the score, so doing it here too counts twice.
+                #
+                # Published on commit, never inline: the worker reads these rows
+                # back on another connection and would otherwise score the
+                # pre-change state.
+                RabbitMQClient.publish_on_commit(
+                    Queues.UPDATE_RANKING_SCORE,
+                    {"post_id": post_id, "update_type": "react", "is_decrease": False},
+                )
+                RabbitMQClient.publish_on_commit(
+                    Queues.INTERACTION_SCORE_BUMP,
+                    {
+                        "actor_id": entity.id,
+                        "receiver_id": post.entity.id,
+                        "action": "LIKE",
+                        "is_decrease": False,
+                    },
+                )
                 if post.entity.type == "realm":
-                    follower_interaction_score_bump(
-                        entity.id, post.entity.id, "LIKE", False
+                    RabbitMQClient.publish_on_commit(
+                        Queues.FOLLOWER_INTERACTION_SCORE_BUMP,
+                        {
+                            "actor_id": entity.id,
+                            "receiver_id": post.entity.id,
+                            "action": "LIKE",
+                            "is_decrease": False,
+                        },
                     )
-                bump_interest_affinity(
-                    entity.id,
-                    post.interests.values_list("id", flat=True),
-                    "LIKE",
-                    False,
+                RabbitMQClient.publish_on_commit(
+                    Queues.BUMP_INTEREST_AFFINITY,
+                    {
+                        "entity_id": entity.id,
+                        # Materialised: the queryset is lazy and on_commit runs
+                        # after this block, by which point it would evaluate
+                        # against a different connection - or not serialise at all.
+                        "interest_ids": list(
+                            post.interests.values_list("id", flat=True)
+                        ),
+                        "action": "LIKE",
+                        "is_decrease": False,
+                    },
                 )
 
                 if post.entity.id != entity.id:
@@ -674,18 +712,40 @@ class PostReactionsView(APIView):
                     reaction_id=reaction.reaction_id,
                 )
 
-                reaction_ranking = PostScore.objects.get(post=post)
-                reaction_ranking.likes_count -= 1
-                reaction_ranking.save()
-
-                update_ranking_score(post_id, "react", True)
-                interaction_score_bump(entity.id, post.entity.id, "LIKE", True)
+                # See the add path above: the worker owns likes_count.
+                RabbitMQClient.publish_on_commit(
+                    Queues.UPDATE_RANKING_SCORE,
+                    {"post_id": post_id, "update_type": "react", "is_decrease": True},
+                )
+                RabbitMQClient.publish_on_commit(
+                    Queues.INTERACTION_SCORE_BUMP,
+                    {
+                        "actor_id": entity.id,
+                        "receiver_id": post.entity.id,
+                        "action": "LIKE",
+                        "is_decrease": True,
+                    },
+                )
                 if post.entity.type == "realm":
-                    follower_interaction_score_bump(
-                        entity.id, post.entity.id, "LIKE", True
+                    RabbitMQClient.publish_on_commit(
+                        Queues.FOLLOWER_INTERACTION_SCORE_BUMP,
+                        {
+                            "actor_id": entity.id,
+                            "receiver_id": post.entity.id,
+                            "action": "LIKE",
+                            "is_decrease": True,
+                        },
                     )
-                bump_interest_affinity(
-                    entity.id, post.interests.values_list("id", flat=True), "LIKE", True
+                RabbitMQClient.publish_on_commit(
+                    Queues.BUMP_INTEREST_AFFINITY,
+                    {
+                        "entity_id": entity.id,
+                        "interest_ids": list(
+                            post.interests.values_list("id", flat=True)
+                        ),
+                        "action": "LIKE",
+                        "is_decrease": True,
+                    },
                 )
 
                 emoji = reaction.emoji
@@ -828,7 +888,15 @@ class CommentReactionsView(APIView):
                 # interaction bump is between those two entities - not the
                 # post's author, who may be someone else entirely.
                 if comment.entity_id != entity.id:
-                    interaction_score_bump(entity.id, comment.entity_id, "LIKE", False)
+                    RabbitMQClient.publish_on_commit(
+                        Queues.INTERACTION_SCORE_BUMP,
+                        {
+                            "actor_id": entity.id,
+                            "receiver_id": comment.entity_id,
+                            "action": "LIKE",
+                            "is_decrease": False,
+                        },
+                    )
 
                 self._notify_comment_author(
                     comment, entity, emoji, new_reaction_id, "added"
@@ -898,7 +966,15 @@ class CommentReactionsView(APIView):
                 )
 
                 if comment.entity_id != entity.id:
-                    interaction_score_bump(entity.id, comment.entity_id, "LIKE", True)
+                    RabbitMQClient.publish_on_commit(
+                        Queues.INTERACTION_SCORE_BUMP,
+                        {
+                            "actor_id": entity.id,
+                            "receiver_id": comment.entity_id,
+                            "action": "LIKE",
+                            "is_decrease": True,
+                        },
+                    )
 
                 emoji = reaction.emoji
                 reaction.delete()
@@ -1140,16 +1216,25 @@ class CommentsView(APIView):
                     entity=entity,
                 )
 
-                reaction_ranking = PostScore.objects.get(post=post)
-                reaction_ranking.comments_count += 1
-                reaction_ranking.save()
-
-                update_ranking_score(post_id, "comment", False)
-                bump_interest_affinity(
-                    entity.id,
-                    post.interests.values_list("id", flat=True),
-                    "COMMENT",
-                    False,
+                # comments_count is the worker's to move, same as likes_count.
+                RabbitMQClient.publish_on_commit(
+                    Queues.UPDATE_RANKING_SCORE,
+                    {
+                        "post_id": post_id,
+                        "update_type": "comment",
+                        "is_decrease": False,
+                    },
+                )
+                RabbitMQClient.publish_on_commit(
+                    Queues.BUMP_INTEREST_AFFINITY,
+                    {
+                        "entity_id": entity.id,
+                        "interest_ids": list(
+                            post.interests.values_list("id", flat=True)
+                        ),
+                        "action": "COMMENT",
+                        "is_decrease": False,
+                    },
                 )
 
                 # Entities already pinged for THIS comment, so a mention does
@@ -1330,18 +1415,20 @@ class CommentsView(APIView):
                 # to give back the same amount - the whole thread, not just the
                 # row that was clicked. Without this the post's comment count
                 # only ever grew.
-                reaction_ranking = PostScore.objects.filter(
-                    post_id=current_comment.post_id
-                ).first()
-                if reaction_ranking:
-                    reaction_ranking.comments_count = max(
-                        0, reaction_ranking.comments_count - len(deleted_ids)
+                #
+                # One message PER deleted row, not one for the thread: the
+                # worker's handler moves comments_count by exactly one per
+                # message, so a single publish would return 1 where the bulk
+                # decrement this replaces returned len(deleted_ids).
+                for _ in deleted_ids:
+                    RabbitMQClient.publish_on_commit(
+                        Queues.UPDATE_RANKING_SCORE,
+                        {
+                            "post_id": current_comment.post_id,
+                            "update_type": "comment",
+                            "is_decrease": True,
+                        },
                     )
-                    reaction_ranking.save()
-
-                    # Recomputes ranking_score off the count just written, so
-                    # this has to follow the save above, not precede it.
-                    update_ranking_score(current_comment.post_id, "comment", True)
 
             # Deliberately AFTER the atomic block: Mongo is not part of the
             # Postgres transaction, so doing this inside would leave the

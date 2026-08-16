@@ -20,7 +20,42 @@ cycle.
 from django.db.models import Q, F
 
 from entity.models import Follow, Connection, Entity
+from user_service.services.rabbitmq import RabbitMQClient, Queues
 from ..utils import entity_side_is_visible
+
+
+def _publish_backfill(follower, followee):
+    """
+    Hand the feed backfill to the worker.
+
+    All three callers below run inside a transaction that is still writing the
+    Follow row the worker will read, so this is deferred to COMMIT - publishing
+    inline races it and the handler resolves a follow edge that is not there
+    yet. Outside a transaction on_commit fires immediately, so the two
+    approve/link paths that may not be wrapped behave the same.
+    """
+    RabbitMQClient.publish_on_commit(
+        Queues.BACKFILL_NEW_FRIEND_FEED,
+        {"viewer_id": follower.id, "new_friend_id": followee.id},
+    )
+
+
+def _publish_feed_removal(actor_id, author_id):
+    """
+    Pull one author's fanned-out posts out of one viewer's bucket.
+
+    `actor_id` owns the bucket being cleaned; `author_id` is whose posts leave
+    it. Easy to invert - both are entity ids - and swapping them silently
+    empties the wrong person's feed.
+
+    Deferred to COMMIT like the backfill: the callers delete the Follow rows in
+    the same transaction, and a worker that reads mid-flight would clean a feed
+    whose relationship still looks intact.
+    """
+    RabbitMQClient.publish_on_commit(
+        Queues.REMOVE_FEED_ON_UNFRIEND,
+        {"actor_id": actor_id, "author_id": author_id},
+    )
 
 
 def get_follower_ids(entity_id, limit=500):
@@ -202,9 +237,7 @@ def follow_entity(follower, followee, backfill=True):
     is_pending = not record.status
 
     if created and not is_pending and backfill:
-        from newsfeed.helpers.query_functions import backfill_new_friend_feed
-
-        backfill_new_friend_feed(follower.id, followee.id)
+        _publish_backfill(follower, followee)
 
     return created, is_pending
 
@@ -228,9 +261,7 @@ def approve_follow_request(follower, followee):
     if not updated:
         return False
 
-    from newsfeed.helpers.query_functions import backfill_new_friend_feed
-
-    backfill_new_friend_feed(follower.id, followee.id)
+    _publish_backfill(follower, followee)
 
     return True
 
@@ -278,9 +309,7 @@ def link_follows_for_connection(entity_a, entity_b):
         )
 
         if created:
-            from newsfeed.helpers.query_functions import backfill_new_friend_feed
-
-            backfill_new_friend_feed(follower.id, followee.id)
+            _publish_backfill(follower, followee)
         elif not record.status:
             approve_follow_request(follower, followee)
 
@@ -302,9 +331,7 @@ def unfollow_entity(follower, followee):
     deleted, _ = Follow.objects.filter(follower=follower, followee=followee).delete()
 
     if deleted:
-        from newsfeed.helpers.query_functions import remove_feed_on_unfriend
-
-        remove_feed_on_unfriend(follower.id, str(followee.id))
+        _publish_feed_removal(follower.id, followee.id)
 
     return bool(deleted)
 
@@ -328,12 +355,11 @@ def purge_between(a, b):
     if a is None or b is None:
         return
 
-    from newsfeed.helpers.query_functions import remove_feed_on_unfriend
-
     # Both edges in one statement rather than two filtered deletes.
     Follow.objects.filter(
         Q(follower=a, followee=b) | Q(follower=b, followee=a)
     ).delete()
 
-    remove_feed_on_unfriend(a.id, str(b.id))
-    remove_feed_on_unfriend(b.id, str(a.id))
+    # A connection is mutual, so the teardown is too: one message per bucket.
+    _publish_feed_removal(a.id, b.id)
+    _publish_feed_removal(b.id, a.id)

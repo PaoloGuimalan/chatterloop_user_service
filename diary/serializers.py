@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from .models import Entry, Attachment, MapView, Mood
 from interests.models import Interest
-from interests.services.affinity import bump_interest_affinity
+from user_service.services.rabbitmq import RabbitMQClient, Queues
 from interests.services.interest_resolver import ensure_grant_override
 from newsfeed.services.link_preview import extract_first_url_from_html, get_preview
 
@@ -90,7 +90,15 @@ class EntrySerializer(serializers.ModelSerializer):
         entry.tags.set(tags)
         if tags:
             tag_ids = [tag.id for tag in tags]
-            bump_interest_affinity(entry.account.entity_id, tag_ids, "DIARY_TAG", False)
+            RabbitMQClient.publish_on_commit(
+                Queues.BUMP_INTEREST_AFFINITY,
+                {
+                    "entity_id": entry.account.entity_id,
+                    "interest_ids": tag_ids,
+                    "action": "DIARY_TAG",
+                    "is_decrease": False,
+                },
+            )
             ensure_grant_override(entry.account.entity_id, tag_ids)
 
     def create(self, validated_data):

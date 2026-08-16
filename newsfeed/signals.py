@@ -3,19 +3,12 @@ from django.utils.timezone import now
 from django.dispatch import receiver
 from .models import (
     Post,
-    PostReference,
-    PostScore,
     Comment,
     Reaction,
 )
 from user.models import UserEngagementLog
-from entity.services.follows import get_follower_ids
-from .helpers.query_functions import (
-    bulk_fanout_to_cache,
-    interaction_score_bump,
-    follower_interaction_score_bump,
-)
 from django.core.cache import cache
+from user_service.services.rabbitmq import RabbitMQClient, Queues
 
 
 # PreviewCount rows are NOT pre-seeded any more - neither per new emoji
@@ -32,52 +25,18 @@ from django.core.cache import cache
 
 @receiver(post_save, sender=Post)
 def create_post_score_for_new_post(sender, instance, created, **kwargs):
+    """
+    Seed the post's score row.
+
+    The scoring itself now lives in the worker. Deferred to COMMIT because the
+    handler reads newsfeed_postreference to weight the post by its media, and
+    those rows are written in the same transaction as the Post - publishing
+    inline races them and scores the post as if it had no attachments.
+    """
     if created:
-        references = PostReference.objects.filter(post=instance)
-
-        content_t_m = 1.0
-
-        if len(references) > 0:
-            for reference in references:
-                if reference.reference_media_type == "image":
-                    content_t_m += 1.2
-                elif reference.reference_media_type == "video":
-                    content_t_m += 1.5
-                else:
-                    content_t_m += 1.0
-        else:
-            content_t_m += 0.0
-
-        final_content_score = content_t_m / (len(references) + 1)
-
-        age_hours = (now() - instance.date_posted).total_seconds() / 3600
-        affinity_score = 1.0
-        content_type_weight = final_content_score
-        recent_update_boost = 1.0
-        comments_count = 0
-        likes_count = 0
-        shares_count = 0
-
-        weighted_engagement = comments_count * 3 + likes_count * 1 + shares_count * 5
-        decay_factor = (age_hours + 1) ** 1.2
-        ranking_score = (
-            (weighted_engagement / decay_factor)
-            * affinity_score
-            * content_type_weight
-            * recent_update_boost
-        )
-
-        PostScore.objects.update_or_create(
-            post=instance,
-            defaults={
-                "affinity_score": affinity_score,
-                "content_type_weight": content_type_weight,
-                "recent_update_boost": recent_update_boost,
-                "likes_count": likes_count,
-                "comments_count": comments_count,
-                "shares_count": shares_count,
-                "ranking_score": ranking_score,
-            },
+        RabbitMQClient.publish_on_commit(
+            Queues.CREATE_POST_SCORE_FOR_NEW_POST,
+            {"post_id": instance.post_id, "date_posted": instance.date_posted},
         )
 
 
@@ -104,38 +63,51 @@ def log_comment_action(sender, instance, created, **kwargs):
         # bump interaction_score
 
         if instance.entity != instance.post.entity:
-            interaction_score_bump(
-                instance.entity.id, instance.post.entity.id, "COMMENT", False
+            RabbitMQClient.publish_on_commit(
+                Queues.INTERACTION_SCORE_BUMP,
+                {
+                    "actor_id": instance.entity.id,
+                    "receiver_id": instance.post.entity.id,
+                    "action": "COMMENT",
+                    "is_decrease": False,
+                },
             )
 
         if instance.post.entity:
-            follower_interaction_score_bump(
-                instance.entity.id,
-                instance.post.entity.id,
-                "COMMENT",
-                False,
+            RabbitMQClient.publish_on_commit(
+                Queues.FOLLOWER_INTERACTION_SCORE_BUMP,
+                {
+                    "actor_id": instance.entity.id,
+                    "receiver_id": instance.post.entity.id,
+                    "action": "COMMENT",
+                    "is_decrease": False,
+                },
             )
 
         # fan-out to timelines
 
-        author_id = (
-            instance.post.entity.id if instance.post.entity else instance.post.entity.id
-        )
-        current_user = instance.entity
-
         lock_key = f"chatterloop:bump_lock:{str(instance.post.post_id)}:{str(instance.entity.id)}:comment"
 
+        # The lock STAYS here. It is what makes this one fan-out per
+        # (post, commenter) per 30 minutes rather than one per comment, and the
+        # worker knows nothing about it - publishing unguarded would re-fan the
+        # post to 500 buckets on every reply.
         if cache.add(lock_key, "active", timeout=1800):
             # Social bump: someone commented, so push the post into the feeds
-            # of the people who follow THEM. Was the commenter's connections;
-            # the feed is keyed on the follow graph now, and following is a
-            # superset of connecting (both sides of a contact request
-            # auto-follow), so connections still receive this - via the
-            # follow edge that connecting created.
-            follower_ids = get_follower_ids(current_user.id, limit=500)
-
-            bulk_fanout_to_cache(
-                follower_ids, {"id": instance.post.post_id, "author_id": author_id}
+            # of the people who follow THEM. Two different entities here, which
+            # the payload keeps apart: the buckets belong to the COMMENTER's
+            # followers (current_entity_id), while the row records the POST's
+            # author. Resolving those followers is the worker's job now, so
+            # get_follower_ids is gone from this path.
+            RabbitMQClient.publish_on_commit(
+                Queues.BULK_FANOUT_TO_CACHE,
+                {
+                    "current_entity_id": instance.entity_id,
+                    "post_data": {
+                        "id": instance.post.post_id,
+                        "author_id": instance.post.entity_id,
+                    },
+                },
             )
 
 

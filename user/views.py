@@ -56,10 +56,7 @@ from .utils.account_deletion import delete_account
 from .utils.data_export import export_account_data
 from entity.services.blocking import get_blocked_account_ids, is_blocked
 from entity.services.reporting import ReportTargetError, create_report
-from newsfeed.helpers.query_functions import (
-    interaction_score_bump,
-    follower_interaction_score_bump,
-)
+from user_service.services.rabbitmq import RabbitMQClient, Queues
 from entity.services.follows import (
     follow_entity,
     purge_between,
@@ -191,8 +188,14 @@ class UserAuthentication(APIView):
 
             if entity:
                 save_profile_visit(entity, user.entity.id, "profile")
-                interaction_score_bump(
-                    entity.id, user.entity.id, "PROFILE_VISIT", False
+                RabbitMQClient.publish_on_commit(
+                    Queues.INTERACTION_SCORE_BUMP,
+                    {
+                        "actor_id": entity.id,
+                        "receiver_id": user.entity.id,
+                        "action": "PROFILE_VISIT",
+                        "is_decrease": False,
+                    },
                 )
 
             if not can_view:
@@ -294,8 +297,14 @@ class UserAuthentication(APIView):
 
             if entity:
                 save_profile_visit(entity, realm_queryset.entity.id, "realm")
-                follower_interaction_score_bump(
-                    entity.id, realm_queryset.entity.id, "PROFILE_VISIT", False
+                RabbitMQClient.publish_on_commit(
+                    Queues.FOLLOWER_INTERACTION_SCORE_BUMP,
+                    {
+                        "actor_id": entity.id,
+                        "receiver_id": realm_queryset.entity.id,
+                        "action": "PROFILE_VISIT",
+                        "is_decrease": False,
+                    },
                 )
 
             # Connection state for the realm, mirroring the `connection` block

@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 import os
+from urllib.parse import quote
 from dotenv import load_dotenv
 from corsheaders.defaults import default_headers
 from cassandra.auth import PlainTextAuthProvider
@@ -79,6 +80,36 @@ REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = os.getenv("REDIS_PORT")
 REDIS_USERNAME = os.getenv("REDIS_USERNAME")
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
+
+# RabbitMQ - background work handed to the Go worker_service. Same five
+# variables its internal/services/rabbitmq/rabbitmq.go requires, so one env
+# block describes both sides. VHOST is optional: empty means the default "/".
+RABBITMQ_PROTOCOL = os.getenv("RABBITMQ_PROTOCOL", "amqp")
+RABBITMQ_USER = os.getenv("RABBITMQ_USER")
+RABBITMQ_PASS = os.getenv("RABBITMQ_PASS")
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
+RABBITMQ_PORT = os.getenv("RABBITMQ_PORT")
+RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST", "")
+
+# Credentials are percent-encoded: a password containing @ / : or # would
+# otherwise be read as part of the host or as the start of a fragment.
+RABBITMQ_URL = (
+    "{proto}://{user}:{password}@{host}:{port}/{vhost}".format(
+        proto=RABBITMQ_PROTOCOL,
+        user=quote(RABBITMQ_USER or "", safe=""),
+        password=quote(RABBITMQ_PASS or "", safe=""),
+        host=RABBITMQ_HOST,
+        port=RABBITMQ_PORT,
+        vhost=quote(RABBITMQ_VHOST or "", safe=""),
+    )
+    if RABBITMQ_HOST
+    else None
+)
+
+# Bounded so a dead broker degrades a request by a second or two rather than
+# hanging it: publishing is best-effort and never fails the caller.
+RABBITMQ_CONNECT_TIMEOUT = float(os.getenv("RABBITMQ_CONNECT_TIMEOUT", "3"))
+RABBITMQ_PUBLISH_MAX_RETRIES = int(os.getenv("RABBITMQ_PUBLISH_MAX_RETRIES", "2"))
 
 MONGODB_CLUSTER_USER = os.getenv("MONGODB_CLUSTER_USER")
 MONGODB_CLUSTER_PASS = os.getenv("MONGODB_CLUSTER_PASS")

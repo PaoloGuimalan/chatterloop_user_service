@@ -9,7 +9,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.pagination import PageNumberPagination
 from .models import Entry, Mood, Attachment
 from interests.models import Interest, EntityInterestAffinity
-from interests.services.affinity import bump_interest_affinity
+from user_service.services.rabbitmq import RabbitMQClient, Queues
 from interests.services.interest_resolver import ensure_grant_override
 from interests.views import InterestListView
 from user.models import Account
@@ -261,7 +261,17 @@ class DiaryCRUDView(APIView):
 
                 if combined_tags:
                     tag_ids = [tag.id for tag in combined_tags]
-                    bump_interest_affinity(user.entity_id, tag_ids, "DIARY_TAG", False)
+                    RabbitMQClient.publish_on_commit(
+                        Queues.BUMP_INTEREST_AFFINITY,
+                        {
+                            "entity_id": user.entity_id,
+                            "interest_ids": tag_ids,
+                            "action": "DIARY_TAG",
+                            "is_decrease": False,
+                        },
+                    )
+                    # Stays inline: this grants the interest, which the next
+                    # read of the entry depends on. Only the scoring moved.
                     ensure_grant_override(user.entity_id, tag_ids)
 
                 final_id = queryset.id
