@@ -15,8 +15,8 @@ Publishing is BEST-EFFORT and never raises. A broker outage must degrade a
 ranking recalculation, not fail the request that triggered it.
 """
 
-import json
 import logging
+import threading
 from datetime import date, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -24,9 +24,20 @@ from uuid import UUID
 from django.conf import settings
 from django.db import transaction
 from kombu import Connection, Queue
-from kombu.pools import producers
 
 logger = logging.getLogger(__name__)
+
+# Serialises publishes within a process so one connection can be shared.
+#
+# kombu's producer pool was the obvious choice and is the wrong one here: it
+# pools CONNECTIONS, not channels, so concurrent publishes each opened their own
+# AMQP connection and the pool held them open - a broker showing seven
+# connections from one host, each with a single idle channel.
+#
+# These messages are a few hundred bytes on an already-established connection,
+# so the contention this lock introduces is microseconds; a hosted broker's
+# connection limit is the scarcer resource. One connection per gunicorn worker.
+_publish_lock = threading.Lock()
 
 
 class Queues:
@@ -80,6 +91,11 @@ class RabbitMQClient:
     """
 
     _connection = None
+    _producer = None
+    # Queue names already declared on this connection. Declaring is idempotent
+    # but costs a round trip, and these queues are durable - so once per process
+    # is enough, and it survives a reconnect because the queue outlives it.
+    _declared = set()
 
     @classmethod
     def get_connection(cls):
@@ -91,6 +107,12 @@ class RabbitMQClient:
                 connect_timeout=settings.RABBITMQ_CONNECT_TIMEOUT,
             )
         return cls._connection
+
+    @classmethod
+    def _reset(cls):
+        """Drop the cached producer so the next publish rebuilds it."""
+        cls._producer = None
+        cls._declared = set()
 
     @classmethod
     def publish(cls, queue, payload):
@@ -111,31 +133,43 @@ class RabbitMQClient:
         body = _normalize(payload)
 
         try:
-            with producers[connection].acquire(
-                block=True, timeout=settings.RABBITMQ_CONNECT_TIMEOUT
-            ) as producer:
-                producer.publish(
+            with _publish_lock:
+                if cls._producer is None:
+                    cls._producer = connection.Producer()
+
+                # ensure() re-opens the connection and revives the channel when
+                # it has gone away underneath us - which it will, since a hosted
+                # broker reaps idle connections and nothing here sends
+                # heartbeats between requests.
+                publish = connection.ensure(
+                    cls._producer,
+                    cls._producer.publish,
+                    max_retries=settings.RABBITMQ_PUBLISH_MAX_RETRIES,
+                    interval_start=0,
+                    interval_step=0.2,
+                    interval_max=1,
+                )
+
+                declare = [] if queue in cls._declared else [Queue(queue, durable=True)]
+
+                publish(
                     body,
                     exchange="",
                     routing_key=queue,
                     serializer="json",
                     # 2 = persistent, so a queued job outlives a broker restart.
                     delivery_mode=2,
-                    declare=[Queue(queue, durable=True)],
-                    retry=True,
-                    retry_policy={
-                        "interval_start": 0,
-                        "interval_step": 0.2,
-                        "interval_max": 1,
-                        "max_retries": settings.RABBITMQ_PUBLISH_MAX_RETRIES,
-                    },
+                    declare=declare,
                 )
+
+                cls._declared.add(queue)
             return True
         except Exception as err:
             # Deliberately broad: kombu surfaces socket errors, timeouts and
             # AMQP channel errors as unrelated types, and none of them is a
             # reason to fail the request that triggered this.
             logger.error("rabbitmq: failed to publish to %s: %s", queue, err)
+            cls._reset()
             return False
 
     @classmethod
@@ -161,6 +195,7 @@ class RabbitMQClient:
 
     @classmethod
     def close(cls):
+        cls._reset()
         if cls._connection is not None:
             try:
                 cls._connection.release()
