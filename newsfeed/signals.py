@@ -113,24 +113,26 @@ def log_comment_action(sender, instance, created, **kwargs):
 
 @receiver(post_delete, sender=Comment)
 def remove_comment_log(sender, instance, **kwargs):
-    # Remove related EngagementLog entry when comment deleted
-    # EngagementLog.objects.filter(
-    #     reference_id=instance.comment_id, action="commented"
-    # ).delete()
+    """
+    Retract the engagement log a comment wrote when it was created.
 
-    logs = UserEngagementLog.objects.filter(
-        user_id=str(instance.entity.id),
-        activity_type="comment",
-        target_type="post",
-        target_id=str(instance.comment_id),
+    NOTE this receiver is effectively dormant: CommentsView.delete SOFT-deletes
+    (sets deleted_at), and so does account deletion, so post_delete never fires
+    for a Comment today. Wired anyway so a future hard delete cleans up after
+    itself, but the existing comment logs are NOT being retracted - see the
+    reaction receiver below, which is the one that actually runs.
+
+    Deferred to COMMIT: the log should only go if the row really went.
+    """
+    RabbitMQClient.publish_on_commit(
+        Queues.REMOVE_ENGAGEMENT_LOG,
+        {
+            "entity_id": instance.entity_id,
+            "activity_type": "comment",
+            "target_type": "post",
+            "target_id": instance.comment_id,
+        },
     )
-
-    for log in logs:
-        UserEngagementLog.objects.filter(
-            user_id=log.user_id,
-            activity_time=log.activity_time,
-            log_id=log.log_id,
-        ).delete()
 
 
 @receiver(post_save, sender=Reaction)
@@ -156,23 +158,22 @@ def log_reaction_action(sender, instance, created, **kwargs):
 
 @receiver(post_delete, sender=Reaction)
 def remove_reaction_log(sender, instance, **kwargs):
-    # EngagementLog.objects.filter(
-    #     reference_id=instance.reaction_id, action="reacted"
-    # ).delete()
+    """
+    Retract the engagement log a reaction wrote when it was created.
 
-    logs = UserEngagementLog.objects.filter(
-        user_id=str(instance.entity.id),
-        activity_type="react",
-        target_type="post",
-        target_id=str(instance.reaction_id),
+    Unlike the comment receiver above this one is live: un-reacting really
+    deletes the row (PostReactionsView.delete), as does account deletion, so it
+    fires on every removed reaction.
+    """
+    RabbitMQClient.publish_on_commit(
+        Queues.REMOVE_ENGAGEMENT_LOG,
+        {
+            "entity_id": instance.entity_id,
+            "activity_type": "react",
+            "target_type": "post",
+            "target_id": instance.reaction_id,
+        },
     )
-
-    for log in logs:
-        UserEngagementLog.objects.filter(
-            user_id=log.user_id,
-            activity_time=log.activity_time,
-            log_id=log.log_id,
-        ).delete()
 
 
 # Add Share Engagement Log to Server Express JS API

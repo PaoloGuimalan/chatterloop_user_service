@@ -57,6 +57,7 @@ class Queues:
     BULK_FANOUT_TO_CACHE = "bulk_fanout_to_cache"
     BACKFILL_NEW_FRIEND_FEED = "backfill_new_friend_feed"
     REMOVE_FEED_ON_UNFRIEND = "remove_feed_on_unfriend"
+    REMOVE_ENGAGEMENT_LOG = "remove_engagement_log"
 
 
 def _normalize(value):
