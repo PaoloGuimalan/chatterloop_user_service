@@ -58,6 +58,7 @@ class Queues:
     BACKFILL_NEW_FRIEND_FEED = "backfill_new_friend_feed"
     REMOVE_FEED_ON_UNFRIEND = "remove_feed_on_unfriend"
     REMOVE_ENGAGEMENT_LOG = "remove_engagement_log"
+    SEND_EMAIL = "send_email"
 
 
 def _normalize(value):

@@ -2,39 +2,46 @@ from ..models import Account, Verification
 from django.utils.timezone import now
 from .generators import make_id
 from user_service.settings import MAILINGSERVICE
-from django.core.mail import send_mail
 from django.conf import settings
 from user_service.services.redis import RedisPubSubClient
+from user_service.services.rabbitmq import RabbitMQClient, Queues
 import requests
 
 
-from django.core.mail import get_connection
-from django.conf import settings
-
-
 class PersistentEmailSender:
-    def __init__(self):
-        self._connection = None
+    """
+    Queues mail for the Go worker to deliver.
 
-    def _ensure_connection(self):
-        """Open or reuse a valid SMTP connection."""
-        if self._connection is None:
-            self._connection = get_connection(
-                backend="django.core.mail.backends.smtp.EmailBackend",
-                host=settings.EMAIL_HOST,
-                port=settings.EMAIL_PORT,
-                username=settings.EMAIL_VERIFY_USER,
-                password=settings.EMAIL_VERIFY_PASS,
-                use_tls=settings.EMAIL_USE_TLS,
-                use_ssl=settings.EMAIL_USE_SSL,
-                timeout=30,
-            )
-            self._connection.open()
-        elif not getattr(self._connection, "_is_connected", False):
-            # Reconnect if closed or stale
-            self._connection.close()
-            self._connection.open()
-        self._connection._is_connected = True
+    The class name and every method signature are unchanged: the SMTP round
+    trip moved, the copy did not. Bodies are still rendered here, next to the
+    FRONTEND_URL they link to, and the worker is a relay that takes an
+    already-written message.
+
+    What went away is _ensure_connection - an SMTP connection with a 30 second
+    timeout, opened and reused on module-level mutable state shared across
+    gunicorn workers, inside the request. One of its callers
+    (send_contact_request_notification) ran inside an open database transaction,
+    so a slow mail server held a Postgres transaction open with it.
+
+    The cooldown checks stay here. They decide WHETHER to send, which is a
+    per-pair rule the worker knows nothing about, and they must run before a
+    message is queued rather than after it is delivered.
+    """
+
+    def _queue(self, to_email, subject, body, from_email):
+        """Publish one rendered message. Returns False if there is nothing to send."""
+        if not to_email:
+            return False
+
+        return RabbitMQClient.publish_on_commit(
+            Queues.SEND_EMAIL,
+            {
+                "to": [to_email],
+                "from": from_email,
+                "subject": subject,
+                "body": body,
+            },
+        ) is not False
 
     def send_email_verification_code(
         self,
@@ -43,7 +50,6 @@ class PersistentEmailSender:
         subject: str = "Verification Code",
         body: str = None,
     ):
-
         generated_code = make_id(6)
         content = body or f"""
 Hi {user_id}. Welcome to Chatterloop!
@@ -51,29 +57,18 @@ Hi {user_id}. Welcome to Chatterloop!
 Your registration was successful! Here is your verification code for the account activation: {generated_code}
             """.strip()
 
-        self._ensure_connection()
+        # Written BEFORE the message is queued, and not deferred: the code has to
+        # exist the moment the user can type it, and it must survive the mail
+        # failing. Mail is best-effort; the row is not.
+        Verification.objects.create(
+            user=Account.objects.get(username=user_id),
+            ver_code=generated_code,
+            date_generated=now(),
+            is_used=False,
+        )
 
-        try:
-            send_mail(
-                subject=subject,
-                message=content,
-                from_email=settings.EMAIL_VERIFY_USER,
-                recipient_list=[to_email],
-                connection=self._connection,
-            )
-
-            Verification.objects.create(
-                user=Account.objects.get(username=user_id),
-                ver_code=generated_code,
-                date_generated=now(),
-                is_used=False,
-            )
-            return True
-
-        except Exception as e:
-            print("Error sending verification email:", e)
-            self._connection._is_connected = False  # force reconnect next time
-            return False
+        self._queue(to_email, subject, content, settings.EMAIL_VERIFY_USER)
+        return True
 
     def send_realm_invite_email(
         self,
@@ -84,7 +79,6 @@ Your registration was successful! Here is your verification code for the account
         subject: str = "You're invited to a Chatterloop Realm",
         body: str = None,
     ):
-
         content = body or f"""
 {inviter_name} invited you to join {realm_name}.
 
@@ -92,21 +86,7 @@ Open the invite link below to continue:
 {invite_link}
             """.strip()
 
-        self._ensure_connection()
-
-        try:
-            send_mail(
-                subject=subject,
-                message=content,
-                from_email=settings.EMAIL_VERIFY_USER,
-                recipient_list=[to_email],
-                connection=self._connection,
-            )
-            return True
-        except Exception as e:
-            print("Error sending realm invite email:", e)
-            self._connection._is_connected = False
-            return False
+        return self._queue(to_email, subject, content, settings.EMAIL_VERIFY_USER)
 
     def send_contact_request_notification(
         self,
@@ -119,9 +99,9 @@ Open the invite link below to continue:
     ):
         """
         Notifies a user that someone added them as a contact, linking to the
-        requester's profile. Uses EMAIL_HOST_USER (the noreply/notification
-        credentials) rather than EMAIL_VERIFY_USER, since this is a
-        notification email, not an account-verification one.
+        requester's profile. Sent from EMAIL_HOST_USER (the noreply/notification
+        identity) rather than EMAIL_VERIFY_USER, since this is a notification,
+        not account verification.
         """
 
         if not RedisPubSubClient.acquire_email_cooldown(
@@ -137,17 +117,7 @@ View their profile here:
 {profile_link}
             """.strip()
 
-        try:
-            send_mail(
-                subject=subject,
-                message=content,
-                from_email=settings.EMAIL_HOST_USER,
-                recipient_list=[to_email],
-            )
-            return True
-        except Exception as e:
-            print("Error sending contact request notification email:", e)
-            return False
+        return self._queue(to_email, subject, content, settings.EMAIL_HOST_USER)
 
     def send_contact_accepted_email(
         self,
@@ -160,8 +130,7 @@ View their profile here:
     ):
         """
         Notifies the original requester that their contact request was
-        accepted, linking to the accepter's profile. Uses EMAIL_HOST_USER,
-        same as the other notification emails.
+        accepted, linking to the accepter's profile.
         """
 
         if not RedisPubSubClient.acquire_email_cooldown(
@@ -177,17 +146,7 @@ View their profile here:
 {profile_link}
             """.strip()
 
-        try:
-            send_mail(
-                subject=subject,
-                message=content,
-                from_email=settings.EMAIL_HOST_USER,
-                recipient_list=[to_email],
-            )
-            return True
-        except Exception as e:
-            print("Error sending contact accepted email:", e)
-            return False
+        return self._queue(to_email, subject, content, settings.EMAIL_HOST_USER)
 
     def send_poke_notification_email(
         self,
@@ -200,11 +159,10 @@ View their profile here:
         cooldown_ttl: int = 3600,
     ):
         """
-        Notifies a user that someone poked their profile. Uses
-        EMAIL_HOST_USER, same as other notification emails. Pokes are a
-        casual, repeatable action, so this uses a shorter cooldown than the
-        contact-request email to still curb spam from someone poking
-        the same profile over and over.
+        Notifies a user that someone poked their profile. Pokes are a casual,
+        repeatable action, so this uses a shorter cooldown than the
+        contact-request email to still curb spam from someone poking the same
+        profile over and over.
         """
 
         if not RedisPubSubClient.acquire_email_cooldown(
@@ -220,17 +178,7 @@ View their profile here:
 {profile_link}
             """.strip()
 
-        try:
-            send_mail(
-                subject=subject,
-                message=content,
-                from_email=settings.EMAIL_HOST_USER,
-                recipient_list=[to_email],
-            )
-            return True
-        except Exception as e:
-            print("Error sending poke notification email:", e)
-            return False
+        return self._queue(to_email, subject, content, settings.EMAIL_HOST_USER)
 
 
 # Usage: create one instance at module level
