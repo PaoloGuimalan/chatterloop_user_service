@@ -5,6 +5,135 @@ from django.utils.timezone import now
 
 from ..models import Connection, Verification
 from ..ext_models.mongomodels import Message, Notification, Session
+from user_service.services.redis import RedisPubSubClient
+
+
+class DeletionChallenge:
+    """
+    Short-lived state for the public "delete my account" flow.
+
+    Kept in Redis rather than in the Verification table on purpose. Verification
+    rows are the REGISTRATION code, and CodeVerification accepts any unused row
+    for a user - so a deletion code stored there could be typed into the
+    registration screen and would activate the account instead. Separate storage
+    makes the two impossible to confuse, expires by itself, and needs no
+    migration.
+
+    Everything here fails CLOSED: no Redis means no code can be issued and no
+    token can be redeemed, so an outage blocks deletion rather than allowing an
+    unverified one.
+    """
+
+    CODE_TTL = 15 * 60
+    RESEND_COOLDOWN = 60
+    MAX_ATTEMPTS = 5
+
+    # The lookup step answers whether an address is registered and returns the
+    # profile behind it, so it is an address checker by design. Capping it per
+    # IP keeps that usable for the one person deleting their own account and
+    # useless for running a mailing list through it.
+    LOOKUP_WINDOW = 60 * 60
+    LOOKUP_MAX_PER_IP = 10
+
+    @staticmethod
+    def _conn():
+        return RedisPubSubClient.get_redis_connection()
+
+    @staticmethod
+    def _decode(value):
+        if value is None:
+            return None
+        return value.decode() if isinstance(value, bytes) else str(value)
+
+    # ── issuing ──────────────────────────────────────────────────────────
+
+    @classmethod
+    def can_send(cls, email):
+        """One code per address per minute, so this cannot be used to mailbomb."""
+        conn = cls._conn()
+        if not conn:
+            return False
+        key = f"chatterloop:acctdel:resend:{email}"
+        return conn.set(key, "1", nx=True, ex=cls.RESEND_COOLDOWN) is True
+
+    @classmethod
+    def issue_code(cls, email):
+        """A fresh code, replacing any outstanding one for this address."""
+        conn = cls._conn()
+        if not conn:
+            return None
+
+        code = "".join(secrets.choice("0123456789") for _ in range(6))
+        conn.setex(f"chatterloop:acctdel:code:{email}", cls.CODE_TTL, code)
+        conn.delete(f"chatterloop:acctdel:attempts:{email}")
+        return code
+
+    # ── verifying ────────────────────────────────────────────────────────
+
+    @classmethod
+    def register_attempt(cls, email):
+        """
+        Counts a guess. False once the code has been tried MAX_ATTEMPTS times,
+        which also burns the code - a six-digit secret is only worth anything
+        if it cannot be enumerated.
+        """
+        conn = cls._conn()
+        if not conn:
+            return False
+
+        key = f"chatterloop:acctdel:attempts:{email}"
+        attempts = conn.incr(key)
+        if attempts == 1:
+            conn.expire(key, cls.CODE_TTL)
+
+        if attempts > cls.MAX_ATTEMPTS:
+            conn.delete(f"chatterloop:acctdel:code:{email}")
+            return False
+        return True
+
+    @classmethod
+    def check_code(cls, email, code):
+        conn = cls._conn()
+        if not conn or not code:
+            return False
+
+        stored = cls._decode(conn.get(f"chatterloop:acctdel:code:{email}"))
+        if stored is None:
+            return False
+
+        # Constant-time: a timing difference on a six-digit code is worth
+        # avoiding even though the attempt counter already caps guessing.
+        return secrets.compare_digest(stored, str(code))
+
+    @classmethod
+    def clear_code(cls, email):
+        conn = cls._conn()
+        if conn:
+            conn.delete(f"chatterloop:acctdel:code:{email}")
+            conn.delete(f"chatterloop:acctdel:attempts:{email}")
+
+    # ── lookup throttling ────────────────────────────────────────────────
+
+    @classmethod
+    def can_lookup(cls, ip_address):
+        """
+        LOOKUP_MAX_PER_IP address checks an hour. A person deleting their own
+        account needs one; anything enumerating needs thousands.
+
+        Fails OPEN, unlike the rest of this class: Redis being down should not
+        stop somebody deleting their account, and the code step behind this is
+        what actually protects the deletion.
+        """
+        conn = cls._conn()
+        if not conn or not ip_address:
+            return True
+
+        key = f"chatterloop:acctdel:lookup:{ip_address}"
+        count = conn.incr(key)
+        if count == 1:
+            conn.expire(key, cls.LOOKUP_WINDOW)
+
+        return count <= cls.LOOKUP_MAX_PER_IP
 
 
 def delete_account(account, entity):

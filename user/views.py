@@ -52,7 +52,7 @@ from .utils.consent import (
     get_pending_consents,
     record_consent_acceptance,
 )
-from .utils.account_deletion import delete_account
+from .utils.account_deletion import delete_account, DeletionChallenge
 from .utils.data_export import export_account_data
 from entity.services.blocking import get_blocked_account_ids, is_blocked
 from entity.services.reporting import ReportTargetError, create_report
@@ -1775,6 +1775,287 @@ class CodeVerification(APIView):
         except Exception as e:
             return Response(
                 {"status": False, "message": f"Error verifying code: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class PublicAccountDeletion(APIView):
+    """
+    Self-service account deletion for people who cannot sign in - the flow an
+    app store requires to be reachable without the app.
+
+    Three steps, all unauthenticated:
+
+        POST .../deletion/lookup   {email}         -> found? + profile card
+        POST .../deletion/request  {email}         -> emails a code
+        POST .../deletion/confirm  {email, code}   -> deleted
+
+    NOTE ON THE LOOKUP STEP. It reports whether an address is registered and
+    returns the profile behind it, which makes this page an address checker:
+    anyone can confirm a given person has a Chatterloop account and see their
+    name and photo, with no proof they own it. That is a deliberate product
+    decision - the alternative is answering identically either way and showing
+    the account only after the code - and it is mitigated, not solved, by
+    DeletionChallenge.can_lookup capping checks per IP.
+
+    Nothing is DELETED without the emailed code, so the destructive half is
+    still gated on control of the mailbox.
+    """
+
+    permission_classes = [AllowAny]
+
+    def get_authenticators(self):
+        return []
+
+    @staticmethod
+    def _normalize(email):
+        return str(email or "").strip().lower()
+
+    @staticmethod
+    def _find(email):
+        """The live account for an address, or None. Already-deleted accounts
+        carry an anonymised @chatterloop.invalid address and never match."""
+        if not email:
+            return None
+        return Account.objects.filter(email__iexact=email, is_active=True).first()
+
+    @staticmethod
+    def _client_ip(request):
+        forwarded = request.META.get("HTTP_X_FORWARDED_FOR")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return request.META.get("REMOTE_ADDR")
+
+    def post(self, request, step=None):
+        if step == "lookup":
+            return self._lookup(request)
+        if step == "request":
+            return self._request_code(request)
+        if step == "confirm":
+            return self._confirm(request)
+
+        return Response(
+            {"status": False, "message": "Unknown deletion step"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    # ── step 1: find the account ─────────────────────────────────────────
+
+    def _lookup(self, request):
+        email = self._normalize(request.data.get("email"))
+
+        if not email or "@" not in email:
+            return Response(
+                {"status": False, "message": "A valid email address is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not DeletionChallenge.can_lookup(self._client_ip(request)):
+            return Response(
+                {
+                    "status": False,
+                    "message": (
+                        "Too many lookups from this connection. Try again later."
+                    ),
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        account = self._find(email)
+
+        if account is None:
+            return Response(
+                {
+                    "status": True,
+                    "found": False,
+                    "message": "No account is registered to that email address.",
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        # Enough to recognise the account, and no more - this is a confirmation
+        # card, not a profile view.
+        return Response(
+            {
+                "status": True,
+                "found": True,
+                "account": {
+                    "username": account.username,
+                    "first_name": account.first_name,
+                    "last_name": account.last_name,
+                    "profile": account.profile,
+                    "date_created": account.date_created,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    # ── step 2: email the code ───────────────────────────────────────────
+
+    def _request_code(self, request):
+        email = self._normalize(request.data.get("email"))
+        account = self._find(email) if email else None
+
+        if account is None:
+            return Response(
+                {
+                    "status": False,
+                    "message": "No account is registered to that email address.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not DeletionChallenge.can_send(email):
+            return Response(
+                {
+                    "status": False,
+                    "message": "A code was just sent. Wait a moment before retrying.",
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        code = DeletionChallenge.issue_code(email)
+        if code is None:
+            return Response(
+                {
+                    "status": False,
+                    "message": "Unable to start deletion right now, please retry",
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        emailer.send_account_deletion_code(to_email=account.email, code=code)
+
+        return Response(
+            {
+                "status": True,
+                "message": f"We've sent a confirmation code to {account.email}.",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    # ── step 3: check the code and delete ────────────────────────────────
+
+    def _confirm(self, request):
+        email = self._normalize(request.data.get("email"))
+        code = str(request.data.get("code") or "").strip()
+
+        invalid = Response(
+            {"status": False, "message": "That code is not valid or has expired"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+        if not email or not code:
+            return invalid
+
+        # Counted before the comparison, so every guess costs an attempt
+        # whether or not the address is right.
+        if not DeletionChallenge.register_attempt(email):
+            return Response(
+                {
+                    "status": False,
+                    "message": (
+                        "Too many incorrect attempts. Request a new code to "
+                        "try again."
+                    ),
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        if not DeletionChallenge.check_code(email, code):
+            return invalid
+
+        account = self._find(email)
+        if account is None:
+            return invalid
+
+        # Cleared BEFORE the delete: the code is single-use, and a retry after a
+        # partial failure must not be able to run the teardown twice.
+        DeletionChallenge.clear_code(email)
+
+        try:
+            delete_account(account, account.entity)
+        except Exception as e:
+            return Response(
+                {"status": False, "message": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {"status": True, "message": "Account deleted"},
+            status=status.HTTP_200_OK,
+        )
+
+
+class ResendVerificationCode(APIView):
+    """
+    Issues a fresh signup verification code.
+
+    Authenticated: registration already returns a token, so someone sitting on
+    the verify screen is signed in - they are just not is_verified yet. That
+    means the address is taken from the account rather than the request, so this
+    cannot be pointed at a mailbox the caller does not own.
+
+    Rate-limited to one code a minute per account, reusing the same Redis
+    cooldown the notification emails use. Without it the button is an open
+    relay: one click per second, to an address someone else may have typed
+    during signup.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    RESEND_COOLDOWN = 60
+
+    def post(self, request):
+        account = self.request.user
+
+        if account.is_verified:
+            return Response(
+                {"status": False, "message": "This account is already verified."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not RedisPubSubClient.acquire_email_cooldown(
+            "verification_resend",
+            account.id,
+            account.id,
+            ttl=self.RESEND_COOLDOWN,
+        ):
+            return Response(
+                {
+                    "status": False,
+                    "message": (
+                        "A code was just sent. Give it a moment before asking "
+                        "for another."
+                    ),
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        try:
+            # Retire outstanding codes first. CodeVerification accepts ANY
+            # unused row for the account, so without this every code ever sent
+            # stays valid forever and "resend" quietly widens the guessing
+            # surface instead of replacing the code.
+            Verification.objects.filter(user=account, is_used=False).update(
+                is_used=True
+            )
+
+            emailer.send_email_verification_code(
+                to_email=account.email,
+                user_id=account.username,
+            )
+
+            return Response(
+                {
+                    "status": True,
+                    "message": f"A new code is on its way to {account.email}.",
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            return Response(
+                {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 

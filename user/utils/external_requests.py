@@ -148,6 +148,33 @@ View their profile here:
 
         return self._queue(to_email, subject, content, settings.EMAIL_HOST_USER)
 
+    def send_account_deletion_code(
+        self,
+        to_email: str,
+        code: str,
+        subject: str = "Confirm your Chatterloop account deletion",
+        body: str = None,
+    ):
+        """
+        The code for the public account-deletion page.
+
+        Sent from EMAIL_VERIFY_USER, the same identity as registration codes:
+        both prove control of the address. Worded so that someone who did NOT
+        ask for this understands that ignoring it is enough - the code is the
+        only way the deletion proceeds.
+        """
+        content = body or f"""
+Someone requested deletion of the Chatterloop account registered to this email address.
+
+Your confirmation code is: {code}
+
+The code expires in 15 minutes. Deleting an account cannot be undone.
+
+If this wasn't you, no action is needed - the account will not be deleted without this code.
+            """.strip()
+
+        return self._queue(to_email, subject, content, settings.EMAIL_VERIFY_USER)
+
     def send_poke_notification_email(
         self,
         to_email: str,

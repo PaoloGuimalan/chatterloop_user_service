@@ -31,7 +31,22 @@ urlpatterns = [
         views.AccountDataExport.as_view(),
         name="account-data-export",
     ),
+    # Placed before the "me" re_path below, which is unanchored and so matches
+    # ANY path containing "me". None of the current step names do, but a later
+    # one ("deletion/remove") would be swallowed by it.
+    path(
+        "deletion/<str:step>",
+        views.PublicAccountDeletion.as_view(),
+        name="public-account-deletion",
+    ),
     re_path("me", views.UserAccountManagement.as_view(), name="user-management"),
+    # Before the unanchored "verification" pattern below, which would otherwise
+    # swallow this path too - Django resolves in order.
+    path(
+        "verification/resend",
+        views.ResendVerificationCode.as_view(),
+        name="user-verification-resend",
+    ),
     re_path("verification", views.CodeVerification.as_view(), name="user-verification"),
     re_path("contacts", views.UserContacts.as_view(), name="user-contacts"),
     path("search/<str:query>/", views.UserSearch.as_view(), name="user-search"),
