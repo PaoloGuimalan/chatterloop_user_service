@@ -27,3 +27,5 @@ Thumbs.db
 
 # Cassandra 
 secure-connect-chatterloop.zip
+# Collected static files
+staticfiles/

@@ -35,6 +35,7 @@ db.sqlite3
 *.pot
 local_settings.py
 media/
+staticfiles/
 
 # ---- Editor & OS ----------------------------------------------------------
 .idea/

@@ -45,4 +45,7 @@ EXPOSE 8003
 
 # Run with Gunicorn instead of manage.py runserver
 # Workers formula: (2 * cores) + 1
-CMD ["gunicorn", "--bind", "0.0.0.0:8003", "--workers", "3", "--timeout", "120", "user_service.wsgi:application"]
+# collectstatic runs here, not at build time: django_cassandra_engine opens a
+# real Cassandra connection during django.setup(), so manage.py needs the
+# runtime secret. `exec` keeps gunicorn as PID 1 so SIGTERM still reaches it.
+CMD ["sh", "-c", "python manage.py collectstatic --noinput && exec gunicorn --bind 0.0.0.0:8003 --workers 3 --timeout 120 user_service.wsgi:application"]
