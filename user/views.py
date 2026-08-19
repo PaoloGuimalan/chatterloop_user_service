@@ -75,6 +75,7 @@ from entity.utils import (
     get_entity_profile_path,
     entity_side_is_visible,
 )
+from community.annotations import my_role_annotation
 from community.serializers import RealmSerializer
 import bcrypt
 import uuid
@@ -291,6 +292,7 @@ class UserAuthentication(APIView):
                             followee=OuterRef("entity_id"), follower=entity
                         )
                     ),
+                    my_role=my_role_annotation(entity),
                 ),
                 query_filter,
             )

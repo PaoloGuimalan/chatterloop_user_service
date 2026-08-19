@@ -83,7 +83,20 @@ class RealmSerializer(serializers.ModelSerializer):
     is_member = serializers.BooleanField(read_only=True)
     is_admin = serializers.BooleanField(read_only=True)
     is_follower = serializers.BooleanField(read_only=True)
+    # The acting entity's own role in this realm: "owner"/"admin"/"moderator"/
+    # "member", or null when not a member. is_admin cannot answer this - it is
+    # true for owner AND admin alike, while several rules (removing or
+    # re-roling a fellow admin, transferring ownership, leaving) turn on
+    # exactly that distinction.
+    #
+    # A method field rather than a declared CharField so the serializer still
+    # works on querysets that did not apply my_role_annotation: those get null
+    # instead of an AttributeError.
+    my_role = serializers.SerializerMethodField()
     parent = BasicRealmSerializer(allow_null=True)
+
+    def get_my_role(self, obj):
+        return getattr(obj, "my_role", None)
 
     class Meta:
         model = Realm

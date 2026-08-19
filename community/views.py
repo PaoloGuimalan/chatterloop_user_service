@@ -27,6 +27,7 @@ from datetime import datetime
 from user.models import Account
 from user.utils.external_requests import emailer
 from user_service.services.redis import RedisPubSubClient
+from community.annotations import my_role_annotation
 from entity.permissions import Permission
 from entity.services.permission_resolver import has_permission
 from entity.utils import get_entity_display_username, resolve_entity_target
@@ -99,6 +100,7 @@ class TopRealms(APIView):
                         status=True,
                     )
                 ),
+                my_role=my_role_annotation(entity),
             ).filter(type=type, is_private=False)
 
             if search:
@@ -169,6 +171,7 @@ class MyRealms(APIView):
                         status=True,
                     )
                 ),
+                my_role=my_role_annotation(entity),
             ).filter(is_member=True, type=type)
 
             if search:
@@ -277,6 +280,7 @@ class FollowRealmView(APIView):
                             followee=OuterRef("entity_id"), follower=entity
                         )
                     ),
+                    my_role=my_role_annotation(entity),
                 )
                 .filter(is_follower=True, type=type)
                 .order_by("-id")
