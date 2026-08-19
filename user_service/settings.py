@@ -65,7 +65,7 @@ CASSANDRA_CLOUD_CONFIG = {
     "secure_connect_bundle": str(CASSANDRA_BUNDLE_PATH),
 }
 
-DEBUG = os.getenv("DEBUG")
+DEBUG = os.getenv("DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
 SECRET_KEY = os.getenv("SECRET_KEY")
 
 # Shared secret allowing trusted backends (e.g. the Node chat server) to call
