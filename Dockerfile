@@ -35,7 +35,6 @@ RUN pip install --no-cache /wheels/*
 
 # Copy the rest of your application code
 COPY . .
-COPY production.env .env
 
 # Security: Create and use a non-root user
 RUN useradd -m django_user && chown -R django_user /app

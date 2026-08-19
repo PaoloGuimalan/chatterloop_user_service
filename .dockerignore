@@ -1,0 +1,49 @@
+# ---- Version control & CI -------------------------------------------------
+.git
+.gitignore
+.github
+
+# ---- Env files ------------------------------------------------------------
+# No env file is baked into the image: config arrives at runtime via compose
+# (docker secrets / environment). With no .env present, load_dotenv() is a
+# no-op and settings.py reads the real process environment.
+# secure-connect-chatterloop.zip is deliberately NOT ignored -- settings.py
+# resolves the Astra bundle from BASE_DIR at import time, so it must ship.
+.env
+.env.*
+*.env
+
+# ---- Virtualenvs & Python caches -----------------------------------------
+.venv
+venv
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.tox/
+.coverage
+htmlcov/
+
+# ---- Django runtime artifacts --------------------------------------------
+db.sqlite3
+*.log
+*.pot
+local_settings.py
+media/
+
+# ---- Editor & OS ----------------------------------------------------------
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ---- Docker & docs --------------------------------------------------------
+Dockerfile*
+.dockerignore
+docker-compose*.yml
+*.md
