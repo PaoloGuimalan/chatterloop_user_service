@@ -20,6 +20,9 @@ from datetime import datetime
 from django.db import transaction
 
 from user_service.services.redis import RedisPubSubClient
+import logging
+
+logger = logging.getLogger(__name__)
 
 PROFILE_RELATIONSHIP_EVENT = "profile_relationship_updated"
 
@@ -73,4 +76,4 @@ def _publish(to_entity_id, counterpart_entity_id, reason):
             },
         )
     except Exception as err:
-        print(f"Failed to publish profile relationship update: {err}")
+        logger.exception("Failed to publish profile relationship update")

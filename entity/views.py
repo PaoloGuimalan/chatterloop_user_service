@@ -10,6 +10,9 @@ from entity.models import Connection
 from user.models import Account
 from user.utils.blocking import get_blocked_account_ids
 from community.models import Realm
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class MyAllowedModules(APIView):
@@ -55,6 +58,7 @@ class MyAllowedModules(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("MyAllowedModules.get failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -280,4 +284,5 @@ class EntitySearch(APIView):
             return paginator.get_paginated_response(page)
 
         except Exception as e:
+            logger.exception("EntitySearch.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)

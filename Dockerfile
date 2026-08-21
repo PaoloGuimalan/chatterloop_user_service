@@ -48,4 +48,8 @@ EXPOSE 8003
 # collectstatic runs here, not at build time: django_cassandra_engine opens a
 # real Cassandra connection during django.setup(), so manage.py needs the
 # runtime secret. `exec` keeps gunicorn as PID 1 so SIGTERM still reaches it.
-CMD ["sh", "-c", "python manage.py collectstatic --noinput && exec gunicorn --bind 0.0.0.0:8003 --workers 3 --timeout 120 user_service.wsgi:application"]
+# --access-logfile/--error-logfile "-" send Gunicorn's own logs to the
+# container's stdout/stderr. Access logging is OFF by default in Gunicorn, so
+# without this there is no record that a request even arrived - only Django's
+# application logs appear.
+CMD ["sh", "-c", "python manage.py collectstatic --noinput && exec gunicorn --bind 0.0.0.0:8003 --workers 3 --timeout 120 --access-logfile - --error-logfile - user_service.wsgi:application"]

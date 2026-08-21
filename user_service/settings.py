@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 import os
+import sys
 from urllib.parse import quote
 from dotenv import load_dotenv
 from corsheaders.defaults import default_headers
@@ -190,6 +191,9 @@ if DEBUG:
 # own -- CommonMiddleware and WhiteNoise both can -- or those responses go out
 # without CORS headers.
 MIDDLEWARE = [
+    # Outermost so it observes the final status of every request, including
+    # 5xx responses produced by the middleware below it.
+    "user_service.logging_middleware.ApiFailureLogMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
@@ -362,3 +366,102 @@ PASSWORD_HASHERS = [
     "django.contrib.auth.hashers.Argon2PasswordHasher",
     "django.contrib.auth.hashers.ScryptPasswordHasher",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+# Django's built-in default routes `django.request` (the logger that records
+# every unhandled 500 WITH its traceback) to the `mail_admins` handler only,
+# and gates the console handler behind `require_debug_true`. In production -
+# DEBUG=False and no ADMINS configured - that means unhandled exceptions are
+# logged precisely nowhere, which is why the container only ever showed a
+# bare exception message with no file, line, or stack.
+#
+# Everything below goes to stdout on purpose: under Docker/Gunicorn stdout is
+# the log stream (`docker service logs`), and the image already sets
+# PYTHONUNBUFFERED=1 so records are not held in a pipe buffer.
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").strip().upper()
+
+# Off by default - django.db.backends at DEBUG logs the full text and timing
+# of EVERY query, which is useful when chasing an N+1 and overwhelming
+# otherwise.
+LOG_SQL = os.getenv("LOG_SQL", "").strip().lower() in ("1", "true", "yes", "on")
+
+# ApiFailureLogMiddleware logs every failed response: 5xx at ERROR, 4xx at
+# WARNING, plus any 2xx whose body declares `{"status": False}`. This flag
+# gates only the non-5xx half - set LOG_API_FAILURES=false to drop client
+# errors if the volume of rejected requests (expired tokens especially)
+# becomes noise. 5xx logging is deliberately not affected by it.
+LOG_API_FAILURES = os.getenv("LOG_API_FAILURES", "true").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+
+LOGGING = {
+    "version": 1,
+    # The project's own modules call logging.getLogger(__name__) at import
+    # time, which for most of them happens BEFORE this config is applied.
+    # Disabling existing loggers would silence exactly those.
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": (
+                "{asctime} {levelname:<8} {name} "
+                "[pid:{process}] {message}"
+            ),
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            # Explicitly stdout: StreamHandler defaults to stderr, which
+            # Gunicorn interleaves with its own error log and some log
+            # shippers tag as an error regardless of the record's level.
+            "stream": sys.stdout,
+            "formatter": "verbose",
+        },
+    },
+    # Catch-all so a logger this config does not name explicitly - including
+    # every logging.getLogger(__name__) in the project apps - still lands on
+    # the console instead of falling through to the "no handlers" fallback.
+    "root": {
+        "handlers": ["console"],
+        "level": LOG_LEVEL,
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False,
+        },
+        # The important one: pinned at ERROR regardless of LOG_LEVEL so
+        # tracebacks for unhandled exceptions are never filtered out, even
+        # if someone sets LOG_LEVEL=CRITICAL to quiet the logs down.
+        "django.request": {
+            "handlers": ["console"],
+            "level": "ERROR",
+            "propagate": False,
+        },
+        "django.server": {
+            "handlers": ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False,
+        },
+        "django.db.backends": {
+            "handlers": ["console"],
+            "level": "DEBUG" if LOG_SQL else "WARNING",
+            "propagate": False,
+        },
+        # Chatty third-party clients. At INFO the Cassandra driver logs every
+        # control-connection event and pymongo every server heartbeat, which
+        # buries the application's own records.
+        "cassandra": {"level": "WARNING", "propagate": True},
+        "pymongo": {"level": "WARNING", "propagate": True},
+        "urllib3": {"level": "WARNING", "propagate": True},
+        "amqp": {"level": "WARNING", "propagate": True},
+    },
+}

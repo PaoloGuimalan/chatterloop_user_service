@@ -14,6 +14,9 @@ from interests.services.interest_resolver import IMPLICIT_GRANT_THRESHOLD
 from interests.models import EntityInterest, EntityInterestAffinity
 from entity.permissions import PermissionEffect
 import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def update_ranking_score(post_id, update_type, is_decrease):
@@ -143,7 +146,7 @@ def save_viewcache_engagements(entity, viewcache):
 
         return logs_to_create
     except Exception as ex:
-        print(f"Error saving viewcache metrics: {ex}")
+        logger.exception("Error saving viewcache metrics")
         return []
 
 

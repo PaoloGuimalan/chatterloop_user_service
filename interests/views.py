@@ -8,6 +8,9 @@ from rest_framework.pagination import PageNumberPagination
 
 from .models import EntityInterest, EntityInterestAffinity, Interest, InterestTrendingScore
 from entity.permissions import PermissionEffect
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Pagination(PageNumberPagination):
@@ -43,6 +46,7 @@ class InterestListView(APIView):
 
             return paginator.get_paginated_response({"list": results, "is_new": is_new})
         except Exception as e:
+            logger.exception("InterestListView.get failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -69,6 +73,7 @@ class EntityInterestOverrideListView(APIView):
             ]
             return Response({"status": True, "data": data}, status=status.HTTP_200_OK)
         except Exception as e:
+            logger.exception("EntityInterestOverrideListView.get failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -129,6 +134,7 @@ class EntityInterestOverrideView(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("EntityInterestOverrideView.post failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -152,6 +158,7 @@ class EntityInterestOverrideView(APIView):
         except PermissionDenied:
             raise
         except Exception as e:
+            logger.exception("EntityInterestOverrideView.delete failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -181,6 +188,7 @@ class MyTopInterestsView(APIView):
             ]
             return Response({"status": True, "data": data}, status=status.HTTP_200_OK)
         except Exception as e:
+            logger.exception("MyTopInterestsView.get failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -207,6 +215,7 @@ class TrendingInterestsView(APIView):
             ]
             return Response({"status": True, "data": data}, status=status.HTTP_200_OK)
         except Exception as e:
+            logger.exception("TrendingInterestsView.get failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,

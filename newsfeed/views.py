@@ -82,6 +82,9 @@ from entity.permissions import Permission
 from entity.drf_permissions import RequiresPermission
 from entity.services.follows import get_profile_relationship_state
 from newsfeed.services.post_visibility import visible_posts_filter, can_view_post
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Pagination(PageNumberPagination):
@@ -212,6 +215,7 @@ class NewsfeedView(APIView):
                 }
             )
         except Exception as e:
+            logger.exception("NewsfeedView.post failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def put(self, request):
@@ -237,6 +241,7 @@ class NewsfeedView(APIView):
         except PermissionDenied:
             raise
         except Exception as e:
+            logger.exception("NewsfeedView.put failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def delete(self, request):
@@ -267,6 +272,7 @@ class NewsfeedView(APIView):
         except PermissionDenied:
             raise
         except Exception as e:
+            logger.exception("NewsfeedView.delete failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -400,6 +406,7 @@ class NewsfeedProfileView(APIView):
 
             return data
         except Exception as e:
+            logger.exception("NewsfeedProfileView.post failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -474,6 +481,7 @@ class NewsfeedPostPreviewView(APIView):
             else:
                 return Response(serialized_result.data, status=status.HTTP_200_OK)
         except Exception as e:
+            logger.exception("NewsfeedPostPreviewView.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -506,6 +514,7 @@ class EmojisView(APIView):
 
             return Response(serialized_result.data, status=status.HTTP_200_OK)
         except Exception as e:
+            logger.exception("EmojisView.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -631,6 +640,7 @@ class PostReactionsView(APIView):
                     {"message": "Reaction has been added"}, status=status.HTTP_200_OK
                 )
         except Exception as e:
+            logger.exception("PostReactionsView.post failed")
             return Response({"error": str(e)}, status=500)
 
     def put(self, request, *args, **kwargs):
@@ -695,6 +705,7 @@ class PostReactionsView(APIView):
                     {"message": "Reaction has been updated"}, status=status.HTTP_200_OK
                 )
         except Exception as e:
+            logger.exception("PostReactionsView.put failed")
             return Response({"error": str(e)}, status=500)
 
     def delete(self, request, *args, **kwargs):
@@ -762,6 +773,7 @@ class PostReactionsView(APIView):
                     {"message": "Reaction has been deleted"}, status=status.HTTP_200_OK
                 )
         except Exception as e:
+            logger.exception("PostReactionsView.delete failed")
             return Response({"error": str(e)}, status=500)
 
 
@@ -777,6 +789,7 @@ class ReactionsCountView(APIView):
             serialized_result = PreviewCountSerializer(query_set, many=True)
             return Response(serialized_result.data, status=status.HTTP_200_OK)
         except Exception as e:
+            logger.exception("ReactionsCountView.get failed")
             return Response({"error": str(e)}, status=500)
 
 
@@ -906,6 +919,7 @@ class CommentReactionsView(APIView):
                 {"message": "Reaction has been added"}, status=status.HTTP_200_OK
             )
         except Exception as e:
+            logger.exception("CommentReactionsView.post failed")
             return Response({"error": str(e)}, status=500)
 
     def put(self, request, *args, **kwargs):
@@ -947,6 +961,7 @@ class CommentReactionsView(APIView):
                 {"message": "Reaction has been updated"}, status=status.HTTP_200_OK
             )
         except Exception as e:
+            logger.exception("CommentReactionsView.put failed")
             return Response({"error": str(e)}, status=500)
 
     def delete(self, request, *args, **kwargs):
@@ -990,6 +1005,7 @@ class CommentReactionsView(APIView):
                 {"message": "Reaction has been deleted"}, status=status.HTTP_200_OK
             )
         except Exception as e:
+            logger.exception("CommentReactionsView.delete failed")
             return Response({"error": str(e)}, status=500)
 
 
@@ -1007,6 +1023,7 @@ class CommentReactionsCountView(APIView):
             serialized_result = CommentPreviewCountSerializer(query_set, many=True)
             return Response(serialized_result.data, status=status.HTTP_200_OK)
         except Exception as e:
+            logger.exception("CommentReactionsCountView.get failed")
             return Response({"error": str(e)}, status=500)
 
 
@@ -1026,6 +1043,7 @@ class ActivityCountView(APIView):
             serialized_result = PostScoreSerializer(reaction_ranking, many=True)
             return Response(serialized_result.data, status=status.HTTP_200_OK)
         except Exception as e:
+            logger.exception("ActivityCountView.get failed")
             return Response({"error": str(e)}, status=500)
 
 
@@ -1163,6 +1181,7 @@ class CommentsView(APIView):
 
                 return data
         except Exception as e:
+            logger.exception("CommentsView.get failed")
             return Response({"error": str(e)}, status=500)
 
     def post(self, request):
@@ -1333,6 +1352,7 @@ class CommentsView(APIView):
 
             return Response("OK", status=status.HTTP_200_OK)
         except Exception as e:
+            logger.exception("CommentsView.post failed")
             return Response({"error": str(e)}, status=500)
 
     def put(self, request):
@@ -1372,6 +1392,7 @@ class CommentsView(APIView):
         except PermissionDenied:
             raise
         except Exception as e:
+            logger.exception("CommentsView.put failed")
             return Response({"error": str(e)}, status=500)
 
     def delete(self, request):
@@ -1466,6 +1487,7 @@ class CommentsView(APIView):
         except PermissionDenied:
             raise
         except Exception as e:
+            logger.exception("CommentsView.delete failed")
             return Response({"error": str(e)}, status=500)
 
 
@@ -1494,6 +1516,7 @@ class PostSaveView(APIView):
 
             return data
         except Exception as e:
+            logger.exception("PostSaveView.get failed")
             return Response({"error": str(e)}, status=500)
 
     def post(self, request):
@@ -1514,6 +1537,7 @@ class PostSaveView(APIView):
                 status=200,
             )
         except Exception as e:
+            logger.exception("PostSaveView.post failed")
             return Response({"error": str(e)}, status=500)
 
     def delete(self, request):
@@ -1530,6 +1554,7 @@ class PostSaveView(APIView):
                 status=200,
             )
         except Exception as e:
+            logger.exception("PostSaveView.delete failed")
             return Response({"error": str(e)}, status=500)
 
 
@@ -1597,6 +1622,7 @@ class LinkPreviewView(APIView):
 
             return Response(result or _empty_preview(), status=200)
         except Exception as e:
+            logger.exception("LinkPreviewView.post failed")
             return Response({"error": str(e)}, status=500)
 
 
@@ -1674,4 +1700,5 @@ class NewsfeedPostSearchView(APIView):
                 [serialize_post_hit(post) for post in page]
             )
         except Exception as e:
+            logger.exception("NewsfeedPostSearchView.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)

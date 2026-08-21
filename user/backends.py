@@ -7,8 +7,11 @@ from user_service.utils.crypto import decrypt_nonce
 from user_service.services.redis import RedisPubSubClient
 from .services.mongohelpers import SessionService
 from django.core.exceptions import PermissionDenied
+import logging
 import time
 import uuid
+
+logger = logging.getLogger(__name__)
 
 jwt = JWTTools
 
@@ -119,14 +122,20 @@ class AutheticationBackend(BaseBackend):
             if decoded_header["entity"]:
                 entity = Entity.objects.get(id=uuid.UUID(decoded_header["entity"]))
                 request.entity = entity
+                # `request` here is DRF's Request wrapper, and plain attribute
+                # assignment on it does not reach the Django HttpRequest
+                # underneath - only DRF's own `user` setter does that. Mirror
+                # it for `entity` so middleware (which only ever sees the
+                # HttpRequest) can report which entity a request acted as.
+                setattr(request._request, "entity", entity)
 
             return (user, True)
         except Account.DoesNotExist:
             raise PermissionDenied("Account does not exist")
         except PermissionDenied:
             raise
-        except Exception as ex:
-            print(ex)
+        except Exception:
+            logger.exception("Authentication failed while querying account")
             raise PermissionDenied("Error querying account")
 
     def get_user(self, user_id):

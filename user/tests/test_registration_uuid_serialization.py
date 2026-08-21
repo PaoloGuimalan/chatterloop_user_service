@@ -79,6 +79,80 @@ class RegistrationUuidSerializationTests(TestCase):
         # code-verification step for this path.
         self.assertTrue(account.is_verified)
 
+    def test_third_party_auto_registration_with_mononym(self):
+        """
+        Google omits `family_name` entirely for single-name (mononym)
+        profiles. The auto-registration path used to split `given_name` on
+        spaces and index [1] unconditionally, so a one-word name raised
+        IndexError ("list index out of range") - surfaced to the client as a
+        500. Because the account is never created, retrying reads as a
+        failure on BOTH "login" and "sign up": every attempt re-enters this
+        same registration branch.
+        """
+        service_id = f"test-azp-{uuid.uuid4()}"
+        TPAuthentication.objects.create(service_id=service_id, service_type="google")
+        email = f"{uuid.uuid4()}@example.com"
+
+        token = JWTTools.encoder(
+            {
+                "azp": service_id,
+                "email": email,
+                "given_name": "Madonna",
+            }
+        )
+
+        request = self.factory.post(
+            "/api/user/tp_auth",
+            {"token": token},
+            format="json",
+            HTTP_DEVICE_TOKEN=self.device_token,
+        )
+        response = ThirdPartyAuthentication.as_view()(request)
+        response.render()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["status"])
+
+        account = Account.objects.get(email=email)
+        self.assertEqual(account.first_name, "Madonna")
+        # last_name is non-null on Account, so it takes the same "N/A"
+        # sentinel create_user() already uses for an absent middle_name.
+        self.assertEqual(account.last_name, "N/A")
+
+    def test_third_party_auto_registration_with_multiword_given_name(self):
+        """
+        Some Google accounts have no `family_name` but pack the full name
+        into `given_name`. Splitting off the LAST word keeps multi-word
+        given names intact instead of dropping everything after the second
+        word, as the old split(" ")[0]/[1] did.
+        """
+        service_id = f"test-azp-{uuid.uuid4()}"
+        TPAuthentication.objects.create(service_id=service_id, service_type="google")
+        email = f"{uuid.uuid4()}@example.com"
+
+        token = JWTTools.encoder(
+            {
+                "azp": service_id,
+                "email": email,
+                "given_name": "Juan Miguel Dela Cruz",
+            }
+        )
+
+        request = self.factory.post(
+            "/api/user/tp_auth",
+            {"token": token},
+            format="json",
+            HTTP_DEVICE_TOKEN=self.device_token,
+        )
+        response = ThirdPartyAuthentication.as_view()(request)
+        response.render()
+
+        self.assertEqual(response.status_code, 200)
+
+        account = Account.objects.get(email=email)
+        self.assertEqual(account.first_name, "Juan Miguel Dela")
+        self.assertEqual(account.last_name, "Cruz")
+
     def test_regular_registration_does_not_crash(self):
         email = f"{uuid.uuid4()}@example.com"
         request = self.factory.post(

@@ -44,6 +44,9 @@ from entity.models import Connection, Follow
 from entity.utils import mutual_count_subquery
 from user.models import Account
 from user.utils.blocking import get_blocked_account_ids
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Pagination(PageNumberPagination):
@@ -330,6 +333,7 @@ class SearchPeopleV2(APIView):
                 [normalize_person(row, acting_entity_id) for row in page]
             )
         except Exception as e:
+            logger.exception("SearchPeopleV2.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -359,6 +363,7 @@ class SearchRealmsV2(APIView):
                 [normalize_realm(row) for row in page]
             )
         except Exception as e:
+            logger.exception("SearchRealmsV2.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -441,6 +446,7 @@ class SearchOverviewV2(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("SearchOverviewV2.get failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,

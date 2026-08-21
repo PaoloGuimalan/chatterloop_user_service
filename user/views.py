@@ -79,6 +79,9 @@ from community.annotations import my_role_annotation
 from community.serializers import RealmSerializer
 import bcrypt
 import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 jwt = JWTTools
 
@@ -443,6 +446,7 @@ class UserAuthentication(APIView):
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
         except Exception as e:
+            logger.warning("UserAuthentication.post rejected the request: %s", e)
             return Response(
                 {"status": False, "message": f"{e}"},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -528,10 +532,21 @@ class ThirdPartyAuthentication(APIView):
                         email = decoded_token["email"]
 
                         if last_name is None:
-                            split_name = first_name.split(" ")
+                            # Google omits `family_name` for single-name
+                            # (mononym) profiles, and for some accounts packs
+                            # the full name into `given_name`. Split off the
+                            # LAST word as the surname so multi-word given
+                            # names survive ("Juan Miguel Dela Cruz" ->
+                            # "Juan Miguel Dela" / "Cruz"). A one-word name has
+                            # no surname to take at all - fall back to the same
+                            # "N/A" sentinel create_user() uses for
+                            # middle_name, since last_name is non-null.
+                            split_name = first_name.strip().rsplit(" ", 1)
 
-                            first_name = split_name[0]
-                            last_name = split_name[1]
+                            if len(split_name) == 2:
+                                first_name, last_name = split_name
+                            else:
+                                last_name = "N/A"
 
                         create_user_query = create_user(
                             first_name,
@@ -607,7 +622,7 @@ class ThirdPartyAuthentication(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
         except Exception as e:
-            print(e)
+            logger.exception("Third-party authentication failed")
             return Response(
                 {"status": False, "message": f"{e}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -697,6 +712,7 @@ class UserContacts(APIView):
                 return Response(serialized_result.data, status=status.HTTP_200_OK)
 
         except Exception as e:
+            logger.exception("UserContacts.get failed")
             return Response(
                 {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
@@ -906,6 +922,7 @@ class UserContacts(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("UserContacts.post failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def put(self, request):
@@ -1106,6 +1123,7 @@ class UserContacts(APIView):
                     status=status.HTTP_200_OK,
                 )
         except Exception as e:
+            logger.exception("UserContacts.put failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def delete(self, request):
@@ -1300,6 +1318,7 @@ class UserContacts(APIView):
                     {"message": message_response}, status=status.HTTP_200_OK
                 )
         except Exception as e:
+            logger.exception("UserContacts.delete failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -1390,6 +1409,7 @@ class UserSearch(APIView):
             return data
 
         except Exception as e:
+            logger.exception("UserSearch.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -1542,6 +1562,7 @@ class UserAccountManagement(APIView):
             )
 
         except Exception as e:
+            logger.exception("UserAccountManagement.post failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1631,6 +1652,7 @@ class UserAccountManagement(APIView):
             )
 
         except Exception as e:
+            logger.exception("UserAccountManagement.put failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1647,6 +1669,7 @@ class UserAccountManagement(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("UserAccountManagement.delete failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1665,6 +1688,7 @@ class AccountDataExport(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("AccountDataExport.get failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1695,6 +1719,7 @@ class PolicyDocumentList(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("PolicyDocumentList.get failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1731,6 +1756,7 @@ class PolicyConsentAccept(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("PolicyConsentAccept.post failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1775,6 +1801,7 @@ class CodeVerification(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         except Exception as e:
+            logger.exception("CodeVerification.post failed")
             return Response(
                 {"status": False, "message": f"Error verifying code: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1978,6 +2005,7 @@ class PublicAccountDeletion(APIView):
         try:
             delete_account(account, account.entity)
         except Exception as e:
+            logger.exception("PublicAccountDeletion._confirm failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2056,6 +2084,7 @@ class ResendVerificationCode(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("ResendVerificationCode.post failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2124,6 +2153,7 @@ class BlockedUserList(APIView):
             data = [self._serialize_blocked(block) for block in blocks]
             return Response({"status": True, "data": data}, status=status.HTTP_200_OK)
         except Exception as e:
+            logger.exception("BlockedUserList.get failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2181,6 +2211,7 @@ class BlockedUserList(APIView):
                 status=status.HTTP_201_CREATED,
             )
         except Exception as e:
+            logger.exception("BlockedUserList.post failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2205,6 +2236,7 @@ class BlockedUserList(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("BlockedUserList.delete failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2247,6 +2279,7 @@ class DeviceSessionList(APIView):
             ]
             return Response({"status": True, "data": data}, status=status.HTTP_200_OK)
         except Exception as e:
+            logger.exception("DeviceSessionList.get failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2283,6 +2316,7 @@ class DeviceSessionList(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("DeviceSessionList.delete failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2378,6 +2412,7 @@ class PokeUser(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("PokeUser.post failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2454,6 +2489,7 @@ class ReportCreate(APIView):
                 ),
             )
         except Exception as e:
+            logger.exception("ReportCreate.post failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,

@@ -40,6 +40,9 @@ from entity.services.follows import (
 from entity.services.realtime import publish_profile_relationship_update
 from user.services.mongohelpers import NotificationService
 from user.utils.blocking import is_blocked
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Pagination(PageNumberPagination):
@@ -118,6 +121,7 @@ class TopRealms(APIView):
 
             return data
         except Exception as e:
+            logger.exception("TopRealms.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -189,6 +193,7 @@ class MyRealms(APIView):
 
             return data
         except Exception as e:
+            logger.exception("MyRealms.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def put(self, request):
@@ -222,6 +227,7 @@ class MyRealms(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("MyRealms.put failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -301,6 +307,7 @@ class FollowRealmView(APIView):
 
             return data
         except Exception as e:
+            logger.exception("FollowRealmView.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @staticmethod
@@ -377,7 +384,7 @@ class FollowRealmView(APIView):
             }
             RedisPubSubClient.publish_json(f"events_{followee.id}", data)
         except Exception as err:
-            print(f"Failed to send follow notification: {err}")
+            logger.exception("Failed to send follow notification")
 
     def post(self, request):
         user = self.request.user
@@ -449,6 +456,7 @@ class FollowRealmView(APIView):
                 status=status.HTTP_201_CREATED,
             )
         except Exception as e:
+            logger.exception("FollowRealmView.post failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def put(self, request):
@@ -533,6 +541,7 @@ class FollowRealmView(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("FollowRealmView.put failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @staticmethod
@@ -581,7 +590,7 @@ class FollowRealmView(APIView):
                 follower.id, followee.id, "follow_request_approved"
             )
         except Exception as err:
-            print(f"Failed to send follow approval notification: {err}")
+            logger.exception("Failed to send follow approval notification")
 
     def delete(self, request):
         user = self.request.user
@@ -633,6 +642,7 @@ class FollowRealmView(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("FollowRealmView.delete failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -725,6 +735,7 @@ class JoinGroupRealmV2(APIView):
                 status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("JoinGroupRealmV2.post failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -781,6 +792,7 @@ class RealmMembersView(APIView):
 
             return data
         except Exception as e:
+            logger.exception("RealmMembersView.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -833,6 +845,7 @@ class FollowersView(APIView):
 
             return data
         except Exception as e:
+            logger.exception("FollowersView.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def delete(self, request):
@@ -873,6 +886,7 @@ class FollowersView(APIView):
                 status=status.HTTP_201_CREATED,
             )
         except Exception as e:
+            logger.exception("FollowersView.delete failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -897,7 +911,7 @@ class InviteView(APIView):
                 },
             )
         except Exception as err:
-            print(f"Failed to publish {event} event: {err}")
+            logger.exception("Failed to publish %s event", event)
 
     # The conference SSE events below are intentionally payload-light: they
     # only signal "this list changed, refetch it" with the realm_id. The
@@ -1051,6 +1065,7 @@ class InviteView(APIView):
                 status=status.HTTP_201_CREATED,
             )
         except Exception as e:
+            logger.exception("InviteView.post failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def get(self, request):
@@ -1137,6 +1152,7 @@ class InviteView(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("InviteView.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def patch(self, request):
@@ -1268,6 +1284,7 @@ class InviteView(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("InviteView.patch failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def delete(self, request):
@@ -1303,4 +1320,5 @@ class InviteView(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("InviteView.delete failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)

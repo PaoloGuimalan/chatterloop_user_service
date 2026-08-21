@@ -2,6 +2,9 @@ import hashlib
 import os
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from dotenv import load_dotenv
+import logging
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -28,5 +31,5 @@ def decrypt_nonce(received_nonce):
             "random": random
         }
     except Exception as e:
-        print(f"Nonce Decryption Failed: {e}")
+        logger.warning("Nonce decryption failed", exc_info=True)
         return None

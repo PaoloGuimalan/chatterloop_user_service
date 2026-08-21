@@ -9,6 +9,9 @@ from ..models import UserEngagementLog
 from django.utils.timezone import now, is_naive, make_aware, get_current_timezone
 from django.utils.dateparse import parse_datetime
 import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def create_entity(type):
@@ -39,7 +42,7 @@ def create_user(
             middle_name = middle_name.strip()
 
         if Account.objects.filter(email=email).exists():
-            print("Email already in use")
+            logger.warning("Registration rejected: email already in use")
             raise ValueError("Email already in use")
 
         username = generate_unique_username(first_name)
@@ -82,7 +85,7 @@ def create_user(
 
         return new_user
     except Exception as ex:
-        print(str(ex))
+        logger.exception("create_user failed")
         raise ValueError(str(ex))
 
 
@@ -105,5 +108,5 @@ def save_profile_visit(entity, profile_id, target_type):
         return log
 
     except Exception as ex:
-        print(ex)
+        logger.exception("save_profile_visit failed")
         return None

@@ -202,5 +202,5 @@ class RabbitMQClient:
             try:
                 cls._connection.release()
             except Exception:
-                pass
+                logger.debug("RabbitMQClient.close failed (ignored)", exc_info=True)
             cls._connection = None

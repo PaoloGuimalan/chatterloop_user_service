@@ -30,6 +30,9 @@ from django.db.models.functions import Coalesce
 from entity.models import Connection, Follow
 from entity.utils import entity_side_is_visible, mutual_count_subquery
 from user.utils.blocking import get_blocked_account_ids
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Pagination(PageNumberPagination):
@@ -392,6 +395,7 @@ class NetworkOverview(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("NetworkOverview.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -419,6 +423,7 @@ class NetworkConnections(APIView):
             ]
             return paginator.get_paginated_response(results)
         except Exception as e:
+            logger.exception("NetworkConnections.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -443,6 +448,7 @@ class NetworkFollowers(APIView):
             ]
             return paginator.get_paginated_response(results)
         except Exception as e:
+            logger.exception("NetworkFollowers.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -470,6 +476,7 @@ class NetworkFollowRequests(APIView):
             ]
             return paginator.get_paginated_response(results)
         except Exception as e:
+            logger.exception("NetworkFollowRequests.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -494,6 +501,7 @@ class NetworkFollowing(APIView):
             ]
             return paginator.get_paginated_response(results)
         except Exception as e:
+            logger.exception("NetworkFollowing.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

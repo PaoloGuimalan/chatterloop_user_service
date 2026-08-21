@@ -8,6 +8,9 @@ from community.models import Realm, Member
 from entity.permissions import MemberRole
 from .utils.jwt_tools import JWTTools
 from .services.mongohelpers import SessionService
+import logging
+
+logger = logging.getLogger(__name__)
 
 jwt = JWTTools
 
@@ -118,6 +121,7 @@ class EntitySwitch(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("EntitySwitch.post failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -171,6 +175,7 @@ class EntitySwitchBack(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            logger.exception("EntitySwitchBack.post failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,

@@ -18,6 +18,9 @@ from .serializers import EntrySerializer, TagSerializer, MoodSerializer
 from django.utils import timezone
 from datetime import datetime
 from entity.services.follows import get_profile_relationship_state
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Pagination(PageNumberPagination):
@@ -117,6 +120,7 @@ class DiaryTotalView(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as ex:
+            logger.exception("DiaryTotalView.get failed")
             return Response(str(ex), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -146,6 +150,7 @@ class DiaryListView(APIView):
             return data
 
         except Exception as ex:
+            logger.exception("DiaryListView.get failed")
             return Response(str(ex), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -170,6 +175,7 @@ class MoodListView(APIView):
             return data
 
         except Exception as ex:
+            logger.exception("MoodListView.get failed")
             return Response(str(ex), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -205,6 +211,7 @@ class DiaryCRUDView(APIView):
 
             return Response(serialized_response.data, status=status.HTTP_200_OK)
         except Exception as ex:
+            logger.exception("DiaryCRUDView.get failed")
             return Response(str(ex), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def post(self, request):
@@ -299,4 +306,5 @@ class DiaryCRUDView(APIView):
 
                 return Response(serialized_response.data, status=status.HTTP_200_OK)
         except Exception as ex:
+            logger.exception("DiaryCRUDView.post failed")
             return Response(str(ex), status=status.HTTP_500_INTERNAL_SERVER_ERROR)

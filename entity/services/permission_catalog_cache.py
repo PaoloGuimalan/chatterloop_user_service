@@ -26,6 +26,9 @@ explicitly below, falling back to a direct DB query rather than raising.
 import json
 
 from django_redis import get_redis_connection
+import logging
+
+logger = logging.getLogger(__name__)
 
 CATALOG_CACHE_KEY = "permcache:catalog:v1"
 ROLE_MATRIX_CACHE_KEY = "permcache:role_matrix:v1"
@@ -39,7 +42,10 @@ def _redis_get(key):
         value = conn.get(key)
         return value.decode() if value is not None else None
     except Exception as err:
-        print(f"Permission cache read failed for {key!r}, falling back to DB:", err)
+        logger.warning(
+            "Permission cache read failed for %r, falling back to DB", key,
+            exc_info=True,
+        )
         return None
 
 
@@ -48,14 +54,20 @@ def _redis_set(key, value):
         conn = get_redis_connection("default")
         conn.set(key, value, ex=CACHE_TTL_SECONDS)
     except Exception as err:
-        print(f"Permission cache write failed for {key!r} (non-fatal):", err)
+        logger.warning(
+            "Permission cache write failed for %r (non-fatal)", key,
+            exc_info=True,
+        )
 
 
 def _redis_delete(key):
     try:
         get_redis_connection("default").delete(key)
     except Exception as err:
-        print(f"Permission cache invalidation failed for {key!r} (non-fatal):", err)
+        logger.warning(
+            "Permission cache invalidation failed for %r (non-fatal)", key,
+            exc_info=True,
+        )
 
 
 def get_catalog():
