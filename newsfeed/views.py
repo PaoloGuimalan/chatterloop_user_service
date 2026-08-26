@@ -81,6 +81,7 @@ from entity.ownership import assert_owns
 from entity.permissions import Permission
 from entity.drf_permissions import RequiresPermission
 from entity.services.follows import get_profile_relationship_state
+from newsfeed.services.content_tagging import queue_comment
 from newsfeed.services.post_visibility import visible_posts_filter, can_view_post
 import logging
 
@@ -1255,6 +1256,12 @@ class CommentsView(APIView):
                         "is_decrease": False,
                     },
                 )
+
+                # Moderation and interest tagging for the comment itself.
+                # No-ops when the moderation service is offline - its scour
+                # picks the comment up later - so commenting never waits on it
+                # and never fails because of it.
+                queue_comment(comment)
 
                 # Entities already pinged for THIS comment, so a mention does
                 # not arrive as a second notification for the same event.
