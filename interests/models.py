@@ -1,3 +1,4 @@
+import re
 import uuid
 
 from django.db import models
@@ -14,6 +15,38 @@ from entity.permissions import PermissionEffect
 MAX_INTEREST_DEPTH = 5
 
 
+# Any run of whitespace - spaces, tabs, newlines - so a pasted tag normalises
+# the same as a typed one.
+WHITESPACE_RUN = re.compile(r"\s+")
+
+
+def display_name(raw_name):
+    """What people read: trimmed, runs collapsed, spaces KEPT."""
+    return WHITESPACE_RUN.sub(" ", (raw_name or "").strip())
+
+
+def normalize_key(raw_name):
+    """The unique key: whitespace removed entirely, lowercased.
+
+    So "news and culture", "News And Culture" and "newsandculture" are one
+    interest rather than three - a user typing into the diary picker cannot
+    create a near-duplicate of an existing interest just by spacing it
+    differently.
+
+    ONE function, used by BOTH Interest.save() and get_or_create_by_name().
+    They previously computed this separately, and when the manager was updated
+    without save(), save() silently overwrote the manager's key on the way to
+    the database - a lookup would miss, the create would collide, and the only
+    symptom was an IntegrityError naming a key nothing appeared to have
+    written. Sharing the function is what makes that class of bug impossible.
+
+    moderation_service/core/vocabulary.py::normalize mirrors this exactly. If
+    the two disagree, that service stops finding existing rows and starts
+    creating duplicates of them.
+    """
+    return WHITESPACE_RUN.sub("", display_name(raw_name)).lower()
+
+
 class InterestManager(models.Manager):
     def get_or_create_by_name(self, raw_name):
         """
@@ -24,10 +57,29 @@ class InterestManager(models.Manager):
         pre-existing tag-creation code paths (EntrySerializer._handle_tags
         and DiaryCRUDView.post) used to each do this differently, with
         divergent dedup semantics - this replaces both.
+
+        NAME AND KEY ARE NORMALISED DIFFERENTLY, ON PURPOSE
+        ---------------------------------------------------
+        `name` is what people read - in the admin, on a diary tag chip, in an
+        automated report's description - so it keeps its spaces and only has
+        runs collapsed: "News  and  Culture" becomes "News and Culture".
+
+        `normalized_name` is the KEY, and it has spaces removed entirely:
+        "newsandculture". That makes "news and culture", "News And Culture"
+        and "newsandculture" one interest rather than three, which is the
+        whole point - a user typing an interest into the diary picker cannot
+        create a near-duplicate of an existing one just by spacing it
+        differently.
+
+        Anything matching on this key has to squash its input the same way.
+        moderation_service/core/vocabulary.py::normalize mirrors it exactly;
+        if the two ever disagree, that service stops finding existing rows and
+        starts creating duplicates of them.
         """
-        cleaned = raw_name.strip()
-        normalized = cleaned.lower()
-        return self.get_or_create(normalized_name=normalized, defaults={"name": cleaned})
+        cleaned = display_name(raw_name)
+        return self.get_or_create(
+            normalized_name=normalize_key(cleaned), defaults={"name": cleaned}
+        )
 
 
 class Interest(models.Model):
@@ -67,7 +119,18 @@ class Interest(models.Model):
         ]
 
     def save(self, *args, **kwargs):
-        self.normalized_name = self.name.strip().lower()
+        # normalized_name is derived, never set by a caller - this is the one
+        # place it is written. See normalize_key for why both it and the
+        # manager go through the same function.
+        self.name = display_name(self.name)
+        self.normalized_name = normalize_key(self.name)
+
+        # update_fields is honoured by save(), so a caller updating only
+        # `name` would otherwise leave a stale key behind.
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and "name" in update_fields:
+            kwargs["update_fields"] = set(update_fields) | {"normalized_name"}
+
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -158,9 +221,16 @@ class PostInterestLink(models.Model):
 
     SOURCE_MANUAL = "manual"
     SOURCE_CONTENT_PROCESSING = "content_processing"
+    # A hashtag the author typed into the caption or a comment. Kept distinct
+    # from "manual" - which means they picked it out of the interest picker -
+    # because the two say different things about intent, and from
+    # "content_processing", which is inference. A hashtag is neither: it is a
+    # declaration, extracted by regex at creation time with no model involved.
+    SOURCE_HASHTAG = "hashtag"
     SOURCE_CHOICES = [
         (SOURCE_MANUAL, "Manual"),
         (SOURCE_CONTENT_PROCESSING, "Content Processing"),
+        (SOURCE_HASHTAG, "Hashtag"),
     ]
 
     id = models.BigAutoField(primary_key=True)

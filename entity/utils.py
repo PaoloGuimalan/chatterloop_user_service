@@ -39,6 +39,35 @@ def get_entity_name(entity):
     return str(entity.id)
 
 
+def get_entity_profile_picture(entity):
+    """
+    URL of this entity's profile picture, or None when it has none.
+
+    Both concrete types store it on a `profile` column but disagree on the
+    sentinel for "no picture" - an Account defaults to "none" and a Realm to
+    "N/A" - so a caller that tests only one of them ends up rendering the
+    other as an image URL and getting a broken image. Both are treated as
+    absent here.
+
+    Returns None rather than either sentinel: this is for callers building
+    fresh payloads, where a null is unambiguous. EmbeddedRealmSerializer
+    normalises to the "none" string instead, because existing clients already
+    test for that and changing it would break them.
+    """
+    account = getattr(entity, "users", None)
+    if account is not None:
+        profile = account.profile
+    else:
+        realm = getattr(entity, "realms", None)
+        if realm is None:
+            return None
+        profile = realm.profile
+
+    if not profile or profile in ("N/A", "none"):
+        return None
+    return profile
+
+
 def get_entity_profile_path(entity):
     """
     URL path segment for this entity's public profile - the Account's

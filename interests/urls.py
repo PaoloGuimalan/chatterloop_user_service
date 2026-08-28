@@ -8,6 +8,12 @@ urlpatterns = [
     path("", views.InterestListView.as_view(), name="interest-list"),
     path("mine/top/", views.MyTopInterestsView.as_view(), name="my-top-interests"),
     path("trending/", views.TrendingInterestsView.as_view(), name="trending-interests"),
+    path("popular/", views.PopularTopicsView.as_view(), name="popular-topics"),
+    path(
+        "topics/<str:slug>/posts/",
+        views.TopicPostsView.as_view(),
+        name="topic-posts",
+    ),
     path(
         "overrides/",
         views.EntityInterestOverrideListView.as_view(),

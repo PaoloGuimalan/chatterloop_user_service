@@ -81,6 +81,7 @@ from entity.ownership import assert_owns
 from entity.permissions import Permission
 from entity.drf_permissions import RequiresPermission
 from entity.services.follows import get_profile_relationship_state
+from interests.services.hashtags import save_comment_hashtags
 from newsfeed.services.content_tagging import queue_comment
 from newsfeed.services.post_visibility import visible_posts_filter, can_view_post
 import logging
@@ -1262,6 +1263,19 @@ class CommentsView(APIView):
                 # picks the comment up later - so commenting never waits on it
                 # and never fails because of it.
                 queue_comment(comment)
+
+                # Hashtags, however, do NOT wait on that service. They need no
+                # model to read, so they are resolved here and linked to the
+                # parent post immediately - the author sees their tag land.
+                #
+                # Deliberately after the affinity publish above, which captures
+                # the post's interests as they stood BEFORE this comment. A
+                # hashtag introduced by this very comment should not also bump
+                # its author for having engaged with the topic they just
+                # invented. Links only - all scoring stays with the moderation
+                # sink, which is the single writer for it and reaches this
+                # comment by queue or by scour either way.
+                save_comment_hashtags(comment)
 
                 # Entities already pinged for THIS comment, so a mention does
                 # not arrive as a second notification for the same event.

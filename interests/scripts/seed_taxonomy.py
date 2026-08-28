@@ -24,7 +24,7 @@ are the numbers you get.
 
 from django.db import transaction
 
-from interests.models import Interest
+from interests.models import Interest, normalize_key
 from interests.taxonomy import LEAVE_ORPHANED, REPARENT, SEED
 
 
@@ -74,8 +74,13 @@ def _apply(report):
             _adopt(child, parent, report)
 
     for existing_name, category_name in REPARENT.items():
+        # normalize_key, not strip().lower(). Keys have no spaces, so the old
+        # form looked up "docker swarm" against a stored "dockerswarm" and
+        # found nothing - 9 of the 45 REPARENT entries are multi-word, and
+        # every one of them would have been reported as merely "missing" and
+        # left unparented.
         interest = Interest.objects.filter(
-            normalized_name=existing_name.strip().lower()
+            normalized_name=normalize_key(existing_name)
         ).first()
         if interest is None:
             # Not an error - the taxonomy is shared across environments and a
@@ -88,7 +93,11 @@ def _apply(report):
     # adopted as a category under different casing ("sports" becoming the
     # "Sports" category), and matching on the raw name reported it as a
     # stray root when it is the category itself.
-    category_keys = {name.strip().lower() for name in SEED}
+    # Same reason. 10 of the 20 categories are multi-word ("Food and Drink"),
+    # so with the old form none of them matched a stored key and the exclusion
+    # silently stopped excluding - reporting half the taxonomy's own top-level
+    # categories as stray orphans.
+    category_keys = {normalize_key(name) for name in SEED}
     report.orphans = sorted(
         Interest.objects.filter(parent__isnull=True)
         .exclude(normalized_name__in=category_keys)
@@ -126,7 +135,13 @@ def run(*args):
         print(f"{'not in this db':<15} {len(report.missing)} REPARENT names absent")
         print(f"                {', '.join(report.missing[:8])}")
 
-    unexpected = [name for name in report.orphans if name not in LEAVE_ORPHANED]
+    # Compared by key on both sides: report.orphans holds DISPLAY names while
+    # LEAVE_ORPHANED is written lowercase, so a direct comparison depended on
+    # the two happening to agree on casing and spacing.
+    allowed = {normalize_key(name) for name in LEAVE_ORPHANED}
+    unexpected = [
+        name for name in report.orphans if normalize_key(name) not in allowed
+    ]
     print()
     print(f"{'orphan roots':<15} {len(report.orphans)}")
     print(f"{'  expected':<15} {len(LEAVE_ORPHANED)} listed in LEAVE_ORPHANED")
