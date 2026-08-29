@@ -342,8 +342,8 @@ class TopicListView(APIView):
 
     Two surfaces, one endpoint, because they differ only in their ordering:
 
-      GET /api/interests/topics/            Explore's "Trending tags · See all"
-      GET /api/interests/topics/?q=sunset   Explore's Tags results
+      GET /api/interests/topics/            Explore's "Popular Topics · See all"
+      GET /api/interests/topics/?q=sunset   Explore's Topics results
 
     Separate from PopularTopicsView because that one is a WIDGET - capped at
     eight rows, fetched once when a surface mounts, and wrapped in the
@@ -353,8 +353,8 @@ class TopicListView(APIView):
 
     Searching matches BOTH forms of the name - see build_topic_queryset - and
     ranks exact over prefix over substring, then by trending score, so typing a
-    tag you already know puts it first rather than behind whatever busier topic
-    happens to contain the same letters.
+    topic you already know puts it first rather than behind whatever busier
+    topic happens to contain the same letters.
     """
 
     permission_classes = [IsAuthenticated]

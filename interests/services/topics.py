@@ -3,7 +3,7 @@ Building a topic ROW - the shape every surface that lists interests renders.
 
 Three surfaces now list topics rather than one: the Popular Topics widget
 (PopularTopicsView), the searchable/paginated topic directory behind Explore's
-"Trending tags · See all" and its Tags filter (TopicListView), and the Tags
+"Popular Topics · See all" and its Topics filter (TopicListView), and the Topics
 section of the search overview (entity.search_views.SearchOverviewV2). They all
 draw the same row - name, hashtag slug, category, participant faces - and they
 all have to answer the same privacy question the same way, so the answer lives
@@ -208,16 +208,16 @@ def build_topic_queryset(viewer, query=None):
 
     Two orderings, one queryset:
 
-      no query - the trending chart, unbounded. Same ranking as the Popular
+      no query - the popularity ranking, unbounded. Same order as the Popular
                  Topics widget, without its eight-row cap, so "See all" opens
                  onto more of the list the widget was showing the top of.
 
-      a query  - relevance first, trending second. A hit whose key IS the query
-                 outranks one that merely starts with it, which outranks one
-                 that merely contains it; inside a tier the busier topic wins.
-                 Typing "sunset" therefore lands #sunset above #sunsetseries
-                 above #goldensunset, rather than in score order across all
-                 three.
+      a query  - relevance first, popularity second. A hit whose key IS the
+                 query outranks one that merely starts with it, which outranks
+                 one that merely contains it; inside a tier the busier topic
+                 wins. Typing "sunset" therefore lands #sunset above
+                 #sunsetseries above #goldensunset, rather than in score order
+                 across all three.
 
     EMPTY TOPICS ARE EXCLUDED IN SQL, not after paging. The visible-post test is
     the same one counts and faces use, and a topic nobody may read has no row -
