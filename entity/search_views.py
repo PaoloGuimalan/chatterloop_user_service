@@ -1,10 +1,12 @@
 """
 Search v2 section endpoints - the redesigned Search page's data source.
 
-The page renders three independently-loadable sections (People / Realms /
+The page renders four independently-loadable sections (Tags / People / Realms /
 Content), each backed by its OWN paginated endpoint for the "See all"
-infinite scrolls, plus one overview endpoint that settles all three section
-previews in a single round-trip on page init / query change.
+infinite scrolls, plus one overview endpoint that settles every section preview
+in a single round-trip on page init / query change. Tags are the exception to
+"its own endpoint here": they are interests, so their list lives with the rest
+of the interests app at /api/interests/topics/.
 
 These are all NEW routes: the live mobile app pins the existing
 /api/entity/search/<query>/ and /api/user/search/<query>/ shapes, so those
@@ -377,10 +379,10 @@ class SearchOverviewV2(APIView):
     totals, and the detail endpoints' DRF pagination reports `count`
     anyway.
 
-    The posts builder is deferred-imported from newsfeed: this module is
-    imported at URLconf load, and newsfeed already imports back into
-    user/entity models, so a module-scope import would close a cycle (same
-    trick as entity/services/follows.py).
+    The posts and tags builders are deferred-imported from newsfeed and
+    interests: this module is imported at URLconf load, and both of those
+    import back into user/entity models, so a module-scope import would close
+    a cycle (same trick as entity/services/follows.py).
     """
 
     permission_classes = [IsAuthenticated]
@@ -388,6 +390,11 @@ class SearchOverviewV2(APIView):
     PEOPLE_PREVIEW = 8
     REALMS_PREVIEW = 6
     POSTS_PREVIEW = 5
+    # Tags are the shortest section on the screen and the most likely to be
+    # what was meant: somebody typing "sunset" into Explore is usually after
+    # the tag, not a person whose surname contains it. Five is enough to show
+    # the near-misses around an exact hit without pushing People below the fold.
+    TAGS_PREVIEW = 5
 
     def get(self, request, query):
         entity = request.entity
@@ -395,6 +402,10 @@ class SearchOverviewV2(APIView):
             from newsfeed.services.post_search import (
                 build_post_search_queryset,
                 serialize_post_hit,
+            )
+            from interests.services.topics import (
+                build_topic_queryset,
+                serialize_topics,
             )
 
             blocked_ids = get_blocked_account_ids(entity)
@@ -414,6 +425,9 @@ class SearchOverviewV2(APIView):
                 build_post_search_queryset(entity, query, blocked_ids)[
                     : self.POSTS_PREVIEW + 1
                 ]
+            )
+            tag_rows = list(
+                build_topic_queryset(entity, query)[: self.TAGS_PREVIEW + 1]
             )
 
             return Response(
@@ -440,6 +454,20 @@ class SearchOverviewV2(APIView):
                                 serialize_post_hit(post)
                                 for post in post_rows[: self.POSTS_PREVIEW]
                             ],
+                        },
+                        # Same row shape as /api/interests/popular/ and the
+                        # topic directory, so one client widget renders a tag
+                        # wherever it appears. drop_empty is off because
+                        # build_topic_queryset already excluded topics with
+                        # nothing visible - see interests/services/topics.py.
+                        "tags": {
+                            "has_more": len(tag_rows) > self.TAGS_PREVIEW,
+                            "results": serialize_topics(
+                                tag_rows[: self.TAGS_PREVIEW],
+                                {row.id: row.trending for row in tag_rows},
+                                entity,
+                                drop_empty=False,
+                            ),
                         },
                     },
                 },

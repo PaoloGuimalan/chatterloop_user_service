@@ -6,7 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.pagination import PageNumberPagination
 
-from django.db.models import Count, Exists, OuterRef, Q, Subquery, Value
+from django.db.models import Exists, OuterRef, Q, Subquery, Value
 from django.db.models.functions import Coalesce
 
 from .models import (
@@ -14,11 +14,10 @@ from .models import (
     EntityInterestAffinity,
     Interest,
     InterestTrendingScore,
-    PostInterestLink,
     normalize_key,
 )
+from .services.topics import build_topic_queryset, serialize_topics
 from entity.permissions import PermissionEffect
-from entity.utils import get_entity_name, get_entity_profile_picture
 from newsfeed.models import Post, PostSave, Reaction
 from newsfeed.serializers import PostSerializer
 from newsfeed.services.post_visibility import visible_posts_filter
@@ -285,7 +284,8 @@ class PopularTopicsView(APIView):
 
     permission_classes = [IsAuthenticated]
 
-    # A sidebar, not a directory. The design tops out at 8 rows.
+    # A sidebar, not a directory. The design tops out at 8 rows - the full
+    # list lives behind TopicListView, which is what "See all" opens.
     MAX_LIMIT = 8
     # Ranked interests examined to fill those rows. Trending score is earned
     # from diary entries and comments too, not only posts, so the top of the
@@ -293,13 +293,6 @@ class PopularTopicsView(APIView):
     # widget would render as a topic you cannot open. Candidates are therefore
     # over-fetched and then filtered down to those with something to show.
     CANDIDATE_MULTIPLE = 6
-    # Rows pulled to build the face stacks. Faces need the RECENT posters, and
-    # taking three per topic in SQL means a window function and a subquery
-    # wrapper for what is at most eight small groups. One bounded, ordered read
-    # grouped in Python is cheaper to run and far cheaper to read. The cap
-    # exists so a single very active topic cannot drag the whole query.
-    FACE_SCAN_LIMIT = 500
-    FACES_PER_TOPIC = 3
 
     def get(self, request):
         try:
@@ -323,52 +316,16 @@ class PopularTopicsView(APIView):
                     {"status": True, "data": []}, status=status.HTTP_200_OK
                 )
 
-            visible = Post.objects.filter(
-                visible_posts_filter(entity), deleted_at=None, is_archived=False
+            # Counts, faces and the empty-topic rule all come from
+            # interests.services.topics, shared with the searchable directory
+            # below and with the search overview's Tags section - see that
+            # module's header for why visibility is not optional here.
+            data = serialize_topics(
+                [row.interest for row in candidates],
+                {row.interest_id: row.score for row in candidates},
+                entity,
+                limit=limit,
             )
-
-            counts = {
-                row["interest_id"]: row["total"]
-                for row in PostInterestLink.objects.filter(
-                    interest_id__in=[row.interest_id for row in candidates],
-                    post__in=visible,
-                )
-                .values("interest_id")
-                .annotate(total=Count("post_id", distinct=True))
-            }
-
-            # Order is preserved from the ranking above, so filtering here
-            # demotes nothing - it only skips what has nothing to open.
-            ranked = [row for row in candidates if counts.get(row.interest_id)][:limit]
-            if not ranked:
-                return Response(
-                    {"status": True, "data": []}, status=status.HTTP_200_OK
-                )
-
-            faces = self._faces([row.interest_id for row in ranked], visible)
-
-            data = [
-                {
-                    "id": row.interest.id,
-                    "name": row.interest.name,
-                    # The hashtag form, so the widget can render "#northedsa"
-                    # and a click can round-trip to the same interest. This is
-                    # the normalized key, which is exactly what a hashtag
-                    # normalises to - see interests.services.hashtags.
-                    "slug": row.interest.normalized_name,
-                    # The taxonomy parent is the category. An interest with no
-                    # parent is not an error - discovery creates orphans that
-                    # seed_taxonomy has not adopted yet - so it falls back
-                    # rather than being hidden from the widget.
-                    "category": (
-                        row.interest.parent.name if row.interest.parent else "General"
-                    ),
-                    "score": round(row.score, 3),
-                    "posts": counts.get(row.interest_id, 0),
-                    "faces": faces.get(row.interest_id, []),
-                }
-                for row in ranked
-            ]
 
             return Response({"status": True, "data": data}, status=status.HTTP_200_OK)
         except Exception as e:
@@ -378,55 +335,58 @@ class PopularTopicsView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-    def _faces(self, interest_ids, visible):
-        """interest_id -> up to FACES_PER_TOPIC recent participants.
 
-        Deduplicated by entity, so a topic three of whose recent posts are by
-        the same person shows three different people where three exist rather
-        than the same avatar repeated.
-        """
-        rows = (
-            PostInterestLink.objects.filter(
-                interest_id__in=interest_ids, post__in=visible
+class TopicListView(APIView):
+    """
+    The topic DIRECTORY - one paginated, optionally-searched list of topics.
+
+    Two surfaces, one endpoint, because they differ only in their ordering:
+
+      GET /api/interests/topics/            Explore's "Trending tags · See all"
+      GET /api/interests/topics/?q=sunset   Explore's Tags results
+
+    Separate from PopularTopicsView because that one is a WIDGET - capped at
+    eight rows, fetched once when a surface mounts, and wrapped in the
+    {status, data} envelope the other interests endpoints use. This is a LIST:
+    page-sized, DRF-paginated like the other Explore "See all" screens, so an
+    infinite scroll can page it and read a real `count` off it.
+
+    Searching matches BOTH forms of the name - see build_topic_queryset - and
+    ranks exact over prefix over substring, then by trending score, so typing a
+    tag you already know puts it first rather than behind whatever busier topic
+    happens to contain the same letters.
+    """
+
+    permission_classes = [IsAuthenticated]
+    pagination_class = Pagination
+
+    def get(self, request):
+        try:
+            entity = getattr(request, "entity", None)
+            query = request.query_params.get("q", "")
+
+            queryset = build_topic_queryset(entity, query)
+
+            paginator = self.pagination_class()
+            page = paginator.paginate_queryset(queryset, request, view=self)
+
+            # drop_empty is off: build_topic_queryset already excluded topics
+            # with nothing visible, in SQL, so that `count` and the page length
+            # agree. Filtering again here would only ever remove rows the
+            # paginator has already counted.
+            data = serialize_topics(
+                page,
+                {interest.id: interest.trending for interest in page},
+                entity,
+                drop_empty=False,
             )
-            .select_related("post__entity__users", "post__entity__realms")
-            .order_by("-post__date_posted")[: self.FACE_SCAN_LIMIT]
-        )
-
-        faces = {}
-        seen = {}
-
-        for link in rows:
-            bucket = faces.setdefault(link.interest_id, [])
-            if len(bucket) >= self.FACES_PER_TOPIC:
-                continue
-
-            entity = link.post.entity
-            entity_seen = seen.setdefault(link.interest_id, set())
-            if entity.id in entity_seen:
-                continue
-            entity_seen.add(entity.id)
-
-            name = get_entity_name(entity)
-            bucket.append(
-                {
-                    "entity_id": str(entity.id),
-                    "name": name,
-                    "profile": get_entity_profile_picture(entity),
-                    # Still sent when a picture exists: it is the fallback the
-                    # client shows while the image loads, and the one it falls
-                    # back to permanently if the image 404s.
-                    "initials": _initials(name),
-                }
+            return paginator.get_paginated_response(data)
+        except Exception as e:
+            logger.exception("TopicListView.get failed")
+            return Response(
+                {"status": False, "message": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
-        return faces
-
-
-def _initials(name):
-    """Up to two initials for an avatar bubble."""
-    parts = [part for part in (name or "").split(" ") if part]
-    return "".join(part[0] for part in parts[:2]).upper() or "?"
 
 
 class TopicPostsView(APIView):
