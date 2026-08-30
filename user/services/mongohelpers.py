@@ -10,6 +10,17 @@ from ..ext_models.mongomodels import Session
 import uuid
 
 
+# Audience selectors, mirroring server/routes/users/index.js. A toUserID that
+# is one of these addresses MANY recipients; anything else is one entity.
+SYSTEM_AUDIENCE_ALL = "all"
+SYSTEM_AUDIENCE_PREFIXES = ("region:", "group:")
+
+
+def _is_audience_selector(to_user_id) -> bool:
+    tag = str(to_user_id or "")
+    return tag == SYSTEM_AUDIENCE_ALL or tag.startswith(SYSTEM_AUDIENCE_PREFIXES)
+
+
 class NotificationService:
     _instance = None
 
@@ -69,6 +80,24 @@ class NotificationService:
             else None
         )
 
+        # Read state is DERIVED, not taken from the caller.
+        #
+        # A notice addressed to one entity is personal, and a personal notice
+        # starts unread - an `isRead=True` on one means the recipient is never
+        # told about something that concerns only them. That is a silent
+        # failure, and this function's default used to be exactly it: `isRead`
+        # defaulted to True, and only the fact that every existing call site
+        # passes False explicitly kept it from happening.
+        #
+        # Broadcasts are the exception. A notice addressed to MANY people is
+        # one shared document that cannot carry per-viewer read state, so it is
+        # stored already-read: it still appears in everyone's System section,
+        # it just never badges and can never strand an unread count no read
+        # call could clear. Mirrors resolveNotificationIsRead in
+        # server/routes/users/index.js - the two must agree, because either can
+        # write a notification.
+        resolved_is_read = _is_audience_selector(toUserID)
+
         notif = Notification(
             notificationID=notification_id,
             referenceID=referenceID,
@@ -78,7 +107,7 @@ class NotificationService:
             content=content,
             date=date,
             type=type,
-            isRead=isRead,
+            isRead=resolved_is_read,
             target=target,
         )
         notif.save()
