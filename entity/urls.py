@@ -1,11 +1,18 @@
 from django.urls import path
 
-from entity import network_views, search_views, views
+from entity import moderation_views, network_views, search_views, views
 
 app_name = "entity"
 
 urlpatterns = [
     path("me/modules", views.MyAllowedModules.as_view(), name="my-allowed-modules"),
+    # The one read path that renders soft-deleted content, gated to the owner
+    # and staff - see entity/moderation_views.py.
+    path(
+        "moderation/<str:moderation_id>/",
+        moderation_views.ModerationDetailView.as_view(),
+        name="moderation-detail",
+    ),
     path("search/<str:query>/", views.EntitySearch.as_view(), name="entity-search"),
     # Search v2 section endpoints (redesigned Search page) - NEW routes; the
     # unified search/<query>/ above is pinned by post tagging and stays as-is.

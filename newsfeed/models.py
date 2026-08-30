@@ -68,8 +68,16 @@ class Post(models.Model):
     date_posted = models.DateTimeField(default=now)
     from_system = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(null=True, blank=True, default=None)
+    # ENTITY, not Account - matching Comment.deleted_by, which has always been
+    # entity-keyed.
+    #
+    # Two things were wrong with the Account version. A post deleted while
+    # acting as a PAGE recorded the person behind the page rather than the page
+    # itself, which is not who performed the deletion. And a non-user deleter -
+    # the moderation bot - could not be recorded at all, because a bot has no
+    # Account row to point at.
     deleted_by = models.ForeignKey(
-        Account,
+        Entity,
         null=True,
         blank=True,
         default=None,

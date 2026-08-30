@@ -180,6 +180,7 @@ INSTALLED_APPS = [
     "newsfeed",
     "diary",
     "entity",
+    "bot",
 ]
 
 # Silk profiles every request and stores request/response bodies, so it is a

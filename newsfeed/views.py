@@ -259,8 +259,10 @@ class NewsfeedView(APIView):
                 if entity is None or owned_count != len(post_ids):
                     raise PermissionDenied("You do not own all of the specified posts.")
 
+                # The ACTING entity, not the account behind it. Deleting while
+                # acting as a page used to record the person, not the page.
                 Post.objects.filter(post_id__in=post_ids).update(
-                    deleted_at=now(), deleted_by=user
+                    deleted_at=now(), deleted_by=entity
                 )
 
             return Response(

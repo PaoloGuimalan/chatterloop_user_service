@@ -18,6 +18,11 @@ def get_entity_display_username(entity):
     realm = getattr(entity, "realms", None)
     if realm is not None:
         return f"@{realm.slug}"
+    # A bot is the third concrete kind an Entity can back. Added last so the
+    # two existing branches are reached exactly as before.
+    bot = getattr(entity, "bots", None)
+    if bot is not None:
+        return f"@{bot.handle}"
     return str(entity.id)
 
 
@@ -36,6 +41,9 @@ def get_entity_name(entity):
     realm = getattr(entity, "realms", None)
     if realm is not None:
         return realm.name
+    bot = getattr(entity, "bots", None)
+    if bot is not None:
+        return bot.name
     return str(entity.id)
 
 
@@ -59,9 +67,13 @@ def get_entity_profile_picture(entity):
         profile = account.profile
     else:
         realm = getattr(entity, "realms", None)
-        if realm is None:
+        bot = getattr(entity, "bots", None)
+        if realm is not None:
+            profile = realm.profile
+        elif bot is not None:
+            profile = bot.profile
+        else:
             return None
-        profile = realm.profile
 
     if not profile or profile in ("N/A", "none"):
         return None

@@ -7,6 +7,7 @@ from mongoengine import (
     EmbeddedDocumentField,
     IntField,
     DateTimeField,
+    DictField,
 )
 
 from datetime import datetime
@@ -145,6 +146,37 @@ class Notification(Document):
     __v = IntField(db_field="__v")
 
     meta = {"collection": "notifications"}
+
+
+class ModerationRecord(Document):
+    """
+    READ-ONLY view of moderation_service's `moderation` collection.
+
+    Django never writes this - the service that produces a verdict owns it.
+    Declared here so the moderation-detail endpoint can read a record without
+    the verdict being duplicated into Postgres, where a re-analysis would leave
+    two records of one judgement disagreeing with each other.
+
+    Deliberately partial: only the fields that surface belong here. `strict:
+    False` is what marks a document as context-only, and the mapping is loose
+    (DictField) because the service owns that shape and adds to it - a strict
+    schema here would break on the service's next field.
+    """
+
+    moderationID = StringField(required=True)
+    targetID = StringField()
+    foreignID = ListField(StringField())
+    sourceType = StringField()
+    contentType = StringField()
+    entityID = StringField()
+
+    text = StringField()
+    transcription = StringField()
+    caption = StringField()
+
+    moderation = DictField()
+
+    meta = {"collection": "moderation", "strict": False}
 
 
 # END: Notifications Models

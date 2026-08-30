@@ -161,7 +161,7 @@ def delete_account(account, entity):
 
     with transaction.atomic():
         Post.objects.filter(entity=entity, deleted_at__isnull=True).update(
-            deleted_at=now(), deleted_by=account
+            deleted_at=now(), deleted_by=entity
         )
         Comment.objects.filter(entity=entity, deleted_at__isnull=True).update(
             deleted_at=now(), deleted_by=entity
