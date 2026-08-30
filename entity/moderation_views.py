@@ -33,7 +33,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from newsfeed.models import Comment, Post
+from django.db.models import Exists, OuterRef, Subquery, Value
+from django.db.models.functions import Coalesce
+
+from newsfeed.models import Comment, Post, PostSave, Reaction
+from newsfeed.serializers import PostSerializer
 from user.ext_models.mongomodels import ModerationRecord
 
 logger = logging.getLogger(__name__)
@@ -64,7 +68,7 @@ class ModerationDetailView(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            content = self._resolve_content(record)
+            content = self._resolve_content(record, request)
             if content is None:
                 # The record survives its content: a hard delete elsewhere, or a
                 # source type with nothing to show. Not an error - there is
@@ -107,7 +111,7 @@ class ModerationDetailView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-    def _resolve_content(self, record):
+    def _resolve_content(self, record, request):
         """The post or comment behind a moderation record, deleted or not.
 
         An ATTACHMENT's record targets the attachment, not the post - so the
@@ -148,35 +152,52 @@ class ModerationDetailView(APIView):
         if source != "post":
             post_id = next((f for f in foreign if f != target_id), None)
 
+        # Serialized with the SAME annotations the feed uses, because the
+        # client renders this through the ordinary PostItem rather than a
+        # bespoke read-only view - one renderer, so a removed post looks like
+        # the post it was. PostSerializer declares `entity_reaction` and
+        # `is_saved` as real fields, so they have to be annotated here or the
+        # serializer raises rather than omitting them.
+        viewer = getattr(request, "entity", None)
         post = (
-            Post.objects.select_related("entity")
-            .prefetch_related("references")
+            Post.objects.select_related("entity", "score")
+            .prefetch_related(
+                "tagging", "privacy_users", "references", "map_info", "preview"
+            )
+            .annotate(
+                is_saved=Exists(
+                    PostSave.objects.filter(post=OuterRef("pk"), entity=viewer)
+                ),
+                entity_reaction=Coalesce(
+                    Subquery(
+                        Reaction.objects.filter(
+                            post=OuterRef("pk"), entity=viewer
+                        ).values("emoji_id")[:1]
+                    ),
+                    Value(None),
+                ),
+            )
             .filter(post_id=post_id)
             .first()
         )
         if post is None:
             return None
 
-        return {
-            "owner_entity_id": post.entity_id,
-            "payload": {
-                "type": "post",
-                "id": post.post_id,
-                "caption": post.caption,
-                "content_type": post.content_type,
-                "date_posted": post.date_posted,
-                "deleted_at": post.deleted_at,
-                "is_removed": post.deleted_at is not None,
-                "references": [
-                    {
-                        "id": reference.reference_id,
-                        "reference": reference.reference,
-                        "media_type": reference.reference_media_type,
-                    }
-                    for reference in post.references.all()
-                ],
-            },
-        }
+        payload = PostSerializer(post).data
+        # Flags the client keys off, alongside the post's own fields.
+        payload["type"] = "post"
+        # WHICH attachment was judged, when the record is about one.
+        #
+        # Media moderation targets a single reference, not the post - a post
+        # with four photos and one violating frame produces a record whose
+        # targetID is that photo. Without this the review shows four images and
+        # leaves the reader guessing which one it is about.
+        payload["flagged_reference_id"] = (
+            target_id if source.endswith("_attachment") else None
+        )
+        payload["is_removed"] = post.deleted_at is not None
+
+        return {"owner_entity_id": post.entity_id, "payload": payload}
 
     def _verdict(self, record):
         """What the classifier decided, in the shape a person can read.
