@@ -138,14 +138,19 @@ def resolve_entity_target(raw_id):
 def entity_side_is_visible(field):
     """
     Q predicate for "the entity on `field` is a usable counterpart": an
-    active + verified user account, OR an active realm.
+    active + verified user account, an active realm, OR an active bot.
 
     Connections and follows are entity<->entity, so the old user-only form
     (`{field}__users__is_active=True, ...`) silently dropped every row whose
     side was a page - and returned nothing at all when the ACTING entity was
-    a page, since its own side could never match. Realms are deliberately not
-    required to be is_verified: for a realm that flag is a badge, not an
-    access gate (unlike accounts, where it gates email confirmation).
+    a page, since its own side could never match. Bots were the same omission
+    one kind later: a person who adds a bot as a contact, which is how a direct
+    conversation with one starts, had that connection filtered out of every
+    list it should appear in.
+
+    Realms and bots are deliberately not required to be is_verified: for a
+    realm that flag is a badge rather than an access gate (unlike accounts,
+    where it gates email confirmation), and a bot has no such flag at all.
 
     Usage:
         Connection.objects.filter(
@@ -156,12 +161,16 @@ def entity_side_is_visible(field):
     """
     from django.db.models import Q
 
-    return Q(
-        **{
-            f"{field}__users__is_active": True,
-            f"{field}__users__is_verified": True,
-        }
-    ) | Q(**{f"{field}__realms__is_active": True})
+    return (
+        Q(
+            **{
+                f"{field}__users__is_active": True,
+                f"{field}__users__is_verified": True,
+            }
+        )
+        | Q(**{f"{field}__realms__is_active": True})
+        | Q(**{f"{field}__bots__is_active": True})
+    )
 
 
 def mutual_count_subquery(entity, outer_field="entity_id"):

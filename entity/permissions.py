@@ -41,6 +41,24 @@ class Permission:
     # against, so it resolves via GLOBAL_PLATFORM_DEFAULT like the other
     # global capabilities, not via REALM_ROLE_DEFAULT_PERMISSIONS.
 
+    # --- Developer API capabilities ---
+    # Declared here because this repo owns the permission catalog; they are
+    # ENFORCED in services/developer_service, which owns the API they gate.
+    # Nothing in this repo checks them.
+    # Deliberately absent from GLOBAL_PLATFORM_DEFAULT below, which makes them
+    # DENY-BY-DEFAULT: has_permission() falls through to `return False` when a
+    # global permission has no default predicate, so these require an explicit
+    # EntityPermission grant row on the entity that is to hold them.
+    #
+    # Every other global permission defaults to _account_in_good_standing,
+    # which returns True for any entity WITHOUT an Account - realms and bots
+    # both - so seeding these the same way would have handed them to every bot
+    # on the platform the moment they were created. A capability that only
+    # exists to be delegated to a machine should be granted on purpose.
+    MESSAGES_READ = "messages.read"
+    NOTIFICATIONS_READ = "notifications.read"
+    EVENTS_SUBSCRIBE = "events.subscribe"
+
     # --- Realm-scope capabilities (resolved via Member.role unless overridden) ---
     REALM_UPDATE = "realm.update"
     REALM_INVITE_CREATE = "realm.invite.create"
@@ -87,6 +105,9 @@ class Permission:
         AI_PROMPT_ASSIST,
         WEBRTC_CALL_JOIN,
         REALM_SERVER_CREATE,
+        MESSAGES_READ,
+        NOTIFICATIONS_READ,
+        EVENTS_SUBSCRIBE,
     }
 
     REALM_SCOPED = {

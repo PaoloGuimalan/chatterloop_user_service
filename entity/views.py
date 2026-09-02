@@ -72,19 +72,26 @@ class Pagination(PageNumberPagination):
 
 class EntitySearch(APIView):
     """
-    Search v2 - unified entity search returning both users and realms/pages in
-    one normalized shape ({entity_id, type, display_name, handle, profile,
-    is_verified, realm_type}). Built for post tagging (tag a person OR a page),
-    but intended to become the go-forward search endpoint the rest of the app
-    migrates onto - hence the flexible filters below and the deliberate
+    Search v2 - unified entity search returning all three entity kinds in one
+    normalized shape ({entity_id, type, display_name, handle, profile,
+    is_verified, realm_type}). Built for post tagging (tag a person, a page OR
+    a bot), but intended to become the go-forward search endpoint the rest of
+    the app migrates onto - hence the flexible filters below and the deliberate
     decoupling from the user-only /api/user/search response (whose shape the
     Explore page and top-bar drawer still depend on).
 
     Query params:
-      - types: comma list of entity kinds to include. Default "user,realm".
+      - types: comma list of entity kinds to include. Default
+        "user,realm,bot".
       - realm_types: comma list of Realm.type values to include when realms are
         in scope, or "all" for no type filter. Default "page" - only public,
         profile-like pages are taggable today; widen later with no code change.
+
+    Bots are in the DEFAULT rather than opt-in because a bot nobody can find is
+    a bot nobody can add to a group or start a conversation with - discovery is
+    the first half of "acts like any other entity". System bots are excluded
+    (see _bot_queryset): the moderation bot is platform machinery, not somebody
+    you tag in a post.
     """
 
     permission_classes = [IsAuthenticated]
@@ -154,10 +161,33 @@ class EntitySearch(APIView):
             "is_action_by_entity": False,
         }
 
+    def _normalize_bot(self, row):
+        return {
+            "entity_id": row.get("entity_id"),
+            "type": "bot",
+            "display_name": row.get("name") or (row.get("handle") or ""),
+            "handle": row.get("handle") or "",
+            "profile": self._clean_profile(row.get("profile")),
+            # Deliberately never True. A bot is not a verified human or page,
+            # and borrowing that badge would say something the badge does not
+            # mean - the same call routes/users/index.js made on the Node side.
+            "is_verified": False,
+            "realm_type": None,
+            # A bot is not a connection target from search: you message it or
+            # add it to a group, you do not send it a contact request. Keys are
+            # still present so all three kinds share one shape and the client
+            # keeps its single rule ("no id -> no connection actions").
+            "id": row.get("id"),
+            "has_connection": False,
+            "connection_accomplished": False,
+            "connection_id": None,
+            "is_action_by_entity": False,
+        }
+
     def get(self, request, query):
         entity = request.entity
         try:
-            raw_kinds = request.query_params.get("types", "user,realm")
+            raw_kinds = request.query_params.get("types", "user,realm,bot")
             kinds = {t.strip() for t in raw_kinds.split(",") if t.strip()}
 
             raw_realm_types = request.query_params.get("realm_types", "page")
@@ -266,6 +296,32 @@ class EntitySearch(APIView):
                     )[:per_kind_limit]
                 )
                 results.extend(self._normalize_realm(r) for r in realms)
+
+            if "bot" in kinds:
+                # Local import: bot.models imports entity.models, so a
+                # module-level import here would close the cycle.
+                from bot.models import Bot
+
+                if query.startswith("@"):
+                    bot_filter = Q(handle__icontains=query.split("@", 1)[1])
+                else:
+                    bot_filter = Q(name__icontains=query) | Q(
+                        handle__icontains=query
+                    )
+
+                bots = (
+                    Bot.objects.filter(bot_filter, is_active=True)
+                    # Platform machinery, not a taggable entity. A user has no
+                    # reason to @mention the moderation bot in a post, and
+                    # offering it invites confusion about who is speaking.
+                    .exclude(is_system=True)
+                    .exclude(entity_id=entity.id)
+                    .exclude(entity_id__in=blocked_ids)
+                    .values("id", "entity_id", "name", "handle", "profile")[
+                        :per_kind_limit
+                    ]
+                )
+                results.extend(self._normalize_bot(b) for b in bots)
 
             # Prefix matches first (typing "jo" surfaces "John"/"jodoe" above
             # incidental substring hits), then alphabetical for stable ordering.

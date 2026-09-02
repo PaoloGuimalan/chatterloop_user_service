@@ -474,3 +474,157 @@ class Report(models.Model):
             f"{self.reporter_id} reported {self.target_type}:"
             f"{self.target_id or self.reported_entity_id}"
         )
+
+
+class Token(models.Model):
+    """
+    A long-lived API credential belonging to an Entity - table `entity_token`.
+
+    WHY THIS EXISTS
+    ---------------
+    Every inbound credential this platform understood was shaped like a person
+    at a browser: `AutheticationBackend` (and its Node twin `jwtchecker`) needs
+    an `origin`, a replay-checked `x-nonce`, a `device-token` matching a live
+    `UserSessions` row, and an `x-access-token` whose `userID` resolves in
+    `user_account`. A bot fails the last two structurally, not incidentally -
+    it has no account and no device - which is what `bot/models.py` meant by
+    "Authentication for user-owned bots is a separate problem and is not solved
+    here". This is that problem, solved.
+
+    Named `Token` rather than `EntityToken` on purpose: Django derives the
+    table from app + model, so `entity.Token` is physically `entity_token`
+    while `entity.EntityToken` would be `entity_entitytoken`. Migration 0013
+    established that this app does not pin `db_table` and takes Django's
+    default, so the model name is the only lever on the physical name - and
+    the physical name is the part other services type by hand.
+
+    WHY THE SECRET IS NOT HERE
+    --------------------------
+    `token_hash` is SHA-256 of the whole token string; the token itself is
+    returned exactly once, at issue, and is unrecoverable afterwards. A plain
+    hash with no salt or stretching is correct HERE and would not be for a
+    password: this secret is 32 bytes from `secrets.token_urlsafe`, so there is
+    no dictionary to run and no work factor that would meaningfully slow an
+    attacker who already has the column.
+
+    `prefix` exists so that verification is one indexed lookup rather than a
+    scan-and-hash over every row: the token carries its own prefix in the
+    clear, the prefix finds at most one row, and only then is a hash compared -
+    in constant time, so a near-miss leaks nothing through timing.
+
+    VERIFICATION LIVES ELSEWHERE
+    ---------------------------
+    Nothing in this repo reads this table at request time. developer_service
+    (Go) verifies these tokens and enforces their scopes; Django owns the
+    schema, the migrations and the ability to revoke a row from admin. The
+    token FORMAT is deliberately trivial - all hex, plain SHA-256, no salt or
+    framework encoding - precisely so the implementation that does the checking
+    can live in another language without a subtle disagreement.
+
+    WHAT `scopes` MEANS
+    -------------------
+    The permission codenames this token may exercise, from the same catalog
+    (`entity_permissioncatalogentry`) that every other permission check in the
+    platform reads. It is a CEILING, not a grant. A request is allowed only if
+    the scope is on the token AND `has_permission(entity, codename, realm)`
+    passes for the owning entity, so:
+
+      * a leaked token can never do more than its entity could;
+      * revoking a permission from the entity instantly narrows every token it
+        owns, with no token edit and no revocation list to fan out;
+      * a token can be deliberately narrower than its entity - a read-only
+        token for a bot that is otherwise allowed to post.
+
+    Stored as JSON rather than a join table to match `EntityPermission`, which
+    also holds a bare codename string rather than a FK to the catalog.
+    """
+
+    id = models.CharField(
+        max_length=40, default=uuid.uuid4, unique=True, primary_key=True
+    )
+
+    entity = models.ForeignKey(
+        Entity, on_delete=models.CASCADE, related_name="tokens"
+    )
+
+    # What this credential is for, in the words of whoever issued it. Shown in
+    # admin and returned by the introspection endpoint, because "which of these
+    # six tokens is the one the RAG pipeline uses" is otherwise unanswerable.
+    name = models.CharField(max_length=120)
+    description = models.TextField(blank=True, default="")
+
+    # The clear-text lookup half. Unique so a collision is a database error at
+    # issue time rather than an ambiguous verify later.
+    prefix = models.CharField(max_length=16, unique=True, db_index=True)
+
+    # SHA-256 hex of the full token string, so exactly 64 characters.
+    token_hash = models.CharField(max_length=64)
+
+    scopes = models.JSONField(default=list, blank=True)
+
+    # Optional confinement to a single realm. NULL means the token is not
+    # realm-confined and realm-scoped permissions resolve per request; a value
+    # pins every check on this token to that realm, so a token issued for one
+    # community cannot act in another even if its entity is a member of both.
+    realm = models.ForeignKey(
+        "community.Realm",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="entity_tokens",
+    )
+
+    created_by = models.ForeignKey(
+        Entity,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="tokens_created",
+    )
+
+    created_at = models.DateTimeField(default=now)
+
+    # NULL means no expiry. Allowed, and deliberately not the default the
+    # issuing helper hands out - a service credential that never expires is a
+    # decision someone should have to make, not one they fall into.
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    # Written on use, throttled (see entity/services/tokens.py) so a busy token
+    # does not turn every authenticated read into a write. Its purpose is
+    # answering "is this credential still in use" before revoking it, which
+    # minute-level accuracy serves perfectly well.
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    # Revocation is a timestamp rather than a delete so that an incident has an
+    # audit trail: which token, whose, and when it was cut off.
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["entity", "is_active"], name="entity_token_owner_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.prefix}...)"
+
+    @property
+    def is_expired(self) -> bool:
+        return self.expires_at is not None and self.expires_at <= now()
+
+    @property
+    def is_usable(self) -> bool:
+        """Live, unrevoked and unexpired. Says nothing about scopes."""
+        return self.is_active and self.revoked_at is None and not self.is_expired
+
+    def has_scope(self, codename: str) -> bool:
+        """Whether this token carries `codename`.
+
+        Only half of an authorization decision - the entity must also hold the
+        permission. Both halves are enforced in services/developer_service
+        (internal/auth), which owns the API these credentials authenticate to;
+        this repo owns the table and nothing else about them.
+        """
+        scopes = self.scopes or []
+        return codename in scopes

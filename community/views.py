@@ -769,17 +769,26 @@ class RealmMembersView(APIView):
             )
 
             if search:
+                # A Member's entity is any of the three kinds - a personal
+                # account, a page acting as itself, or a bot added to the realm
+                # - so searching only the account namespace made the other two
+                # unfindable in a list they are already in. The "@" branch
+                # additionally had the leading "@" left ON the term, so an
+                # explicit handle search matched nothing at all.
                 if search.startswith("@"):
+                    handle = search[1:]
                     realm_members_query_set = realm_members_query_set.filter(
-                        Q(entity__users__username__icontains=search)
+                        Q(entity__users__username__icontains=handle)
+                        | Q(entity__realms__slug__icontains=handle)
+                        | Q(entity__bots__handle__icontains=handle)
                     )
                 else:
                     realm_members_query_set = realm_members_query_set.filter(
-                        Q(
-                            Q(entity__users__first_name__icontains=search)
-                            | Q(entity__users__middle_name__icontains=search)
-                            | Q(entity__users__last_name__icontains=search)
-                        )
+                        Q(entity__users__first_name__icontains=search)
+                        | Q(entity__users__middle_name__icontains=search)
+                        | Q(entity__users__last_name__icontains=search)
+                        | Q(entity__realms__name__icontains=search)
+                        | Q(entity__bots__name__icontains=search)
                     )
 
             paginator = self.pagination_class()

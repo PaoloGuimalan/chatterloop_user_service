@@ -31,6 +31,12 @@ urlpatterns = [
         search_views.SearchRealmsV2.as_view(),
         name="entity-search-v2-realms",
     ),
+    # No UI yet - see build_bots_queryset for why the endpoint lands first.
+    path(
+        "search/v2/bots/<str:query>/",
+        search_views.SearchBotsV2.as_view(),
+        name="entity-search-v2-bots",
+    ),
     # Network section endpoints (redesigned Contacts page) - NEW routes;
     # /api/user/contacts is pinned by mobile and stays as-is.
     path(

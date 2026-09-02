@@ -46,11 +46,19 @@ MAX_MENTIONS_PER_COMMENT = 20
 MENTION_PATTERN = re.compile(r"(?:^|\s)@([A-Za-z0-9._-]{1,30})(?=$|\s|[.,!?;:])")
 
 # "Mentionable" is the same bar entity_side_is_visible() applies to
-# connections and follows - an active + verified account, or an active realm -
-# but written for a query rooted ON Entity rather than on a row pointing at
-# one, so that helper's `{field}__` prefix form doesn't fit.
-MENTIONABLE = Q(users__is_active=True, users__is_verified=True) | Q(
-    realms__is_active=True
+# connections and follows - an active + verified account, an active realm, or
+# an active bot - but written for a query rooted ON Entity rather than on a row
+# pointing at one, so that helper's `{field}__` prefix form doesn't fit.
+#
+# Bots are here because a bot that cannot be mentioned cannot be addressed at
+# all: the whole comment-mention path exists to notify whoever was named, and
+# an entity absent from this predicate is silently not named no matter what the
+# text says. Not required to be verified, for the same reason a realm is not -
+# a bot has no verification concept to gate on.
+MENTIONABLE = (
+    Q(users__is_active=True, users__is_verified=True)
+    | Q(realms__is_active=True)
+    | Q(bots__is_active=True)
 )
 
 
@@ -86,11 +94,18 @@ def resolve_mentioned_entities(text, author_entity):
     """
     Entities actually addressed by the "@handle" tokens in `text`.
 
-    Resolves against BOTH handle namespaces - Account.username and Realm.slug -
-    so a page can be mentioned exactly like a person, and applies the same
-    visibility and blocking rules the rest of the graph uses. A handle that
-    matches nothing is just text, which is the whole point of this design:
-    typing "@" costs nothing and breaks nothing.
+    Resolves against ALL THREE handle namespaces - Account.username, Realm.slug
+    and Bot.handle - so a page or a bot can be mentioned exactly like a person,
+    and applies the same visibility and blocking rules the rest of the graph
+    uses. A handle that matches nothing is just text, which is the whole point
+    of this design: typing "@" costs nothing and breaks nothing.
+
+    The three namespaces are NOT mutually exclusive today - bot handles are
+    unique only among bots, so a bot and a user can currently share one, which
+    `bot/models.py` names as a real gap it cannot close alone. Where that
+    happens both entities resolve and both are notified, which is the safe
+    direction: over-notifying is a nuisance, silently addressing the wrong
+    entity is a bug.
 
     The author's own handle is dropped here rather than at notify time -
     nobody needs telling they wrote their own comment.
@@ -110,14 +125,16 @@ def resolve_mentioned_entities(text, author_entity):
     # MAX_MENTIONS_PER_COMMENT handles reach here, and this is a write path.
     handle_match = Q()
     for handle in handles:
-        handle_match |= Q(users__username__iexact=handle) | Q(
-            realms__slug__iexact=handle
+        handle_match |= (
+            Q(users__username__iexact=handle)
+            | Q(realms__slug__iexact=handle)
+            | Q(bots__handle__iexact=handle)
         )
 
     resolved = (
         Entity.objects.filter(MENTIONABLE, handle_match)
         .exclude(id=author_entity.id)
-        .select_related("users", "realms")
+        .select_related("users", "realms", "bots")
         .distinct()
     )
 

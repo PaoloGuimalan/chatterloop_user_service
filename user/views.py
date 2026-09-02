@@ -687,6 +687,7 @@ class UserContacts(APIView):
                     queryset = queryset.filter(
                         Q(involved_entity__users__username__icontains=domain)
                         | Q(involved_entity__realms__slug__icontains=domain)
+                        | Q(involved_entity__bots__handle__icontains=domain)
                     )
                 else:
                     queryset = queryset.filter(
@@ -694,6 +695,7 @@ class UserContacts(APIView):
                         | Q(involved_entity__users__middle_name__icontains=search)
                         | Q(involved_entity__users__last_name__icontains=search)
                         | Q(involved_entity__realms__name__icontains=search)
+                        | Q(involved_entity__bots__name__icontains=search)
                     )
 
             # --- CRITICAL FIX: COLLAPSE DUPLICATES BEFORE ORDERING ---

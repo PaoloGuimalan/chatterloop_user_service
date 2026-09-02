@@ -2,6 +2,7 @@ from rest_framework import serializers
 from .models import Entity
 from user.models import Account
 from community.models import Realm
+from bot.models import Bot
 
 
 class EmbeddedAccountSerializer(serializers.ModelSerializer):
@@ -87,6 +88,68 @@ class EmbeddedRealmSerializer(serializers.ModelSerializer):
         return obj.profile
 
 
+class EmbeddedBotSerializer(serializers.ModelSerializer):
+    """
+    Bot payload embedded under EntitySerializer.details.
+
+    Same trick as EmbeddedRealmSerializer, one entity kind later: every surface
+    that embeds an entity reads a counterpart's display identity off
+    username/first_name/middle_name/last_name/profile/is_badged, so mapping the
+    bot's own fields onto those keys is what lets a bot appear in contacts,
+    members, followers and conversations with NO client change.
+
+    Without this, EntitySerializer returned `details: null` for a bot - so a
+    bot added to a group rendered as a nameless, avatarless row, which is the
+    same failure `bot/models.py` was written to fix one layer down.
+    """
+
+    username = serializers.CharField(source="handle", read_only=True)
+    first_name = serializers.CharField(source="name", read_only=True)
+    middle_name = serializers.SerializerMethodField()
+    last_name = serializers.SerializerMethodField()
+    profile = serializers.SerializerMethodField()
+    is_badged = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Bot
+        fields = [
+            "id",
+            "handle",
+            "name",
+            "description",
+            "profile",
+            "is_active",
+            "is_system",
+            # Back-compat display aliases (see docstring).
+            "username",
+            "first_name",
+            "middle_name",
+            "last_name",
+            "is_badged",
+        ]
+
+    def get_middle_name(self, obj):
+        # The sentinel clients already skip when composing a full name, so a
+        # bot renders as just its name rather than "Name  ".
+        return "N/A"
+
+    def get_last_name(self, obj):
+        return ""
+
+    def get_profile(self, obj):
+        # A bot's sentinel is "none", the same as an account's, but normalise
+        # anyway so an empty string cannot reach a client that tests only for
+        # the sentinel.
+        if not obj.profile or obj.profile in ("N/A", "none"):
+            return "none"
+        return obj.profile
+
+    def get_is_badged(self, obj):
+        # Never True. A bot is not a verified human or page, and borrowing that
+        # badge would say something the badge does not mean.
+        return False
+
+
 class EntitySerializer(serializers.ModelSerializer):
     # SerializerMethodField allows us to inject dynamic schema data
     details = serializers.SerializerMethodField()
@@ -104,5 +167,9 @@ class EntitySerializer(serializers.ModelSerializer):
         elif obj.type == "realm":
             if hasattr(obj, "realms"):
                 return EmbeddedRealmSerializer(obj.realms, context=self.context).data
+
+        elif obj.type == "bot":
+            if hasattr(obj, "bots"):
+                return EmbeddedBotSerializer(obj.bots, context=self.context).data
 
         return None

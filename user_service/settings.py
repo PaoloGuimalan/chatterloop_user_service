@@ -117,6 +117,15 @@ MONGODB_CLUSTER_PASS = os.getenv("MONGODB_CLUSTER_PASS")
 MONGODB_CLUSTER_HOST = os.getenv("MONGODB_CLUSTER_HOST")
 MONGODB_DB = os.getenv("MONGODB_DB")
 
+# Optional whole-URI override. Unset in every deployed environment, where the
+# mongodb+srv:// URI assembled from the parts above is what Atlas needs.
+#
+# It exists because that scheme is a hard requirement of SRV DNS records, which
+# a local or containerised mongod does not have - and user/apps.py connects in
+# ready(), so WITHOUT this no manage.py command runs at all without reaching
+# Atlas. That made the service impossible to migrate or test locally.
+MONGODB_URI = os.getenv("MONGODB_URI")
+
 MAILINGSERVICE = os.getenv("MAILINGSERVICE")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://chatterloop.app")
 
