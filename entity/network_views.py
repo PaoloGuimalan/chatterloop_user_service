@@ -54,16 +54,22 @@ def _clean_profile(profile):
 
 def normalize_network_entity(entity_obj):
     """
-    One row shape for BOTH kinds of counterpart, so the Contacts cards render
-    a person and a page identically.
+    One row shape for EVERY kind of counterpart, so the Contacts cards render a
+    person, a page and a bot identically.
 
-    Reads the reverse OneToOnes (`users` / `realms`) that the callers
+    Reads the reverse OneToOnes (`users` / `realms` / `bots`) that the callers
     select_related, so this costs no extra query per row.
 
     Note the badge normalization: an Account's visible badge is `is_badged`
     (`is_verified` there is the email-confirmation gate), while a Realm's is
     `is_verified`. Both surface as `is_verified` = "show a check", matching
     what search v2 emits.
+
+    THE BOT BRANCH IS NOT DECORATIVE. Without it this returned None for a bot
+    and the caller dropped the row - so a followed bot was absent from the
+    following list with no error anywhere, which is precisely why nobody
+    reported it. A follow of a bot is an ordinary Follow row; it was only the
+    rendering that could not name it.
     """
     if entity_obj is None:
         return None
@@ -98,19 +104,41 @@ def normalize_network_entity(entity_obj):
             "realm_type": realm.type,
         }
 
+    bot = getattr(entity_obj, "bots", None)
+    if bot is not None:
+        return {
+            "entity_id": str(entity_obj.id),
+            "type": "bot",
+            "display_name": bot.name or (bot.handle or ""),
+            "handle": bot.handle or "",
+            "profile": _clean_profile(bot.profile),
+            # Never True, matching search v2 and the bot profile: a bot is not
+            # a verified human or page.
+            "is_verified": False,
+            "id": str(bot.id),
+            # Only bots carry these two, and they are what stops a client
+            # offering "Add contact" on a card that can never accept one.
+            "description": bot.description or "",
+            "can_connect": False,
+        }
+
     return None
 
 
 def _counterpart_select_related(queryset, *fields):
     """
-    LEFT JOIN both concrete sides of each entity FK. They are 1:1, so this
+    LEFT JOIN all three concrete sides of each entity FK. They are 1:1, so this
     never fans rows out - it just keeps normalize_network_entity() from
     issuing a query per row per branch (same approach UserContacts.get()
     uses).
+
+    `bots` belongs here for the same reason `realms` does: the normalizer can
+    only read a relation that was joined, and a missing join costs one query
+    per bot row rather than an error - the slow, silent kind of wrong.
     """
     paths = []
     for field in fields:
-        paths.extend([field, f"{field}__users", f"{field}__realms"])
+        paths.extend([field, f"{field}__users", f"{field}__realms", f"{field}__bots"])
     return queryset.select_related(*paths)
 
 

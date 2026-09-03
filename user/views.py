@@ -66,6 +66,7 @@ from entity.services.follows import (
 from newsfeed.services.post_visibility import apply_profile_privacy_to_posts
 from entity.services.realtime import publish_profile_relationship_update
 from community.models import Realm, Member, Follow, Invite
+from bot.models import Bot
 from entity.models import Entity, EntityType
 from entity.permissions import Permission, MemberRole
 from entity.drf_permissions import RequiresPermission
@@ -250,6 +251,119 @@ class UserAuthentication(APIView):
             return Response(data, status=status.HTTP_200_OK)
 
         else:
+            # BOTS RESOLVE HERE, BEFORE REALMS.
+            #
+            # A bot lands on the same profile shell as everything else rather
+            # than a screen of its own. The shell already branches on `type`
+            # ("user" gets the person layout, anything else gets the realm
+            # one), so a bot only needs to arrive shaped like the realm
+            # payload - which is what this block does. No new route, no new
+            # screen, no second way for a client to reach a profile.
+            #
+            # It has to run BEFORE the realm lookup because that one is a
+            # get_object_or_404: reaching it with a bot handle 404s rather
+            # than falling through.
+            #
+            # Handles are unique per table but NOT across tables (bot/models.py
+            # says so outright - a bot and a user can share one today), so the
+            # ORDER of these branches IS the precedence. Accounts win, then
+            # bots, then realms, matching the order the rest of the platform
+            # resolves an entity's identity in.
+            bot = Bot.objects.filter(
+                handle__iexact=username, is_active=True
+            ).first()
+
+            if bot is not None:
+                if isinstance(entity, Entity) and is_blocked(entity, bot.entity):
+                    return Response(
+                        {"message": "Profile not available"},
+                        status=status.HTTP_404_NOT_FOUND,
+                    )
+
+                followers_count = Follow.objects.filter(
+                    followee=bot.entity, status=True
+                ).count()
+                is_follower = (
+                    isinstance(entity, Entity)
+                    and Follow.objects.filter(
+                        followee=bot.entity, follower=entity, status=True
+                    ).exists()
+                )
+
+                # Every key IRealmProfileInfo declares, so the existing realm
+                # layout renders this without a single client change. The ones
+                # a bot has no equivalent for are given the value that makes
+                # the layout hide that piece of UI rather than a placeholder:
+                # no cover photo, no email, no parent, never private.
+                data = {
+                    "data": {
+                        "id": str(bot.id),
+                        "entity": str(bot.entity_id),
+                        # Not a realm_id - a bot has none - but the key is part
+                        # of the shape, and the handle is what routes back here.
+                        "realm_id": bot.handle,
+                        "slug": bot.handle,
+                        "name": bot.name or bot.handle,
+                        "description": bot.description or None,
+                        # Normalised, not passed through. A bot stores the
+                        # account sentinel "none" while a realm stores "N/A",
+                        # and this payload is read by the realm layout - so a
+                        # raw "none" reaches consumers written to check for
+                        # "N/A" and gets treated as a photo URL. Same rule
+                        # search v2 and the network rows apply: every "no
+                        # photo" sentinel becomes null so a client has one
+                        # check rather than three.
+                        "profile": (
+                            None
+                            if bot.profile in (None, "", "none", "N/A")
+                            else bot.profile
+                        ),
+                        "cover_photo": None,
+                        "email": None,
+                        "created_by": (
+                            str(bot.owner_entity_id) if bot.owner_entity_id else ""
+                        ),
+                        "parent": None,
+                        "is_active": bot.is_active,
+                        "is_private": False,
+                        # Never badged. The check means a verified human or
+                        # page, and lending it to a bot would say something it
+                        # does not mean.
+                        "is_verified": False,
+                        "followers_count": followers_count,
+                        "is_follower": is_follower,
+                        # A bot has no membership or roles of its own, so the
+                        # member-facing controls stay hidden.
+                        "members": 0,
+                        "is_member": False,
+                        "is_admin": False,
+                        "my_role": None,
+                        # What the shell routes on.
+                        "type": "bot",
+                        # Why the contact button must not render. Stated as
+                        # data rather than left for each client to infer from
+                        # type == "bot", so the rule lives in one place - and
+                        # so a future bot that CAN be connected to is a server
+                        # change rather than an edit in every client.
+                        #
+                        # Absent on realms, which are all connectable, so a
+                        # client reads `!== false` and needs no migration.
+                        "can_connect": False,
+                        "can_follow": True,
+                        "connection": {
+                            "connection_id": None,
+                            "is_connection_present": False,
+                            "is_connection_handshaked": None,
+                            "is_user_connection_initiator": None,
+                        },
+                    }
+                }
+
+                if entity:
+                    save_profile_visit(entity, bot.entity_id, "profile")
+
+                return Response(data, status=status.HTTP_200_OK)
+
             query_filter = None
 
             if transaction_type and transaction_type == "manage":
@@ -778,6 +892,31 @@ class UserContacts(APIView):
             if target_entity.id == entity.id:
                 return Response(
                     {"status": False, "message": "You cannot add yourself."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # A CONTACT REQUEST NEEDS SOMEBODY TO ACCEPT IT, AND A BOT CANNOT.
+            #
+            # A Connection is created with status=False and stays there until
+            # the other side acts. Nothing acts for a bot: there is no session
+            # to show a request in and no accept endpoint it could call, so the
+            # row would sit pending forever while the requester's UI showed
+            # "Requested" and nothing ever happened.
+            #
+            # Refused explicitly rather than left to the resolver. A bot is
+            # reachable by entity id here, so the old behaviour was not a rule -
+            # it was the absence of one, and it would have started creating
+            # permanent pending rows the moment a client sent a bot's id.
+            #
+            # FOLLOWING a bot is the supported relationship and needs no
+            # consent, which is why that path has no equivalent guard.
+            if getattr(target_entity, "bots", None) is not None:
+                return Response(
+                    {
+                        "status": False,
+                        "message": "Bots cannot accept contact requests. Follow it instead.",
+                        "can_follow": True,
+                    },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
