@@ -95,6 +95,20 @@ class Bot(models.Model):
     # moderator is one; a user's own bot is not.
     is_system = models.BooleanField(default=False)
 
+    # The badge - same concept as Account.is_badged and Realm.is_verified,
+    # kept under this app's own name rather than reusing either of theirs
+    # because a bot's verification has nothing to do with email confirmation
+    # (Account.is_verified) and nothing to do with Realm's page-verification
+    # flow; it is its own decision, made by whoever administers this table.
+    #
+    # Default False: an ordinary user-owned bot is not verified just by
+    # existing, the same way an ordinary account is not badged just by
+    # existing. `is_system` bots (the moderator) are a separate concept and
+    # are not verified by default either - the two flags answer different
+    # questions ("is this bot platform-owned" vs "should this bot show a
+    # badge") and a caller that wants both true sets both explicitly.
+    is_verified = models.BooleanField(default=False)
+
     is_active = models.BooleanField(default=True)
 
     created_at = models.DateTimeField(default=now)

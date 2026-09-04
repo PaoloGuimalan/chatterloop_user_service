@@ -601,6 +601,61 @@ class Token(models.Model):
 
     is_active = models.BooleanField(default=True)
 
+    class RateLimitPeriod(models.TextChoices):
+        """
+        The unit `rate_limit_int` counts in. A plain enum rather than a
+        duration column so the value stored is exactly what an operator
+        typed and exactly what shows in admin - no seconds-math to reverse in
+        your head to answer "is this a generous limit or a stingy one".
+        """
+
+        SECOND = "second", "Second"
+        MINUTE = "minute", "Minute"
+        HOUR = "hour", "Hour"
+        DAY = "day", "Day"
+        WEEK = "week", "Week"
+        MONTH = "month", "Month"
+        YEAR = "year", "Year"
+
+    # Requests this token may make per `rate_limit_type`. NULL means
+    # unlimited - the historical behaviour, and still the default, so a
+    # deployment with no opinion on either field pays no migration-time
+    # surprise: every existing token keeps working exactly as it did before
+    # these columns existed.
+    #
+    # Per TOKEN rather than per entity or per scope, because that is the unit
+    # "design it dynamically" asked for: the same entity can hold a
+    # generously-limited internal token and a tightly-limited one handed to a
+    # third party, without either constraining the other.
+    #
+    # SPLIT INTO TWO COLUMNS, rather than one integer-of-seconds or one
+    # duration-typed field, because the actual requirement is "assign a
+    # dynamic subscription thing": a free tier might be 100/day, a paid one
+    # 100000/month, an internal service 50/second - the PERIOD is as much a
+    # product decision as the NUMBER is, and both need to be independently
+    # readable and settable without doing arithmetic in either direction.
+    # `rate_limit_type` is deliberately a calendar unit (month, year) rather
+    # than a fixed duration for the same reason - "per month" is what a
+    # subscription plan actually promises, not "per 30 days".
+    #
+    # ENFORCEMENT LIVES ELSEWHERE, same as verification (see the class
+    # docstring): these columns are read, not interpreted, by
+    # developer_service (Go), which is the only thing that ever authenticates
+    # a request with this token. A count of zero is a legitimate value - a
+    # token that may authenticate but never call anything - and is NOT the
+    # same as NULL, which is why this is nullable rather than defaulting to 0.
+    rate_limit_int = models.PositiveIntegerField(null=True, blank=True)
+
+    # Set together with rate_limit_int, or left blank together with it - see
+    # clean(). No default: a bare number with no unit is not a decision
+    # anyone should fall into by leaving a field untouched.
+    rate_limit_type = models.CharField(
+        max_length=10,
+        choices=RateLimitPeriod.choices,
+        null=True,
+        blank=True,
+    )
+
     class Meta:
         indexes = [
             models.Index(fields=["entity", "is_active"], name="entity_token_owner_idx"),
@@ -608,6 +663,18 @@ class Token(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.prefix}...)"
+
+    def clean(self):
+        super().clean()
+        # Both or neither. A number with no unit is not a rate limit, and a
+        # unit with no number has nothing to count against - either half
+        # alone is a config mistake, not a valid "unlimited" spelling (that
+        # is both fields blank).
+        if (self.rate_limit_int is None) != (self.rate_limit_type is None):
+            raise ValidationError(
+                "rate_limit_int and rate_limit_type must be set together, "
+                "or both left blank for an unlimited token."
+            )
 
     @property
     def is_expired(self) -> bool:

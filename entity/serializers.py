@@ -120,6 +120,7 @@ class EmbeddedBotSerializer(serializers.ModelSerializer):
             "profile",
             "is_active",
             "is_system",
+            "is_verified",
             # Back-compat display aliases (see docstring).
             "username",
             "first_name",
@@ -145,9 +146,10 @@ class EmbeddedBotSerializer(serializers.ModelSerializer):
         return obj.profile
 
     def get_is_badged(self, obj):
-        # Never True. A bot is not a verified human or page, and borrowing that
-        # badge would say something the badge does not mean.
-        return False
+        # Mirrors is_verified - a bot's own verification flag, distinct from
+        # an account's email-confirmation gate and a realm's page-verification
+        # flow. False by default, same as those, until someone marks it.
+        return bool(obj.is_verified)
 
 
 class EntitySerializer(serializers.ModelSerializer):

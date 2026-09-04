@@ -148,9 +148,10 @@ def entity_side_is_visible(field):
     conversation with one starts, had that connection filtered out of every
     list it should appear in.
 
-    Realms and bots are deliberately not required to be is_verified: for a
-    realm that flag is a badge rather than an access gate (unlike accounts,
-    where it gates email confirmation), and a bot has no such flag at all.
+    Realms and bots are deliberately not required to be is_verified: for both,
+    that flag is a badge rather than an access gate, unlike an account's,
+    which gates email confirmation. Visibility here is about whether the row
+    is a usable counterpart at all, not whether it carries a badge.
 
     Usage:
         Connection.objects.filter(

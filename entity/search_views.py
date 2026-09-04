@@ -378,6 +378,7 @@ def build_bots_queryset(entity, query, blocked_ids):
             "handle",
             "description",
             "profile",
+            "is_verified",
             "followers_count",
             "is_followed",
         )
@@ -391,9 +392,7 @@ def normalize_bot(row):
         "display_name": row.get("name") or (row.get("handle") or ""),
         "handle": row.get("handle") or "",
         "profile": _clean_profile(row.get("profile")),
-        # Never True. A bot is not a verified human or page, and borrowing that
-        # badge would say something the badge does not mean.
-        "is_verified": False,
+        "is_verified": bool(row.get("is_verified")),
         # What the bot is for. People and realms have no equivalent one-liner
         # on their cards, but a bot without one is indistinguishable from any
         # other bot, which defeats the point of finding it.

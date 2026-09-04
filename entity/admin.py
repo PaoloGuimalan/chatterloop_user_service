@@ -34,12 +34,14 @@ class TokenAdmin(admin.ModelAdmin):
         "name",
         "prefix",
         "entity",
+        "rate_limit_int",
+        "rate_limit_type",
         "is_active",
         "revoked_at",
         "expires_at",
         "last_used_at",
     )
-    list_filter = ("is_active",)
+    list_filter = ("is_active", "rate_limit_type")
     search_fields = ("name", "prefix", "entity__id")
     # The hash is not a secret, but showing it invites someone to think it is
     # usable. The prefix is the handle a human needs.

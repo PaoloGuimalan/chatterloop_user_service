@@ -125,8 +125,12 @@ class BotIdentityRendersTests(TestCase):
         self.assertEqual(details["middle_name"], "N/A")
         self.assertEqual(details["last_name"], "")
 
-    def test_a_bot_never_borrows_the_verified_badge(self):
+    def test_a_bot_is_unbadged_by_default(self):
         self.assertFalse(EntitySerializer(_bot().entity).data["details"]["is_badged"])
+
+    def test_a_verified_bot_carries_the_badge(self):
+        bot = _bot(is_verified=True)
+        self.assertTrue(EntitySerializer(bot.entity).data["details"]["is_badged"])
 
     def test_no_picture_normalises_to_the_sentinel_clients_test_for(self):
         bot = _bot(profile="")
@@ -218,9 +222,15 @@ class BotsAreDiscoverableTests(TestCase):
         self.assertEqual(row["display_name"], "Helper Bot")
         self.assertEqual(row["handle"], "helper")
         self.assertEqual(row["description"], "Answers questions.")
-        # Never True, and never pending - a bot has no privacy gate.
+        # Unverified by default.
         self.assertFalse(row["is_verified"])
+        # Never pending - a bot has no privacy gate.
         self.assertFalse(row["is_follow_pending"])
+
+    def test_a_verified_bot_carries_the_badge_in_search(self):
+        _bot(handle="helper", name="Helper Bot", is_verified=True)
+        [row] = self._search("helper")
+        self.assertTrue(row["is_verified"])
 
     def test_follower_reach_is_counted_through_the_entity(self):
         # The annotation walks Bot -> entity -> followers. A wrong join path

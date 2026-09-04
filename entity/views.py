@@ -168,10 +168,7 @@ class EntitySearch(APIView):
             "display_name": row.get("name") or (row.get("handle") or ""),
             "handle": row.get("handle") or "",
             "profile": self._clean_profile(row.get("profile")),
-            # Deliberately never True. A bot is not a verified human or page,
-            # and borrowing that badge would say something the badge does not
-            # mean - the same call routes/users/index.js made on the Node side.
-            "is_verified": False,
+            "is_verified": bool(row.get("is_verified")),
             "realm_type": None,
             # A bot is not a connection target from search: you message it or
             # add it to a group, you do not send it a contact request. Keys are
@@ -317,9 +314,9 @@ class EntitySearch(APIView):
                     .exclude(is_system=True)
                     .exclude(entity_id=entity.id)
                     .exclude(entity_id__in=blocked_ids)
-                    .values("id", "entity_id", "name", "handle", "profile")[
-                        :per_kind_limit
-                    ]
+                    .values(
+                        "id", "entity_id", "name", "handle", "profile", "is_verified"
+                    )[:per_kind_limit]
                 )
                 results.extend(self._normalize_bot(b) for b in bots)
 

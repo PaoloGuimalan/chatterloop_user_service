@@ -112,9 +112,7 @@ def normalize_network_entity(entity_obj):
             "display_name": bot.name or (bot.handle or ""),
             "handle": bot.handle or "",
             "profile": _clean_profile(bot.profile),
-            # Never True, matching search v2 and the bot profile: a bot is not
-            # a verified human or page.
-            "is_verified": False,
+            "is_verified": bool(bot.is_verified),
             "id": str(bot.id),
             # Only bots carry these two, and they are what stops a client
             # offering "Add contact" on a card that can never accept one.

@@ -73,11 +73,15 @@ class NetworkEntityNormalizationTests(TestCase):
 
         self.assertEqual(normalize_network_entity(bot.entity)["display_name"], "neon")
 
-    def test_a_bot_never_shows_a_verified_badge(self):
-        # Borrowing the badge would say something the badge does not mean.
+    def test_an_unverified_bot_shows_no_badge_by_default(self):
         bot = _bot(handle="neon")
 
         self.assertFalse(normalize_network_entity(bot.entity)["is_verified"])
+
+    def test_a_verified_bot_shows_the_badge(self):
+        bot = _bot(handle="neon", is_verified=True)
+
+        self.assertTrue(normalize_network_entity(bot.entity)["is_verified"])
 
     def test_the_row_says_a_bot_cannot_be_connected_to(self):
         bot = _bot(handle="neon")
@@ -164,13 +168,20 @@ class ProfileShellResolvesBotsTests(TestCase):
         self.assertEqual(data["followers_count"], 1)
         self.assertTrue(data["is_follower"])
 
-    def test_a_bot_is_never_badged_or_private(self):
+    def test_a_bot_is_unbadged_by_default_and_never_private(self):
         _bot(handle="neon")
 
         data = self._get("neon").data["data"]
 
         self.assertFalse(data["is_verified"])
         self.assertFalse(data["is_private"])
+
+    def test_a_verified_bot_carries_the_badge_on_its_profile(self):
+        _bot(handle="neon", is_verified=True)
+
+        data = self._get("neon").data["data"]
+
+        self.assertTrue(data["is_verified"])
 
     def test_a_bot_offers_no_connection(self):
         # A bot cannot accept a contact request, so the layout must not render

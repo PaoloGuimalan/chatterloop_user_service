@@ -326,10 +326,7 @@ class UserAuthentication(APIView):
                         "parent": None,
                         "is_active": bot.is_active,
                         "is_private": False,
-                        # Never badged. The check means a verified human or
-                        # page, and lending it to a bot would say something it
-                        # does not mean.
-                        "is_verified": False,
+                        "is_verified": bool(bot.is_verified),
                         "followers_count": followers_count,
                         "is_follower": is_follower,
                         # A bot has no membership or roles of its own, so the
