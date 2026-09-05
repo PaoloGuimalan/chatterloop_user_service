@@ -84,6 +84,11 @@ from entity.services.follows import get_profile_relationship_state
 from interests.services.hashtags import save_comment_hashtags
 from newsfeed.services.content_tagging import queue_comment
 from newsfeed.services.post_visibility import visible_posts_filter, can_view_post
+from newsfeed.services.post_realtime import (
+    publish_comment_created,
+    publish_comment_reaction,
+    publish_post_reaction,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -558,6 +563,12 @@ class PostReactionsView(APIView):
                 preview_count_obj.count += 1
                 preview_count_obj.save()
 
+                # Wakes anyone reading this post so their reaction row moves.
+                # Distinct from the author notification further down: that one
+                # is addressed to the post's owner wherever they are, this
+                # reaches whoever happens to have the post open.
+                publish_post_reaction(post_id, entity, "added")
+
                 # likes_count is NOT incremented here any more. The worker's
                 # UpdateRankingScore adjusts the counter itself as part of
                 # recomputing the score, so doing it here too counts twice.
@@ -679,6 +690,10 @@ class PostReactionsView(APIView):
                 new_preview.count += 1
                 new_preview.save()
 
+                # A swap moves TWO tallies, which is exactly why the event
+                # carries no counts and the client refetches instead.
+                publish_post_reaction(post_id, entity, "updated")
+
                 if post.entity.id != entity.id:
                     service = NotificationService()
                     service.update_content(
@@ -772,6 +787,8 @@ class PostReactionsView(APIView):
                 if preview_count:
                     preview_count.count = max(preview_count.count - 1, 0)
                     preview_count.save()
+
+                publish_post_reaction(post_id, entity, "removed")
 
                 return Response(
                     {"message": "Reaction has been deleted"}, status=status.HTTP_200_OK
@@ -901,6 +918,10 @@ class CommentReactionsView(APIView):
                 preview_count_obj.count += 1
                 preview_count_obj.save()
 
+                # Published to the POST's channel, like every other activity
+                # event - the reader subscribed to a post, not to a comment.
+                publish_comment_reaction(comment, entity, "added")
+
                 # The reactor is engaging with the comment's AUTHOR, so the
                 # interaction bump is between those two entities - not the
                 # post's author, who may be someone else entirely.
@@ -957,6 +978,8 @@ class CommentReactionsView(APIView):
                 new_preview.count += 1
                 new_preview.save()
 
+                publish_comment_reaction(comment, entity, "updated")
+
                 self._notify_comment_author(
                     comment, entity, new_emoji, reaction.reaction_id, "updated"
                 )
@@ -1004,6 +1027,8 @@ class CommentReactionsView(APIView):
                 if preview_count:
                     preview_count.count = max(preview_count.count - 1, 0)
                     preview_count.save()
+
+                publish_comment_reaction(comment, entity, "removed")
 
             return Response(
                 {"message": "Reaction has been deleted"}, status=status.HTTP_200_OK
@@ -1238,6 +1263,18 @@ class CommentsView(APIView):
                     attachment=new_attachment,
                     entity=entity,
                 )
+
+                # Wakes any comment section currently open on this post, on
+                # ANY client. Distinct from the notifications published
+                # further down: those reach the post's author and the person
+                # replied to wherever they are, this reaches whoever happens
+                # to be reading the post right now - including people the
+                # comment concerns not at all.
+                #
+                # Carries ids only; the receiver refetches through the GET
+                # above, which enforces can_view_post. Deferred to commit by
+                # publish_post_activity, so that refetch sees this row.
+                publish_comment_created(comment, entity)
 
                 # comments_count is the worker's to move, same as likes_count.
                 RabbitMQClient.publish_on_commit(
