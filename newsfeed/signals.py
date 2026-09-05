@@ -99,6 +99,13 @@ def log_comment_action(sender, instance, created, **kwargs):
             # followers (current_entity_id), while the row records the POST's
             # author. Resolving those followers is the worker's job now, so
             # get_follower_ids is gone from this path.
+            #
+            # "comment", not the default "fanout": this is the one path that
+            # puts a post in front of someone who may not follow its author at
+            # all, so it is the one the feed has to explain - it renders as
+            # "@handle commented on this post" above the card. The worker
+            # stores the commenter as triggered_by (it is current_entity_id),
+            # which is who that caption names.
             RabbitMQClient.publish_on_commit(
                 Queues.BULK_FANOUT_TO_CACHE,
                 {
@@ -107,6 +114,7 @@ def log_comment_action(sender, instance, created, **kwargs):
                         "id": instance.post.post_id,
                         "author_id": instance.post.entity_id,
                     },
+                    "type": "comment",
                 },
             )
 

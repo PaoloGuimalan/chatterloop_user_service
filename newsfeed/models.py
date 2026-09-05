@@ -312,12 +312,43 @@ class PostSave(models.Model):
 
 
 class NewsfeedIndex(DjangoCassandraModel):
+    """
+    One row = "post P belongs in entity B's feed", written on fan-out.
+
+    `type` and `triggered_by` together are the REASON the row exists, which the
+    newsfeed turns into the caption above a post ("@handle commented on this
+    post"). Everything else here is addressing.
+
+    WRITTEN BY THE WORKER, not by this service - see
+    worker_service/internal/services/rabbitmq/handlers.go (BulkFanoutToCache,
+    BackfillNewFriendFeed). This model is the read side and the schema of
+    record; the helpers in newsfeed/helpers/query_functions.py that still write
+    it are dead code left from before the worker took the job over.
+    """
+
     # The viewer_id (the person who owns this feed)
     bucket = columns.Text(partition_key=True)
     post_id = columns.Text(primary_key=True)
     created_at = columns.DateTime(primary_key=True, clustering_order="DESC")
     author_id = columns.Text()
-    type = columns.Text(required=True, default="fanout")  # fanout, suggested, sponsored
+
+    # WHY this post is in that feed:
+    #   fanout   - you follow the author. The default, and the case the feed
+    #              deliberately shows NO caption for: "you follow them" is not
+    #              a reason worth explaining.
+    #   comment  - somebody you follow commented on it, which is what pulled in
+    #              a post by an author you may not follow at all.
+    #   suggested / sponsored - reserved, nothing writes them yet.
+    type = columns.Text(required=True, default="fanout")
+
+    # WHO caused it, which is not always the author: on a comment bump this is
+    # the COMMENTER while author_id stays the post's writer. That gap is the
+    # whole point - it is what lets the feed name the right person.
+    #
+    # Nullable on purpose. Rows written before this column existed have no
+    # value, and the feed simply captions nothing for them rather than
+    # guessing; they age out on the 14-day TTL below.
+    triggered_by = columns.Text()
 
     __options__ = {
         # 14 days = 14 * 24 * 60 * 60

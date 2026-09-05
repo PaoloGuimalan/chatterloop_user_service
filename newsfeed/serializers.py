@@ -97,10 +97,32 @@ class PostSerializer(serializers.ModelSerializer):
     score = PostScoreSerializer(read_only=True)
     is_saved = serializers.BooleanField(read_only=True)
     link_preview = serializers.SerializerMethodField()
+    feed_reason = serializers.SerializerMethodField()
 
     def get_link_preview(self, obj):
         url = extract_first_url(obj.caption or "")
         return get_preview(url) if url else None
+
+    def get_feed_reason(self, obj):
+        """
+        Why this post is in the viewer's feed, for the caption above the card
+        ("@handle commented on this post").
+
+        Comes from CONTEXT, not from the post: the reason is a property of the
+        row that put the post in one person's feed, not of the post itself -
+        the same post is in one feed because you follow its author and in
+        another because a third party commented on it. Only NewsfeedView knows
+        that, and only it passes `feed_reasons`.
+
+        Null everywhere else, and null for the reasons the feed does not
+        explain (see SILENT_FEED_REASONS) - the field is always present so a
+        client can read it without checking which endpoint it came from.
+        """
+        reasons = self.context.get("feed_reasons")
+        if not reasons:
+            return None
+
+        return reasons.get(str(obj.post_id))
 
     class Meta:
         model = Post

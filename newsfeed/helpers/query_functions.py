@@ -341,13 +341,44 @@ def backfill_new_friend_feed(viewer_id, new_friend_id):
         )
 
 
+# Rows whose `type` the feed deliberately says nothing about. "fanout" means
+# "you follow the author", which is not a reason worth captioning - and an
+# unrecognised value is not one this client knows how to phrase.
+SILENT_FEED_REASONS = {"fanout", "suggested", "sponsored"}
+
+
 def fetch_friends_posts(entity_id, page_size=10):
-    newsfeed_queryset = (
+    """
+    One page of the viewer's fanned-out feed, as (post_id, reason) pairs.
+
+    The reason is `(type, triggered_by)` - WHY the post is here and WHO put it
+    here - which the view turns into the caption above the card. Returned
+    alongside the ids rather than looked up afterwards because it lives only in
+    Cassandra: nothing in Postgres knows that a given post reached a given
+    person because a third party commented on it.
+
+    DEDUPED on post_id, newest row first. The primary key is
+    (bucket, post_id, created_at), so one post can hold several rows in a
+    bucket - fanned out when its author posted it, then again when somebody
+    commented - and the clustering order (created_at DESC) means the first row
+    seen for a post is its most recent reason, which is the one to show. The
+    `post_id__in` hydration silently collapsed these duplicates already; what
+    it could not do was stop them inflating the reported count.
+    """
+    rows = (
         NewsfeedIndex.objects.filter(bucket=str(entity_id))
         .limit(int(page_size))
-        .values_list("post_id", flat=True)
+        .values_list("post_id", "type", "triggered_by")
     )
-    return list(newsfeed_queryset)
+
+    reasons = {}
+    for post_id, row_type, triggered_by in rows:
+        pid = str(post_id)
+        if pid in reasons:
+            continue
+        reasons[pid] = (row_type, triggered_by)
+
+    return reasons
 
 
 # TrendingPool.category is the partition key, and fetch_trending_posts

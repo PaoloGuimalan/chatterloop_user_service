@@ -46,6 +46,7 @@ from .serializers import (
     PostSaveSerializer,
 )
 from user.serializers import ConnectionSerializer
+from entity.serializers import EntitySerializer
 from rest_framework.pagination import PageNumberPagination
 from user.services.connections import ConnectionHelpers
 from user.services.mongohelpers import NotificationService
@@ -67,6 +68,7 @@ from .helpers.query_functions import (
     update_ranking_score,
     interaction_score_bump,
     follower_interaction_score_bump,
+    SILENT_FEED_REASONS,
     fetch_friends_posts,
     fetch_trending_posts,
     resolved_interest_categories,
@@ -103,6 +105,67 @@ class NewsfeedView(APIView):
     permission_classes = [IsAuthenticated]
     pagination_class = Pagination
 
+    @staticmethod
+    def _resolve_feed_reasons(feed_rows, viewer_entity):
+        """
+        Turn the raw Cassandra rows into the `feed_reason` each post carries.
+
+        `feed_rows` is {post_id: (type, triggered_by)} straight off the index;
+        the result is {post_id: {"type": ..., "entity": <EntitySerializer>}},
+        with only the posts that actually have something to say.
+
+        DROPPED HERE rather than filtered in the client:
+
+        * `fanout` and the reserved kinds (SILENT_FEED_REASONS) - "you follow
+          them" is not a reason worth explaining, and a value this build does
+          not recognise is not one it can phrase.
+        * rows with no `triggered_by` - written before that column existed, and
+          a reason with nobody in it is not a reason. They age out on the
+          index's own TTL.
+        * anything the viewer triggered themselves - "you commented on this
+          post" tells them something they already know.
+
+        The entities are resolved in ONE query with their concrete side joined,
+        not per post: a page of ten comment-bumped posts would otherwise be ten
+        round trips plus a lookup each for the account/realm/bot behind them.
+        """
+        if not feed_rows:
+            return {}
+
+        wanted = {
+            post_id: (row_type, str(triggered_by))
+            for post_id, (row_type, triggered_by) in feed_rows.items()
+            if row_type not in SILENT_FEED_REASONS
+            and triggered_by
+            and str(triggered_by) != str(viewer_entity.id)
+        }
+
+        if not wanted:
+            return {}
+
+        entities = {
+            str(item.id): item
+            for item in Entity.objects.filter(
+                id__in={trigger for _, trigger in wanted.values()}
+            ).select_related("users", "realms", "bots")
+        }
+
+        reasons = {}
+        for post_id, (row_type, trigger_id) in wanted.items():
+            actor = entities.get(trigger_id)
+            # A trigger that no longer resolves (deleted account, deleted page)
+            # leaves nobody to name, so the post simply shows no caption rather
+            # than an empty one.
+            if actor is None:
+                continue
+
+            reasons[str(post_id)] = {
+                "type": row_type,
+                "entity": EntitySerializer(actor).data,
+            }
+
+        return reasons
+
     def post(self, request):
         user = self.request.user
         entity = self.request.entity
@@ -132,10 +195,18 @@ class NewsfeedView(APIView):
                     {"entity_id": entity.id, "view_cache": viewcache},
                 )
 
+            # {post_id: (type, triggered_by)} for the fanned-out feed, empty
+            # for trending. Trending posts have no per-viewer reason to give -
+            # nobody put them there, they are simply popular - so they carry no
+            # caption, which is also what "fanout" gets.
+            feed_rows = {}
+
             if current_mode == "friends":
-                candidate_post_ids = fetch_friends_posts(entity.id, page_size)
+                feed_rows = fetch_friends_posts(entity.id, page_size)
+                candidate_post_ids = list(feed_rows.keys())
 
                 if not candidate_post_ids:
+                    feed_rows = {}
                     candidate_post_ids = fetch_trending_posts(
                         entity.id, page_size, 100, resolved_interest_categories(entity)
                     )
@@ -147,7 +218,8 @@ class NewsfeedView(APIView):
                 )
 
                 if not candidate_post_ids:
-                    candidate_post_ids = fetch_friends_posts(entity.id, page_size)
+                    feed_rows = fetch_friends_posts(entity.id, page_size)
+                    candidate_post_ids = list(feed_rows.keys())
                     current_mode = "friends"
                     RedisPubSubClient.update_feed_mode(entity.id, current_mode)
 
@@ -207,7 +279,11 @@ class NewsfeedView(APIView):
                 )
             )
 
-            serialized_result = PostSerializer(hydrated_posts, many=True)
+            serialized_result = PostSerializer(
+                hydrated_posts,
+                many=True,
+                context={"feed_reasons": self._resolve_feed_reasons(feed_rows, entity)},
+            )
 
             is_page_matched = len(serialized_result.data) == len(candidate_post_ids)
             will_still_paginate = len(serialized_result.data) == int(page_size)
