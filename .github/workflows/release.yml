@@ -10,8 +10,8 @@ concurrency:
 
 env:
   IMAGE: johnpauloramil187/chatterloop_user_api
-  STACK_FILE: chatterloop_user_api.yml
-  STACK_NAME: chatterloop_user_api
+  STACK_FILE: chatterloop-user-api.yml
+  STACK_NAME: chatterloop-user-api
 
 jobs:
   build:
