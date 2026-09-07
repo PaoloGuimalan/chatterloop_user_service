@@ -69,6 +69,11 @@ CASSANDRA_CLOUD_CONFIG = {
 DEBUG = os.getenv("DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
 SECRET_KEY = os.getenv("SECRET_KEY")
 
+# Set from the image tag at deploy time (environment: APP_VERSION=${IMAGE_TAG})
+# so /version/ reports what is actually running rather than what was built.
+# Falls back to "dev" locally, where nothing sets it.
+APP_VERSION = os.getenv("APP_VERSION", "dev")
+
 # Shared secret allowing trusted backends (e.g. the Node chat server) to call
 # select internal endpoints (e.g. link-preview resolution) without a
 # per-user token. Same value must be provisioned in the Node server's .env.

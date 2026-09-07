@@ -19,8 +19,11 @@ from django.conf import settings
 from django.contrib import admin
 from django.urls import path, include
 
+from user_service.views import version
+
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("version/", version, name="version"),
     path(
         "api/",
         include(
