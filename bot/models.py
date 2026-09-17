@@ -25,10 +25,13 @@ user-owned bots is a separate problem and is not solved here.
 
 import uuid
 
+from django.core.validators import RegexValidator
 from django.db import models
+from django.db.models import Q
 from django.utils.timezone import now
 
 from entity.models import Entity, EntityType
+from entity.permissions import MemberRole
 
 # The system moderator's entity id, FIXED so that every service can address it
 # without a lookup table or a config value that can drift between environments.
@@ -41,6 +44,24 @@ from entity.models import Entity, EntityType
 SYSTEM_MODERATOR_ENTITY_ID = "00000000-0000-4000-8000-000000000001"
 SYSTEM_MODERATOR_HANDLE = "moderator"
 SYSTEM_MODERATOR_NAME = "Chatterloop Moderation"
+
+# The command responder, and the second fixed-id platform bot. Same reasoning
+# as the moderator above: every service that renders a system reply has to
+# agree on who "the platform" is, and a generated id would differ per
+# environment.
+#
+# It answers /members and /created - conversation facts, immediately, with no
+# model call - and posts under this identity so those replies have a name and
+# an avatar instead of falling through to a raw UUID.
+#
+# It is NOT a conversation member and holds NO token. Nothing can authenticate
+# as it through developer_service, because there is no credential to present;
+# the only thing that can speak as System is the platform writing the message
+# itself. That is a stronger guarantee than any permission check, and it costs
+# nothing - it is the absence of a row.
+SYSTEM_BOT_ENTITY_ID = "00000000-0000-4000-8000-000000000002"
+SYSTEM_BOT_HANDLE = "system"
+SYSTEM_BOT_NAME = "System"
 
 
 class Bot(models.Model):
@@ -122,6 +143,38 @@ class Bot(models.Model):
         return f"{self.name} (@{self.handle})"
 
 
+def get_system_bot() -> Bot:
+    """The platform's command responder, creating it if this database has never
+    seen it.
+
+    Idempotent and keyed on a FIXED entity id, exactly like
+    `get_system_moderator` below - a restart, a fresh clone or two services
+    calling it at once all converge on the same row rather than minting a
+    second System.
+
+    `is_system=True` is load-bearing beyond bookkeeping: entity search excludes
+    system bots, so this one is not discoverable, joinable or addressable. Its
+    handle exists to render a name, not to be typed at.
+    """
+    entity, _ = Entity.objects.get_or_create(
+        id=SYSTEM_BOT_ENTITY_ID,
+        defaults={"type": EntityType.BOT_CHOICE},
+    )
+
+    bot, _ = Bot.objects.get_or_create(
+        entity=entity,
+        defaults={
+            "name": SYSTEM_BOT_NAME,
+            "handle": SYSTEM_BOT_HANDLE,
+            "description": (
+                "Answers built-in chat commands such as /members and /created."
+            ),
+            "is_system": True,
+        },
+    )
+    return bot
+
+
 def get_system_moderator() -> Bot:
     """
     The platform's moderation bot, creating it if this database has never seen
@@ -153,3 +206,170 @@ def get_system_moderator() -> Bot:
         },
     )
     return bot
+
+
+# ---------------------------------------------------------------- commands --
+
+
+class CommandCategory(models.TextChoices):
+    """WHO executes a command.
+
+    SYSTEM   chatterloop runs it, from the worker map keyed on the name.
+    WEBHOOK  an HTTP request. The only one with a delivery receipt, which is
+             why it is the one that can reach a bot that is offline.
+    BOT      an SSE trigger to a bot already listening. Free to wire, and lost
+             without a trace if the bot is not there.
+    """
+
+    SYSTEM = "system", "System"
+    WEBHOOK = "webhook", "Webhook"
+    BOT = "bot", "Bot"
+
+
+class CommandResponder(models.TextChoices):
+    """Who says something afterwards, if anyone.
+
+    NONE is a real answer: /stop changes state and has nothing to report, and
+    posting "stopped" into the thread somebody just asked to quieten is wrong.
+    """
+
+    NONE = "none", "Nothing"
+    SYSTEM = "system", "The system bot"
+    BOT = "bot", "The owning bot"
+
+
+def default_webhook_request():
+    # A callable, not a literal - a shared mutable default would let one row
+    # edit another.
+    return {"payload": {}, "headers": {}, "query": {}, "params": {}}
+
+
+def _hint(value):
+    """The last four characters, enough to tell two credentials apart and not
+    enough to use one."""
+    text = value if isinstance(value, str) else str(value)
+    return f"...{text[-4:]}" if len(text) > 4 else "..."
+
+
+class BotCommand(models.Model):
+    """A /command somebody can type in a conversation.
+
+    Reach is not stored - a command is usable exactly where its bot is. An
+    ordinary bot reaches the conversations it belongs to; a system bot is
+    exempt and reaches everywhere. A scope column would be a second source of
+    truth, disagreeing the first time a bot left a realm.
+
+    `bot` is never null, because the system bot is a bot.
+
+    The worker maps on the NAME - /members looks up "members" - so there is no
+    codename to drift. A name the running worker has no function for is
+    possible after a rollback; it answers "not available here" rather than
+    doing nothing, since silence is indistinguishable from a typo.
+    """
+
+    # What a client may be told. An ALLOW-list rather than excluding the
+    # dangerous fields, so a column added later is private by default instead
+    # of leaking until somebody notices. ToolSerializer in Neon was
+    # `fields = "__all__"`, which is how a tool credential ended up serialised
+    # into the model's own prompt.
+    PUBLIC_FIELDS = ("name", "description", "responds")
+
+    id = models.CharField(
+        max_length=40, default=uuid.uuid4, unique=True, primary_key=True
+    )
+
+    # The word after the slash. Same shape as a handle so nobody learns a
+    # second rule, and no ":" because that separates name from target.
+    name = models.CharField(
+        max_length=32,
+        validators=[
+            RegexValidator(
+                regex=r"^[a-z0-9-]{1,32}$",
+                message="Use lowercase letters, digits and hyphens only.",
+            )
+        ],
+    )
+
+    # What autocomplete shows beside the name. Without it a user has to already
+    # know what /summarize does, which defeats discovery.
+    description = models.CharField(max_length=200, blank=True, default="")
+
+    category = models.CharField(
+        max_length=20, choices=CommandCategory.choices, default=CommandCategory.BOT
+    )
+
+    bot = models.ForeignKey(Bot, on_delete=models.CASCADE, related_name="commands")
+
+    responds = models.CharField(
+        max_length=20, choices=CommandResponder.choices, default=CommandResponder.BOT
+    )
+
+    # WEBHOOK only.
+    webhook_url = models.URLField(max_length=500, blank=True, default="")
+
+    # WEBHOOK only. Four optional parts of the outbound request:
+    #   payload  merged into the JSON body
+    #   headers  added to the request
+    #   query    appended to the query string
+    #   params   substituted into {placeholders} in webhook_url
+    #
+    # SECRETS LIVE HERE IN PLAIN TEXT. An Authorization header put in `headers`
+    # is readable by anything that can read this table. Never serialise it
+    # directly - `redacted_request()` is what a management screen shows.
+    webhook_request = models.JSONField(default=default_webhook_request, blank=True)
+
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(default=now)
+
+    class Meta:
+        db_table = "bot_commands"
+
+        indexes = [
+            # The resolution path, read on every message starting with a slash.
+            models.Index(fields=["name", "is_active"], name="botcmd_name_active_idx"),
+            # No index on `bot` - the foreign key already creates one, and a
+            # second on the same column is only another write to maintain.
+        ]
+
+        constraints = [
+            # Two DIFFERENT bots may share a name - that is fan-out. One bot
+            # defining it twice is the mistake being prevented.
+            models.UniqueConstraint(fields=["bot", "name"], name="botcmd_unique_per_bot"),
+            # A webhook row with no URL resolves fine and fails at dispatch.
+            models.CheckConstraint(
+                condition=(~Q(category="webhook") | ~Q(webhook_url="")),
+                name="botcmd_webhook_has_url",
+            ),
+            models.CheckConstraint(
+                condition=(Q(category="webhook") | Q(webhook_url="")),
+                name="botcmd_url_only_on_webhook",
+            ),
+        ]
+
+    def public(self):
+        """What a chat client is told: enough to autocomplete, nothing more.
+
+        The owning handle is added by the caller, which already has the bot -
+        touching `self.bot` here would be a query per command in a listing.
+        """
+        return {field: getattr(self, field) for field in self.PUBLIC_FIELDS}
+
+    def redacted_request(self):
+        """`webhook_request` with every value masked to its last four
+        characters.
+
+        For whoever manages the command: they need to see THAT an Authorization
+        header is set, and which of two credentials it is, without the value
+        being readable from a screen, a log or an export. The same trade
+        ProviderCredential.api_key_hint makes in Neon.
+        """
+        request = self.webhook_request or {}
+        return {
+            section: {key: _hint(value) for key, value in (part or {}).items()}
+            for section, part in request.items()
+            if isinstance(part, dict)
+        }
+
+    def __str__(self):
+        return f"/{self.name} ({self.category}, @{self.bot.handle})"
