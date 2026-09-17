@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from bot.models import Bot
+from bot.models import Bot, BotCommand
 
 
 @admin.register(Bot)
@@ -15,3 +15,6 @@ class BotAdmin(admin.ModelAdmin):
     )
     list_filter = ("is_system", "is_verified", "is_active")
     search_fields = ("name", "handle", "entity__id")
+
+
+admin.site.register(BotCommand)
