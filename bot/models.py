@@ -231,11 +231,57 @@ class CommandResponder(models.TextChoices):
 
     NONE is a real answer: /stop changes state and has nothing to report, and
     posting "stopped" into the thread somebody just asked to quieten is wrong.
+
+    SYSTEM is also what a `webhook` command chooses when it wants its
+    endpoint's answer read out - worker_service posts the response body as the
+    System bot. Without it the call is a trigger and nothing is said.
     """
 
     NONE = "none", "Nothing"
     SYSTEM = "system", "The system bot"
     BOT = "bot", "The owning bot"
+
+
+class WebhookMethod(models.TextChoices):
+    """The HTTP verb a webhook command calls its endpoint with.
+
+    WHY IT IS A COLUMN AND NOT ALWAYS POST
+    --------------------------------------
+    A webhook command points at somebody else's API, and that API's shape is
+    theirs. A status endpoint is a GET, a toggle is often a PUT or PATCH, and
+    an unsubscribe is a DELETE. Sending POST to all of them means the half
+    that are not POST answer 405 and the command looks broken for a reason
+    nothing in the conversation explains.
+
+    WHICH VERBS, AND WHY NOT THE REST
+    ---------------------------------
+    HEAD and OPTIONS are missing on purpose: neither returns anything a person
+    would want read out, so a command using one could only ever be a trigger
+    that a POST or GET already covers.
+
+    WHERE THE ENVELOPE GOES DEPENDS ON THIS
+    ---------------------------------------
+    GET and DELETE carry no body, so the envelope travels in the query string
+    instead - see buildWebhookRequest in worker_service. Either way the
+    receiver learns who typed the command and where; only the encoding
+    changes.
+
+    NULL IS THE FOURTH STATE
+    ------------------------
+    A `system` or `bot` command makes no HTTP request at all, so a verb on one
+    would be a value that describes nothing - and a column that says POST for
+    a command that never calls anything is a column nobody can trust. Those
+    rows hold NULL, enforced by `botcmd_method_only_on_webhook`.
+
+    A webhook row may hold NULL too, and means POST by it: that is what every
+    webhook command did before this column existed.
+    """
+
+    GET = "GET", "GET"
+    POST = "POST", "POST"
+    PUT = "PUT", "PUT"
+    PATCH = "PATCH", "PATCH"
+    DELETE = "DELETE", "DELETE"
 
 
 def default_webhook_request():
@@ -307,6 +353,17 @@ class BotCommand(models.Model):
     # WEBHOOK only.
     webhook_url = models.URLField(max_length=500, blank=True, default="")
 
+    # WEBHOOK only, and NULL everywhere else - a command that makes no request
+    # has no verb to describe. NULL on a webhook row means POST, which is what
+    # every webhook command did before this column existed.
+    webhook_method = models.CharField(
+        max_length=10,
+        choices=WebhookMethod.choices,
+        null=True,
+        blank=True,
+        default=None,
+    )
+
     # WEBHOOK only. Four optional parts of the outbound request:
     #   payload  merged into the JSON body
     #   headers  added to the request
@@ -344,6 +401,20 @@ class BotCommand(models.Model):
             models.CheckConstraint(
                 condition=(Q(category="webhook") | Q(webhook_url="")),
                 name="botcmd_url_only_on_webhook",
+            ),
+            # The same rule for the verb. A `system` or `bot` command makes no
+            # HTTP request, so a method on one describes nothing - and a
+            # column that says POST for a command that never calls anything is
+            # one nobody can read an answer out of.
+            #
+            # Only this direction is constrained: a webhook row may hold NULL
+            # and means POST by it, so a caller that does not care about the
+            # verb does not have to name one.
+            models.CheckConstraint(
+                condition=(
+                    Q(category="webhook") | Q(webhook_method__isnull=True)
+                ),
+                name="botcmd_method_only_on_webhook",
             ),
         ]
 
