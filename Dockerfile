@@ -11,7 +11,25 @@ RUN apt-get update && apt-get install -y \
 
 # Build dependencies into wheels to save space in final image
 COPY requirements.txt .
-RUN pip wheel --no-cache-dir --no-deps --wheel-dir /app/wheels -r requirements.txt
+
+# django-cassandra-engine 1.10.0 publishes no wheel, and its pyproject asks for
+# an UNPINNED build backend ("poetry>=1.1.12"). poetry-core 2.x converts its
+# django constraint into invalid PEP 508 metadata - `django (>=4.2,<5.0 ||
+# >=5.0,<6.0)` - which pip >= 24.1 refuses. This build therefore broke without
+# anything in this repo changing: the backend moved, not us.
+#
+# Building it here against a pinned backend produces correct metadata - the same
+# `django (>=4.2,<6.0)` the sdist itself declares. --no-build-isolation is what
+# makes pip use THIS poetry instead of resolving a fresh one. PIP_CONSTRAINT is
+# not a substitute: pip does not reliably apply it to build dependencies.
+RUN pip install --no-cache-dir "poetry<2" \
+    && pip wheel --no-cache-dir --no-deps --no-build-isolation \
+    --wheel-dir /app/wheels django-cassandra-engine==1.10.0
+
+# --find-links makes this reuse the wheel built above rather than going back to
+# the sdist and regenerating the broken metadata.
+RUN pip wheel --no-cache-dir --no-deps --find-links /app/wheels \
+    --wheel-dir /app/wheels -r requirements.txt
 
 
 # --- Stage 2: Final Runtime Stage ---
