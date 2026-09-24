@@ -46,6 +46,33 @@ class PostKind(models.TextChoices):
 # How long a moment or thought stays live. Feed posts never expire.
 EPHEMERAL_LIFETIME = timedelta(hours=24)
 
+# A thought's optional mood - the chip under its text. Stored in
+# Post.details["mood"]. Node mirror: server/reusables/models/posts.js
+# THOUGHT_MOODS; the clients carry the icon for each.
+THOUGHT_MOODS = (
+    "chilling",
+    "busy",
+    "focused",
+    "traveling",
+    "celebrating",
+    "resting",
+    "hungry",
+)
+
+# Longest text a thought may hold, counted in code points (len() of a str),
+# and the longest caption a moment may carry. Node mirrors both.
+THOUGHT_MAX_LENGTH = 60
+MOMENT_CAPTION_MAX_LENGTH = 120
+
+
+def allows_replies(post):
+    """
+    Whether a moment/thought takes replies and reactions. The author's
+    "Allow replies & reactions" toggle, stored as details["allow_replies"];
+    anything that never set it (every feed post, every older row) allows them.
+    """
+    return (post.details or {}).get("allow_replies", True) is not False
+
 
 class Post(models.Model):
     # "connections" is the audience a private profile writes with: visible
@@ -95,6 +122,13 @@ class Post(models.Model):
     # deletes or flips anything when it passes, so there is no job to keep in
     # sync, and the author's archive can still list expired moments.
     expires_at = models.DateTimeField(null=True, blank=True, default=None)
+    # Kind-specific settings that are not worth a column each:
+    #   thought  {"mood": <THOUGHT_MOODS>}
+    #   moment   {"allow_replies": bool}
+    # NULL on every feed post and every row written before this existed -
+    # readers treat NULL as {}. Nullable on purpose: Node inserts posts too,
+    # and a NOT NULL column would fail any insert that does not name it.
+    details = models.JSONField(null=True, blank=True, default=None)
     date_posted = models.DateTimeField(default=now)
     from_system = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(null=True, blank=True, default=None)

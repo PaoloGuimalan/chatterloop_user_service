@@ -1,18 +1,25 @@
 """
-Read side of moments and thoughts: the moments tray, one entity's moments,
-"seen", the viewer list, the contacts thought lookup and the moment archive.
+Read side of moments and thoughts, plus the few writes that are edits rather
+than creation: the moments tray and ring status, one entity's moments, "seen"
+and the viewer lists, the Thoughts rail and lookup, editing a thought in
+place, a moment's settings, and the moment archive.
 
 Creation lives in Node (server/routes/posts, /moments/create and
 /thoughts/create) next to every other post write. Both kinds are ordinary
 newsfeed_post rows (on_feed = moment | thought) that stop being live at
-expires_at - see newsfeed/services/post_kinds.py.
+expires_at - see newsfeed/services/post_kinds.py. Kind-specific settings (a
+thought's mood, a moment's allow_replies) live in Post.details.
 
 VIEWS are the existing engagement log, not a new table: one
 user_engagement_log row per view (activity_type "view", target_id = post id),
 written through the same worker path the feed's viewcache uses. That table is
 partitioned by the VIEWER, which suits "have I seen these" (one partition),
-and "who viewed this moment" reads it by target_id through the SAI index in
+and "who viewed this" reads it by target_id through the SAI index in
 newsfeed/cql/0001_*.cql.
+
+REACTIONS are the ordinary post Reaction rows (PostReactionsView, which also
+gates and words them by kind). REPLIES are chat messages whose replyingTo is
+{type: <kind>, id: <post id>} - read from Mongo for the viewer list.
 """
 
 import logging
@@ -32,24 +39,40 @@ from community.models import Follow
 from entity.models import Entity
 from entity.serializers import EntitySerializer
 from entity.services.blocking import get_blocked_account_ids
+from user.ext_models.mongomodels import Message
 from user.models import UserEngagementLog
 from user.services.connections import ConnectionHelpers
 from user_service.services.rabbitmq import RabbitMQClient, Queues
 
-from .models import Post, PostKind, PostSave, Reaction
+from .models import (
+    THOUGHT_MAX_LENGTH,
+    THOUGHT_MOODS,
+    Post,
+    PostKind,
+    PostSave,
+    Reaction,
+)
 from .serializers import PostSerializer
 from .services.post_kinds import is_live, live_kinds_filter
 from .services.post_visibility import can_view_post, visible_posts_filter
 
 logger = logging.getLogger(__name__)
 
-# Upper bound on entities in one thoughts lookup - a contacts page, not a
-# whole address book.
-MAX_THOUGHT_ENTITIES = 100
+# Upper bound on entities in one thoughts / ring-status lookup - a page of
+# avatars, not a whole address book.
+MAX_BATCH_ENTITIES = 100
 
 # Upper bound on tray entries. The tray is a horizontal strip; nobody scrolls
 # past this, and it caps the one seen-state query below.
 MAX_TRAY_ENTRIES = 100
+
+# Upper bound on the Thoughts rail.
+MAX_RAIL_THOUGHTS = 50
+
+# Who a moment or thought can be shown to from the edit screens. "Close" is
+# designed but hidden until a close-friends list exists (Node mirror:
+# EPHEMERAL_AUDIENCES).
+EPHEMERAL_AUDIENCES = ("public", "connections")
 
 
 class MomentPagination(PageNumberPagination):
@@ -77,14 +100,45 @@ def _annotated_posts(viewer):
     )
 
 
-def _live_moments_visible_to(viewer):
-    """Every live moment `viewer` may see - the feed's audience rule."""
+def _live_visible(viewer, kind):
+    """Every live post of `kind` that `viewer` may see - the feed's audience rule."""
     return Post.objects.filter(
         visible_posts_filter(viewer),
-        live_kinds_filter([PostKind.MOMENT]),
+        live_kinds_filter([kind]),
         deleted_at=None,
         is_archived=False,
     ).exclude(entity_id__in=get_blocked_account_ids(viewer))
+
+
+def _circle_ids(viewer):
+    """
+    The entities whose moments and thoughts reach `viewer`: who they follow or
+    are connected to - the same people whose posts reach their feed - and
+    themselves.
+    """
+    followed_ids = Follow.objects.filter(follower=viewer, status=True).values_list(
+        "followee_id", flat=True
+    )
+    return (
+        {str(eid) for eid in ConnectionHelpers(viewer).get_connections()}
+        | {str(fid) for fid in followed_ids}
+        | {str(viewer.id)}
+    )
+
+
+def _entities_by_id(ids):
+    return {
+        str(item.id): item
+        for item in Entity.objects.filter(id__in=list(ids)).select_related(
+            "users", "realms", "bots"
+        )
+    }
+
+
+def _parse_entity_ids(request):
+    raw = request.query_params.get("entity_ids", "")
+    entity_ids = [eid.strip() for eid in raw.split(",") if eid.strip()]
+    return list(dict.fromkeys(entity_ids))[:MAX_BATCH_ENTITIES]
 
 
 def _seen_post_ids(viewer, post_ids):
@@ -115,14 +169,125 @@ def _seen_post_ids(viewer, post_ids):
     return {str(target_id) for target_id in rows}
 
 
+def _moment_preview(post):
+    """
+    What a tray tile draws for one moment: its media (or that it is a shared
+    post), caption and lifetime. Reads the prefetched references.
+    """
+    references = list(post.references.all())
+    first = references[0] if references else None
+    is_shared = post.file_type == "shared_post"
+    return {
+        "post_id": post.post_id,
+        "caption": post.caption or "",
+        "is_shared": is_shared,
+        "shared_post_id": first.reference if (is_shared and first) else None,
+        "thumbnail": None if (is_shared or first is None) else first.reference,
+        "media_type": None
+        if (is_shared or first is None)
+        else first.reference_media_type,
+        "date_posted": post.date_posted,
+        "expires_at": post.expires_at,
+    }
+
+
+def _my_reactions(viewer, posts):
+    """{post_id: emoji_id} of the viewer's own reactions to these posts."""
+    return {
+        str(post_id): str(emoji_id)
+        for post_id, emoji_id in Reaction.objects.filter(
+            entity=viewer, post_id__in=[p.post_id for p in posts]
+        ).values_list("post_id", "emoji_id")
+    }
+
+
+def _thought_payload(post, author=None, my_reaction=None):
+    """One thought as every thoughts endpoint returns it."""
+    details = post.details or {}
+    payload = {
+        "post_id": post.post_id,
+        "entity_id": str(post.entity_id),
+        # `content` mirrors what the create route accepts, so a thought can
+        # grow fields without a new response shape.
+        "content": {"text": post.caption or "", "mood": details.get("mood")},
+        "privacy_status": post.privacy_status,
+        "date_posted": post.date_posted,
+        "expires_at": post.expires_at,
+        # The viewer's own reaction (an emoji id), so the detail sheet shows
+        # it picked and a second tap takes it back.
+        "my_reaction": my_reaction,
+    }
+    if author is not None:
+        payload["author"] = EntitySerializer(author).data
+    return payload
+
+
+def _latest_live_thoughts(viewer, entity_ids):
+    """{entity_id: newest live thought visible to viewer} for these entities."""
+    thoughts = (
+        _live_visible(viewer, PostKind.THOUGHT)
+        .filter(entity_id__in=list(entity_ids))
+        .distinct()
+        # Newest first, so if two were ever live at once the latest wins -
+        # posting a thought ends the previous one, but this should not depend
+        # on that having held.
+        .order_by("entity_id", "-date_posted")
+    )
+    latest = {}
+    for thought in thoughts:
+        latest.setdefault(str(thought.entity_id), thought)
+    return latest
+
+
+def _viewers_of(post):
+    """
+    {entity_id: last viewed_at} for a moment/thought, from the engagement log
+    by target_id (the SAI index). The author's own views are never logged.
+    """
+    rows = (
+        UserEngagementLog.objects.filter(target_id=str(post.post_id), activity_type="view")
+        .allow_filtering()
+        .values_list("user_id", "activity_time")
+    )
+    latest = {}
+    for user_id, viewed_at in rows:
+        key = str(user_id)
+        if key not in latest or viewed_at > latest[key]:
+            latest[key] = viewed_at
+    latest.pop(str(post.entity_id), None)
+    return latest
+
+
+def _repliers_of(post):
+    """Entity ids that replied to this moment/thought in a chat."""
+    try:
+        return {
+            str(sender)
+            for sender in Message._get_collection().distinct(
+                "sender",
+                {
+                    "replyingTo.type": post.on_feed,
+                    "replyingTo.id": str(post.post_id),
+                    "isDeleted": {"$ne": True},
+                },
+            )
+        }
+    except Exception:
+        # Enrichment, not the list itself: a Mongo hiccup shows no "replied"
+        # marks rather than failing the viewers sheet.
+        logger.exception("reply lookup failed for %s", post.post_id)
+        return set()
+
+
 class MomentTrayView(APIView):
     """
-    GET moments/tray/ - the strip of avatars with live moments.
+    GET moments/tray/ - the Moments board: one entry per author with live
+    moments, and each author's newest moment as the tile's preview.
 
     Your own entry first (if you have live moments), then everyone else with
-    unseen moments before fully-seen ones, newest first within each. Authors
-    are who the viewer follows or is connected to - the same people whose
-    posts reach their feed.
+    unseen moments before fully-seen ones, newest first within each.
+    `new_count` is how many authors have something you have not seen - the
+    board's "N new" badge.
     """
 
     permission_classes = [IsAuthenticated]
@@ -130,57 +295,43 @@ class MomentTrayView(APIView):
     def get(self, request):
         viewer = request.entity
         try:
-            followed_ids = Follow.objects.filter(
-                follower=viewer, status=True
-            ).values_list("followee_id", flat=True)
-            author_ids = (
-                set(ConnectionHelpers(viewer).get_connections())
-                | {str(fid) for fid in followed_ids}
-                | {str(viewer.id)}
-            )
-
             moments = list(
-                _live_moments_visible_to(viewer)
-                .filter(entity_id__in=author_ids)
+                _live_visible(viewer, PostKind.MOMENT)
+                .filter(entity_id__in=_circle_ids(viewer))
+                .prefetch_related("references")
+                .distinct()
                 .order_by("date_posted")
-                .values_list("post_id", "entity_id", "date_posted")
             )
 
             by_author = {}
-            for post_id, entity_id, date_posted in moments:
-                entry = by_author.setdefault(
-                    str(entity_id), {"post_ids": [], "latest_at": date_posted}
-                )
-                entry["post_ids"].append(post_id)
-                entry["latest_at"] = max(entry["latest_at"], date_posted)
+            for moment in moments:
+                by_author.setdefault(str(moment.entity_id), []).append(moment)
 
-            seen = _seen_post_ids(
-                viewer, [pid for entry in by_author.values() for pid in entry["post_ids"]]
-            )
-
-            entities = {
-                str(item.id): item
-                for item in Entity.objects.filter(id__in=by_author.keys()).select_related(
-                    "users", "realms", "bots"
-                )
-            }
+            seen = _seen_post_ids(viewer, [m.post_id for m in moments])
+            entities = _entities_by_id(by_author.keys())
 
             tray = []
-            for entity_id, entry in by_author.items():
+            for entity_id, authored in by_author.items():
                 entity = entities.get(entity_id)
                 if entity is None:
                     continue
                 is_self = entity_id == str(viewer.id)
+                # Your own moments are never "unseen" to you: the worker does
+                # not log an author viewing their own post.
+                unseen = [] if is_self else [m for m in authored if m.post_id not in seen]
+                newest = authored[-1]
                 tray.append(
                     {
                         "entity": EntitySerializer(entity).data,
                         "is_self": is_self,
-                        "moment_count": len(entry["post_ids"]),
-                        # Your own moments are never "unseen" to you: the
-                        # worker does not log an author viewing their own post.
-                        "has_unseen": not is_self
-                        and any(pid not in seen for pid in entry["post_ids"]),
-                        "latest_at": entry["latest_at"],
+                        "moment_count": len(authored),
+                        "unseen_count": len(unseen),
+                        "has_unseen": bool(unseen),
+                        # Where the viewer should open this author: their first
+                        # unseen moment, or the first one when all are seen.
+                        "start_post_id": (unseen[0] if unseen else authored[0]).post_id,
+                        "latest_at": newest.date_posted,
+                        "latest": _moment_preview(newest),
                     }
                 )
 
@@ -191,10 +342,64 @@ class MomentTrayView(APIView):
                     -item["latest_at"].timestamp(),
                 )
             )
+            tray = tray[:MAX_TRAY_ENTRIES]
 
-            return Response({"results": tray[:MAX_TRAY_ENTRIES]})
+            return Response(
+                {
+                    "results": tray,
+                    "new_count": sum(1 for item in tray if item["has_unseen"]),
+                    "total": len(tray),
+                }
+            )
         except Exception as e:
             logger.exception("MomentTrayView.get failed")
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class MomentStatusView(APIView):
+    """
+    GET moments/status/?entity_ids=a,b,c - for drawing avatar rings anywhere
+    (post headers, a profile): which of these entities have a live moment the
+    viewer may see, and whether any of it is unseen. One call per page of
+    avatars, never one per avatar.
+
+    Returns {"results": {entity_id: {"has_moment", "has_unseen",
+    "start_post_id"}}}; an entity with nothing live is absent.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        viewer = request.entity
+        try:
+            entity_ids = _parse_entity_ids(request)
+            if not entity_ids:
+                return Response({"results": {}})
+
+            moments = list(
+                _live_visible(viewer, PostKind.MOMENT)
+                .filter(entity_id__in=entity_ids)
+                .distinct()
+                .order_by("date_posted")
+                .values_list("post_id", "entity_id")
+            )
+            seen = _seen_post_ids(viewer, [post_id for post_id, _ in moments])
+
+            results = {}
+            for post_id, entity_id in moments:
+                key = str(entity_id)
+                entry = results.setdefault(
+                    key,
+                    {"has_moment": True, "has_unseen": False, "start_post_id": post_id},
+                )
+                is_self = key == str(viewer.id)
+                if not is_self and post_id not in seen and not entry["has_unseen"]:
+                    entry["has_unseen"] = True
+                    entry["start_post_id"] = post_id
+
+            return Response({"results": results})
+        except Exception as e:
+            logger.exception("MomentStatusView.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -236,32 +441,34 @@ class EntityMomentsView(APIView):
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class MomentSeenView(APIView):
+class _EphemeralSeenView(APIView):
     """
-    POST moments/<post_id>/seen/ - record that the viewer watched a moment.
+    POST <kind>s/<post_id>/seen/ - record that the viewer saw a moment or a
+    thought.
 
     Written straight away, unlike feed views, which ride along on the next
     feed request: a moment's ring has to turn grey as soon as it is watched.
     It goes through the SAME worker handler (save_viewcache_engagements), so a
-    moment view is logged exactly like a post view and nothing downstream
-    needs to know the difference.
+    view is logged exactly like a post view and nothing downstream needs to
+    know the difference.
 
     Idempotent per viewer: an already-logged view is not written again, so
     rewatching does not stack rows the viewer list would have to collapse.
     """
 
     permission_classes = [IsAuthenticated]
+    kind = None
 
     def post(self, request, post_id):
         viewer = request.entity
         try:
             post = get_object_or_404(
-                Post, post_id=post_id, on_feed=PostKind.MOMENT, deleted_at=None
+                Post, post_id=post_id, on_feed=self.kind, deleted_at=None
             )
 
             if not is_live(post) or not can_view_post(post, viewer):
                 return Response(
-                    {"message": "Moment not available"},
+                    {"message": f"{self.kind.capitalize()} not available"},
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
@@ -292,82 +499,264 @@ class MomentSeenView(APIView):
 
             return Response({"status": True, "recorded": True})
         except Exception as e:
-            logger.exception("MomentSeenView.post failed")
+            logger.exception("%s seen failed", self.kind)
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class MomentViewersView(APIView):
+class MomentSeenView(_EphemeralSeenView):
+    kind = PostKind.MOMENT
+
+
+class ThoughtSeenView(_EphemeralSeenView):
+    kind = PostKind.THOUGHT
+
+
+class _EphemeralViewersView(APIView):
     """
-    GET moments/<post_id>/viewers/ - who watched a moment. Author only, and
-    expired moments included (the archive shows them).
+    GET <kind>s/<post_id>/viewers/?filter=all|reacted|replied - who saw a
+    moment or thought, what each reacted and whether they replied. Author
+    only, and expired ones included (the archive shows them).
 
     Entity-based: a viewer can be a user or a page, resolved through
     entity_entity like everything else. One row per viewer, at their most
-    recent view.
+    recent view; someone who reacted or replied is listed even if their view
+    was never logged. `totals` counts all three for the sheet's header and tabs.
     """
 
     permission_classes = [IsAuthenticated]
     pagination_class = MomentPagination
+    kind = None
 
     def get(self, request, post_id):
         viewer = request.entity
         try:
             post = get_object_or_404(
-                Post, post_id=post_id, on_feed=PostKind.MOMENT, deleted_at=None
+                Post, post_id=post_id, on_feed=self.kind, deleted_at=None
             )
 
             # 404, not 403, for anyone but the author: the viewer list of
             # somebody else's moment is not something to confirm exists.
             if str(post.entity_id) != str(viewer.id):
                 return Response(
-                    {"message": "Moment not available"},
+                    {"message": f"{self.kind.capitalize()} not available"},
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            rows = (
-                UserEngagementLog.objects.filter(
-                    target_id=str(post.post_id), activity_type="view"
-                )
-                .allow_filtering()
-                .values_list("user_id", "activity_time")
-            )
+            viewed = _viewers_of(post)
+            reactions = {
+                str(entity_id): (emoji_id, glyph, created_at)
+                for entity_id, emoji_id, glyph, created_at in Reaction.objects.filter(
+                    post=post
+                ).values_list("entity_id", "emoji_id", "emoji__emoji_content", "created_at")
+            }
+            repliers = _repliers_of(post)
 
-            latest = {}
-            for user_id, viewed_at in rows:
-                key = str(user_id)
-                if key not in latest or viewed_at > latest[key]:
-                    latest[key] = viewed_at
-            latest.pop(str(viewer.id), None)
-
+            everyone = set(viewed) | set(reactions) | repliers
+            everyone.discard(str(viewer.id))
             blocked = {str(bid) for bid in get_blocked_account_ids(viewer)}
             entities = {
-                str(item.id): item
-                for item in Entity.objects.filter(id__in=latest.keys()).select_related(
-                    "users", "realms", "bots"
-                )
-                if str(item.id) not in blocked
+                eid: entity
+                for eid, entity in _entities_by_id(everyone).items()
+                if eid not in blocked
             }
 
-            ordered = sorted(
-                (
-                    (entities[entity_id], viewed_at)
-                    for entity_id, viewed_at in latest.items()
-                    if entity_id in entities
-                ),
-                key=lambda pair: pair[1],
-                reverse=True,
-            )
+            rows = []
+            for entity_id, entity in entities.items():
+                reaction = reactions.get(entity_id)
+                rows.append(
+                    {
+                        "entity": entity,
+                        "viewed_at": viewed.get(entity_id)
+                        or (reaction[2] if reaction else None),
+                        "reaction": {"emoji_id": reaction[0], "emoji": reaction[1]}
+                        if reaction
+                        else None,
+                        "replied": entity_id in repliers,
+                    }
+                )
+
+            totals = {
+                "views": len(rows),
+                "reactions": sum(1 for row in rows if row["reaction"]),
+                "replies": sum(1 for row in rows if row["replied"]),
+            }
+
+            wanted = request.query_params.get("filter", "all")
+            if wanted == "reacted":
+                rows = [row for row in rows if row["reaction"]]
+            elif wanted == "replied":
+                rows = [row for row in rows if row["replied"]]
+
+            rows.sort(key=lambda row: row["viewed_at"] or post.date_posted, reverse=True)
 
             paginator = self.pagination_class()
-            page = paginator.paginate_queryset(ordered, request, view=self)
-            return paginator.get_paginated_response(
+            page = paginator.paginate_queryset(rows, request, view=self)
+            response = paginator.get_paginated_response(
                 [
-                    {"entity": EntitySerializer(entity).data, "viewed_at": viewed_at}
-                    for entity, viewed_at in page
+                    {
+                        "entity": EntitySerializer(row["entity"]).data,
+                        "viewed_at": row["viewed_at"],
+                        "reaction": row["reaction"],
+                        "replied": row["replied"],
+                    }
+                    for row in page
                 ]
             )
+            response.data["totals"] = totals
+            return response
         except Exception as e:
-            logger.exception("MomentViewersView.get failed")
+            logger.exception("%s viewers failed", self.kind)
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class MomentViewersView(_EphemeralViewersView):
+    kind = PostKind.MOMENT
+
+
+class ThoughtViewersView(_EphemeralViewersView):
+    kind = PostKind.THOUGHT
+
+
+def _own_ephemeral(request, post_id, kind):
+    """The acting entity's own, undeleted moment/thought, or None."""
+    post = Post.objects.filter(post_id=post_id, on_feed=kind, deleted_at=None).first()
+    if post is None or str(post.entity_id) != str(request.entity.id):
+        return None
+    return post
+
+
+class MomentDetailView(APIView):
+    """
+    PUT moments/<post_id>/ - the author changes a moment's audience
+    (`privacy_status`: public | connections) or its "allow replies &
+    reactions" (`allow_replies`). Everything else about a moment is fixed once
+    posted; its timer never moves.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request, post_id):
+        try:
+            post = _own_ephemeral(request, post_id, PostKind.MOMENT)
+            if post is None:
+                return Response(
+                    {"message": "Moment not available"}, status=status.HTTP_404_NOT_FOUND
+                )
+
+            fields = []
+            if "privacy_status" in request.data:
+                audience = request.data.get("privacy_status")
+                if audience not in EPHEMERAL_AUDIENCES:
+                    return Response(
+                        {"message": "Audience must be public or connections"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                post.privacy_status = audience
+                fields.append("privacy_status")
+
+            if "allow_replies" in request.data:
+                post.details = {
+                    **(post.details or {}),
+                    "allow_replies": bool(request.data.get("allow_replies")),
+                }
+                fields.append("details")
+
+            if fields:
+                post.save(update_fields=fields)
+
+            return Response(
+                {
+                    "status": True,
+                    "privacy_status": post.privacy_status,
+                    "details": post.details or {},
+                }
+            )
+        except Exception as e:
+            logger.exception("MomentDetailView.put failed")
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ThoughtDetailView(APIView):
+    """
+    GET thoughts/<post_id>/ - the author's own thought, with how many have
+    seen it (the edit screen's "seen by N").
+
+    PUT thoughts/<post_id>/ - edit it IN PLACE: text, mood, audience. The
+    timer and the views stay - an edit is the same thought, not a new one.
+    Deleting is the ordinary post delete.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, post_id):
+        try:
+            post = _own_ephemeral(request, post_id, PostKind.THOUGHT)
+            if post is None:
+                return Response(
+                    {"message": "Thought not available"}, status=status.HTTP_404_NOT_FOUND
+                )
+            return Response(
+                {**_thought_payload(post), "views": len(_viewers_of(post))}
+            )
+        except Exception as e:
+            logger.exception("ThoughtDetailView.get failed")
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def put(self, request, post_id):
+        try:
+            post = _own_ephemeral(request, post_id, PostKind.THOUGHT)
+            if post is None or not is_live(post):
+                return Response(
+                    {"message": "Thought not available"}, status=status.HTTP_404_NOT_FOUND
+                )
+
+            fields = []
+            if "text" in request.data:
+                text = str(request.data.get("text") or "").strip()
+                if not text:
+                    return Response(
+                        {"message": "A thought cannot be empty"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                # len() of a str counts code points - the composer's count.
+                if len(text) > THOUGHT_MAX_LENGTH:
+                    return Response(
+                        {"message": f"A thought can be at most {THOUGHT_MAX_LENGTH} characters"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                post.caption = text
+                fields.append("caption")
+
+            if "mood" in request.data:
+                mood = request.data.get("mood")
+                if mood is not None and mood not in THOUGHT_MOODS:
+                    return Response(
+                        {"message": "Unknown mood"}, status=status.HTTP_400_BAD_REQUEST
+                    )
+                details = {**(post.details or {})}
+                if mood is None:
+                    details.pop("mood", None)
+                else:
+                    details["mood"] = mood
+                post.details = details
+                fields.append("details")
+
+            if "privacy_status" in request.data:
+                audience = request.data.get("privacy_status")
+                if audience not in EPHEMERAL_AUDIENCES:
+                    return Response(
+                        {"message": "Audience must be public or connections"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                post.privacy_status = audience
+                fields.append("privacy_status")
+
+            if fields:
+                post.save(update_fields=fields)
+
+            return Response({"status": True, **_thought_payload(post)})
+        except Exception as e:
+            logger.exception("ThoughtDetailView.put failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
@@ -375,7 +764,7 @@ class ThoughtsView(APIView):
     """
     GET thoughts/?entity_ids=a,b,c - the live thought of each of those
     entities that has one, for rendering over their avatars. One query for the
-    whole list, so a contacts page costs one request.
+    whole list, so a page of avatars costs one request.
 
     Returns {"results": {entity_id: thought}}; an entity with no live (or no
     visible) thought is simply absent.
@@ -386,47 +775,66 @@ class ThoughtsView(APIView):
     def get(self, request):
         viewer = request.entity
         try:
-            raw = request.query_params.get("entity_ids", "")
-            entity_ids = [eid.strip() for eid in raw.split(",") if eid.strip()]
-            entity_ids = list(dict.fromkeys(entity_ids))[:MAX_THOUGHT_ENTITIES]
-
+            entity_ids = _parse_entity_ids(request)
             if not entity_ids:
                 return Response({"results": {}})
 
-            thoughts = (
-                Post.objects.filter(
-                    visible_posts_filter(viewer),
-                    live_kinds_filter([PostKind.THOUGHT]),
-                    entity_id__in=entity_ids,
-                    deleted_at=None,
-                    is_archived=False,
-                )
-                .exclude(entity_id__in=get_blocked_account_ids(viewer))
-                .distinct()
-                # Newest first, so if two were ever live at once the latest
-                # wins - posting a thought ends the previous one, but this
-                # should not depend on that having held.
-                .order_by("entity_id", "-date_posted")
-                .values("post_id", "entity_id", "caption", "date_posted", "expires_at")
+            latest = _latest_live_thoughts(viewer, entity_ids)
+            mine = _my_reactions(viewer, latest.values())
+            return Response(
+                {
+                    "results": {
+                        entity_id: _thought_payload(
+                            thought, my_reaction=mine.get(thought.post_id)
+                        )
+                        for entity_id, thought in latest.items()
+                    }
+                }
             )
-
-            results = {}
-            for thought in thoughts:
-                results.setdefault(
-                    str(thought["entity_id"]),
-                    {
-                        "post_id": thought["post_id"],
-                        # `content` mirrors what the create route accepts, so a
-                        # thought can grow fields without a new response shape.
-                        "content": {"text": thought["caption"] or ""},
-                        "date_posted": thought["date_posted"],
-                        "expires_at": thought["expires_at"],
-                    },
-                )
-
-            return Response({"results": results})
         except Exception as e:
             logger.exception("ThoughtsView.get failed")
+            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ThoughtsRailView(APIView):
+    """
+    GET thoughts/rail/ - the Thoughts rail at the top of Messages: your own
+    live thought (or `mine: null`, which the rail shows as "add one"), then the
+    live thoughts of the people you follow or are connected to, newest first.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        viewer = request.entity
+        try:
+            latest = _latest_live_thoughts(viewer, _circle_ids(viewer))
+            mine = latest.pop(str(viewer.id), None)
+
+            others = sorted(latest.values(), key=lambda t: t.date_posted, reverse=True)[
+                :MAX_RAIL_THOUGHTS
+            ]
+            authors = _entities_by_id({str(t.entity_id) for t in others} | {str(viewer.id)})
+            reacted = _my_reactions(viewer, others)
+
+            return Response(
+                {
+                    "mine": _thought_payload(mine, authors.get(str(viewer.id)))
+                    if mine
+                    else None,
+                    "results": [
+                        _thought_payload(
+                            thought,
+                            authors.get(str(thought.entity_id)),
+                            my_reaction=reacted.get(thought.post_id),
+                        )
+                        for thought in others
+                        if str(thought.entity_id) in authors
+                    ],
+                }
+            )
+        except Exception as e:
+            logger.exception("ThoughtsRailView.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 

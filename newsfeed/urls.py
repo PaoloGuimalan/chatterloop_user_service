@@ -80,12 +80,19 @@ urlpatterns = [
         views.LinkPreviewImageProxyView.as_view(),
         name="newsfeed-link-preview-image",
     ),
-    # Moments & thoughts (read side - creation is Node's /posts/moments/create
-    # and /posts/thoughts/create). All NEW routes.
+    # Moments & thoughts - reads, views, reactions' gating and in-place edits
+    # (creation is Node's /posts/moments/create and /posts/thoughts/create).
+    # All NEW routes. Fixed paths come before the <post_id> ones so "tray",
+    # "status" and "rail" are never read as a post id.
     path(
         "moments/tray/",
         moment_views.MomentTrayView.as_view(),
         name="newsfeed-moments-tray",
+    ),
+    path(
+        "moments/status/",
+        moment_views.MomentStatusView.as_view(),
+        name="newsfeed-moments-status",
     ),
     path(
         "moments/entity/<str:entity_id>/",
@@ -103,9 +110,34 @@ urlpatterns = [
         name="newsfeed-moments-viewers",
     ),
     path(
+        "moments/<str:post_id>/",
+        moment_views.MomentDetailView.as_view(),
+        name="newsfeed-moments-detail",
+    ),
+    path(
         "thoughts/",
         moment_views.ThoughtsView.as_view(),
         name="newsfeed-thoughts",
+    ),
+    path(
+        "thoughts/rail/",
+        moment_views.ThoughtsRailView.as_view(),
+        name="newsfeed-thoughts-rail",
+    ),
+    path(
+        "thoughts/<str:post_id>/seen/",
+        moment_views.ThoughtSeenView.as_view(),
+        name="newsfeed-thoughts-seen",
+    ),
+    path(
+        "thoughts/<str:post_id>/viewers/",
+        moment_views.ThoughtViewersView.as_view(),
+        name="newsfeed-thoughts-viewers",
+    ),
+    path(
+        "thoughts/<str:post_id>/",
+        moment_views.ThoughtDetailView.as_view(),
+        name="newsfeed-thoughts-detail",
     ),
     path(
         "archive/moments/",

@@ -22,6 +22,8 @@ from django.db.models import (
 from django.db.models.functions import Coalesce
 from django.db import transaction, connection
 from .models import (
+    PostKind,
+    allows_replies,
     Post,
     Emoji,
     Reaction,
@@ -652,6 +654,38 @@ class EmojisView(APIView):
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+def _reaction_noun(post):
+    """What a reaction is TO, as the notification words it."""
+    if post.on_feed in (PostKind.MOMENT, PostKind.THOUGHT):
+        return post.on_feed
+    return "post"
+
+
+def _ephemeral_reaction_refusal(post, entity):
+    """
+    The response refusing a reaction to a moment or thought that cannot take
+    one - expired, not visible to the reactor, or with its author's "allow
+    replies & reactions" off - or None to go ahead. Feed posts are not gated
+    here; they never have been.
+
+    Removing a reaction (DELETE) is deliberately NOT gated: taking yours back
+    must work even after the moment expires or replies are turned off.
+    """
+    if post.on_feed == PostKind.FEED:
+        return None
+    if post.deleted_at is not None or not is_live(post) or not can_view_post(post, entity):
+        return Response(
+            {"message": f"This {post.on_feed} is not available"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    if not allows_replies(post):
+        return Response(
+            {"message": f"Reactions are turned off for this {post.on_feed}"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None
+
+
 class PostReactionsView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -664,6 +698,10 @@ class PostReactionsView(APIView):
 
             post = Post.objects.get(post_id=post_id)
             emoji = Emoji.objects.get(emoji_id=emoji_id)
+
+            refusal = _ephemeral_reaction_refusal(post, entity)
+            if refusal is not None:
+                return refusal
 
             new_reaction_id = str(uuid.uuid4())
 
@@ -740,25 +778,29 @@ class PostReactionsView(APIView):
                 )
 
                 if post.entity.id != entity.id:
+                    # "post" / "moment" / "thought" - a reaction to a moment
+                    # or thought notifies as one, and opens it rather than a
+                    # post page (the notification's target type says which).
+                    noun = _reaction_noun(post)
                     service = NotificationService()
                     service.add_notification(
                         referenceID=new_reaction_id,
                         referenceStatus=True,
                         toUserID=post.entity.id,
                         fromUserID=entity.id,
-                        content_headline="Post Reaction",
-                        content_details=f"{get_entity_display_username(entity)} reacted {emoji.emoji_content} to your post.",
-                        type="post_reaction",
+                        content_headline=f"{noun.capitalize()} Reaction",
+                        content_details=f"{get_entity_display_username(entity)} reacted {emoji.emoji_content} to your {noun}.",
+                        type=f"{noun}_reaction",
                         isRead=False,
                         # referenceID is the REACTION id - the thing that was
                         # created - so it cannot open anything. The post is what
                         # the reader wants.
-                        target_type="post",
+                        target_type=noun,
                         target_id=post.post_id,
                     )
 
                     sse_sendToUser = post.entity.id
-                    sse_sendToDetails = f"{get_entity_display_username(entity)} reacted {emoji.emoji_content} to your post."
+                    sse_sendToDetails = f"{get_entity_display_username(entity)} reacted {emoji.emoji_content} to your {noun}."
 
                     now = datetime.now()
                     data = {
@@ -792,6 +834,10 @@ class PostReactionsView(APIView):
 
             post = Post.objects.get(post_id=post_id)
             new_emoji = Emoji.objects.get(emoji_id=emoji_id)
+
+            refusal = _ephemeral_reaction_refusal(post, entity)
+            if refusal is not None:
+                return refusal
 
             with transaction.atomic():
                 reaction = Reaction.objects.get(post_id=post, entity=entity)
