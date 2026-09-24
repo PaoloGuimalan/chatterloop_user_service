@@ -127,31 +127,39 @@ def _circle_ids(viewer):
     )
 
 
-# How many people the Thoughts rail shows when nobody has a thought up.
-MAX_RAIL_SUGGESTIONS = 30
+# How many connections the Thoughts rail lists after the thoughts.
+MAX_RAIL_SUGGESTIONS = 60
 
 
-def _ranked_connections(viewer, limit=MAX_RAIL_SUGGESTIONS):
+def _ranked_connections(viewer, limit=MAX_RAIL_SUGGESTIONS, exclude=()):
     """
-    The viewer's connections, most-interacted-with first - what the Thoughts
-    rail shows instead of an empty strip. The client puts whoever is online
-    first (presence lives in Node, not here).
+    The viewer's connections - people AND pages - most-interacted-with first,
+    for the Thoughts rail to list after the thoughts themselves. Both
+    directions of the edge count (who started the connection does not
+    matter). The client puts whoever is online first; presence lives in Node,
+    not here, so this rank is the tie-break within online / offline.
     """
-    ids = []
-    for eid in (
-        Connection.objects.filter(action_by=viewer, status=True)
-        .exclude(involved_entity=viewer)
-        .order_by(
-            F("interaction_score").desc(nulls_last=True),
-            F("last_interaction_at").desc(nulls_last=True),
-        )
-        .values_list("involved_entity_id", flat=True)[: limit * 2]
-    ):
-        eid = str(eid)
-        if eid not in ids:
-            ids.append(eid)
-    blocked = {str(bid) for bid in get_blocked_account_ids(viewer)}
-    ids = [eid for eid in ids if eid not in blocked][:limit]
+    scored = {}
+    for field, other in (("action_by", "involved_entity_id"), ("involved_entity", "action_by_id")):
+        for eid, score in (
+            Connection.objects.filter(**{field: viewer}, status=True)
+            .order_by(
+                F("interaction_score").desc(nulls_last=True),
+                F("last_interaction_at").desc(nulls_last=True),
+            )
+            .values_list(other, "interaction_score")[: limit * 2]
+        ):
+            eid = str(eid)
+            score = score or 0
+            if eid not in scored or score > scored[eid]:
+                scored[eid] = score
+    skip = {str(viewer.id), *(str(e) for e in exclude)}
+    skip |= {str(bid) for bid in get_blocked_account_ids(viewer)}
+    ids = [
+        eid
+        for eid, _ in sorted(scored.items(), key=lambda item: item[1], reverse=True)
+        if eid not in skip
+    ][:limit]
     entities = _entities_by_id(ids)
     return [EntitySerializer(entities[eid]).data for eid in ids if eid in entities]
 
@@ -997,9 +1005,11 @@ class ThoughtsRailView(APIView):
                         for thought in others
                         if str(thought.entity_id) in authors
                     ],
-                    # Only when there is nobody's thought to show: people to
-                    # fill the rail with, so it never reads as empty.
-                    "suggestions": [] if others else _ranked_connections(viewer),
+                    # Everyone else you are connected to, after the thoughts -
+                    # so the rail is your people, not only whoever posted.
+                    "suggestions": _ranked_connections(
+                        viewer, exclude=[t.entity_id for t in others]
+                    ),
                 }
             )
         except Exception as e:
