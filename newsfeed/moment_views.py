@@ -955,11 +955,16 @@ class ThoughtsView(APIView):
 
             latest = _latest_live_thoughts(viewer, entity_ids)
             mine = _my_reactions(viewer, latest.values())
+            # With its author, like the rail: a thought opened from a profile
+            # had no name or photo to show (a "?" avatar) without it.
+            authors = _entities_by_id({str(t.entity_id) for t in latest.values()})
             return Response(
                 {
                     "results": {
                         entity_id: _thought_payload(
-                            thought, my_reaction=mine.get(thought.post_id)
+                            thought,
+                            authors.get(str(thought.entity_id)),
+                            my_reaction=mine.get(thought.post_id),
                         )
                         for entity_id, thought in latest.items()
                     }
