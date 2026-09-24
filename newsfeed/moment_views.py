@@ -24,8 +24,9 @@ gates and words them by kind). REPLIES are chat messages whose replyingTo is
 
 import logging
 import uuid
+from datetime import timezone as dt_timezone
 
-from django.db.models import Exists, OuterRef, Subquery, Value
+from django.db.models import Exists, F, OuterRef, Subquery, Value
 from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from django.utils.timezone import now
@@ -36,7 +37,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from community.models import Follow
-from entity.models import Entity
+from entity.models import Connection, Entity
 from entity.serializers import EntitySerializer
 from entity.services.blocking import get_blocked_account_ids
 from user.ext_models.mongomodels import Message
@@ -126,6 +127,35 @@ def _circle_ids(viewer):
     )
 
 
+# How many people the Thoughts rail shows when nobody has a thought up.
+MAX_RAIL_SUGGESTIONS = 30
+
+
+def _ranked_connections(viewer, limit=MAX_RAIL_SUGGESTIONS):
+    """
+    The viewer's connections, most-interacted-with first - what the Thoughts
+    rail shows instead of an empty strip. The client puts whoever is online
+    first (presence lives in Node, not here).
+    """
+    ids = []
+    for eid in (
+        Connection.objects.filter(action_by=viewer, status=True)
+        .exclude(involved_entity=viewer)
+        .order_by(
+            F("interaction_score").desc(nulls_last=True),
+            F("last_interaction_at").desc(nulls_last=True),
+        )
+        .values_list("involved_entity_id", flat=True)[: limit * 2]
+    ):
+        eid = str(eid)
+        if eid not in ids:
+            ids.append(eid)
+    blocked = {str(bid) for bid in get_blocked_account_ids(viewer)}
+    ids = [eid for eid in ids if eid not in blocked][:limit]
+    entities = _entities_by_id(ids)
+    return [EntitySerializer(entities[eid]).data for eid in ids if eid in entities]
+
+
 def _entities_by_id(ids):
     return {
         str(item.id): item
@@ -169,14 +199,100 @@ def _seen_post_ids(viewer, post_ids):
     return {str(target_id) for target_id in rows}
 
 
-def _moment_preview(post):
+SHARED_POST_MEDIA = "shared_post"
+
+
+def _first_media(post):
+    """A post's first photo/video reference (not a shared-post pointer)."""
+    for ref in post.references.all():
+        if ref.reference_media_type and SHARED_POST_MEDIA not in ref.reference_media_type:
+            return ref
+    return None
+
+
+def _shared_pointer(post):
+    """The id a shared post (or shared-post moment) points at, if any."""
+    if post.file_type != SHARED_POST_MEDIA:
+        return None
+    for ref in post.references.all():
+        if ref.reference_media_type and SHARED_POST_MEDIA in ref.reference_media_type:
+            return ref.reference
+    return None
+
+
+def _shared_previews(viewer, moments):
     """
-    What a tray tile draws for one moment: its media (or that it is a shared
-    post), caption and lifetime. Reads the prefetched references.
+    {moment post_id: preview} for the shared-post moments among `moments` -
+    what a tile, a reply chip or the archive draws for them without fetching
+    the post: its author, caption, and a thumbnail. The thumbnail is the
+    shared post's first photo/video, or - when that post is itself a share -
+    the ORIGINAL's, one level down (the same nesting a post card renders).
+
+    `available` is false when the shared post is gone or the viewer may not
+    see it; nothing else about it is returned then.
+    """
+    pointers = {m.post_id: _shared_pointer(m) for m in moments}
+    pointers = {k: v for k, v in pointers.items() if v}
+    if not pointers:
+        return {}
+
+    def load(ids):
+        return {
+            p.post_id: p
+            for p in Post.objects.select_related("entity")
+            .prefetch_related("references", "privacy_users")
+            .filter(post_id__in=set(ids), deleted_at=None)
+        }
+
+    shared = load(pointers.values())
+    originals = load(
+        pointer for pointer in (_shared_pointer(p) for p in shared.values()) if pointer
+    )
+
+    previews = {}
+    for moment_id, shared_id in pointers.items():
+        post = shared.get(shared_id)
+        if post is None or not can_view_post(post, viewer):
+            previews[moment_id] = {"post_id": shared_id, "available": False}
+            continue
+        media = _first_media(post)
+        original = originals.get(_shared_pointer(post) or "")
+        if media is None and original is not None and can_view_post(original, viewer):
+            media = _first_media(original)
+        previews[moment_id] = {
+            "post_id": shared_id,
+            "available": True,
+            "author": EntitySerializer(post.entity).data,
+            "caption": post.caption or "",
+            "is_share": original is not None,
+            "thumbnail": media.reference if media else None,
+            "media_type": media.reference_media_type if media else None,
+        }
+    return previews
+
+
+def _moment_preview(post, shared_preview=None):
+    """
+    What a tray tile draws for one moment: its media (or, for a shared post,
+    the shared post's - see _shared_previews), caption and lifetime. Reads the
+    prefetched references.
     """
     references = list(post.references.all())
     first = references[0] if references else None
     is_shared = post.file_type == "shared_post"
+    if is_shared:
+        shared_preview = shared_preview or {}
+        return {
+            "post_id": post.post_id,
+            "caption": post.caption or "",
+            "is_shared": True,
+            "shared_post_id": first.reference if first else None,
+            "thumbnail": shared_preview.get("thumbnail"),
+            "media_type": shared_preview.get("media_type"),
+            "shared_preview": shared_preview or None,
+            "date_posted": post.date_posted,
+            "expires_at": post.expires_at,
+        }
     return {
         "post_id": post.post_id,
         "caption": post.caption or "",
@@ -239,6 +355,18 @@ def _latest_live_thoughts(viewer, entity_ids):
     return latest
 
 
+def _aware(value):
+    """
+    Cassandra (cqlengine) and pymongo hand back NAIVE datetimes that are UTC.
+    Serialized as-is they carry no offset, so a browser reads them as LOCAL
+    time - "8h ago" for a view a minute old in UTC+8. Tagging them UTC fixes
+    that, and lets them be compared with Django's aware datetimes.
+    """
+    if value is None or getattr(value, "tzinfo", None) is not None:
+        return value
+    return value.replace(tzinfo=dt_timezone.utc)
+
+
 def _viewers_of(post):
     """
     {entity_id: last viewed_at} for a moment/thought, from the engagement log
@@ -252,6 +380,7 @@ def _viewers_of(post):
     latest = {}
     for user_id, viewed_at in rows:
         key = str(user_id)
+        viewed_at = _aware(viewed_at)
         if key not in latest or viewed_at > latest[key]:
             latest[key] = viewed_at
     latest.pop(str(post.entity_id), None)
@@ -259,24 +388,29 @@ def _viewers_of(post):
 
 
 def _repliers_of(post):
-    """Entity ids that replied to this moment/thought in a chat."""
+    """
+    {entity_id: latest reply time} for everyone who replied to this
+    moment/thought in a chat.
+    """
     try:
-        return {
-            str(sender)
-            for sender in Message._get_collection().distinct(
-                "sender",
+        rows = Message._get_collection().aggregate(
+            [
                 {
-                    "replyingTo.type": post.on_feed,
-                    "replyingTo.id": str(post.post_id),
-                    "isDeleted": {"$ne": True},
+                    "$match": {
+                        "replyingTo.type": post.on_feed,
+                        "replyingTo.id": str(post.post_id),
+                        "isDeleted": {"$ne": True},
+                    }
                 },
-            )
-        }
+                {"$group": {"_id": "$sender", "at": {"$max": "$messageDate"}}},
+            ]
+        )
+        return {str(row["_id"]): _aware(row.get("at")) for row in rows}
     except Exception:
         # Enrichment, not the list itself: a Mongo hiccup shows no "replied"
         # marks rather than failing the viewers sheet.
         logger.exception("reply lookup failed for %s", post.post_id)
-        return set()
+        return {}
 
 
 class MomentTrayView(APIView):
@@ -310,6 +444,10 @@ class MomentTrayView(APIView):
             seen = _seen_post_ids(viewer, [m.post_id for m in moments])
             entities = _entities_by_id(by_author.keys())
 
+            shared_previews = _shared_previews(
+                viewer, [authored[-1] for authored in by_author.values()]
+            )
+
             tray = []
             for entity_id, authored in by_author.items():
                 entity = entities.get(entity_id)
@@ -331,7 +469,9 @@ class MomentTrayView(APIView):
                         # unseen moment, or the first one when all are seen.
                         "start_post_id": (unseen[0] if unseen else authored[0]).post_id,
                         "latest_at": newest.date_posted,
-                        "latest": _moment_preview(newest),
+                        "latest": _moment_preview(
+                            newest, shared_previews.get(newest.post_id)
+                        ),
                     }
                 )
 
@@ -431,9 +571,16 @@ class EntityMomentsView(APIView):
             is_self = str(entity_id) == str(viewer.id)
             seen = set() if is_self else _seen_post_ids(viewer, [p.post_id for p in posts])
 
+            shared_previews = _shared_previews(viewer, posts)
             results = []
             for post, data in zip(posts, PostSerializer(posts, many=True).data):
-                results.append({**data, "seen": is_self or post.post_id in seen})
+                results.append(
+                    {
+                        **data,
+                        "seen": is_self or post.post_id in seen,
+                        "shared_preview": shared_previews.get(post.post_id),
+                    }
+                )
 
             return Response({"results": results})
         except Exception as e:
@@ -551,7 +698,7 @@ class _EphemeralViewersView(APIView):
             }
             repliers = _repliers_of(post)
 
-            everyone = set(viewed) | set(reactions) | repliers
+            everyone = set(viewed) | set(reactions) | set(repliers)
             everyone.discard(str(viewer.id))
             blocked = {str(bid) for bid in get_blocked_account_ids(viewer)}
             entities = {
@@ -563,11 +710,20 @@ class _EphemeralViewersView(APIView):
             rows = []
             for entity_id, entity in entities.items():
                 reaction = reactions.get(entity_id)
+                reacted_at = _aware(reaction[2]) if reaction else None
+                replied_at = repliers.get(entity_id)
+                viewed_at = viewed.get(entity_id)
+                # What the row's "time ago" shows: the viewer's latest
+                # activity - a reply a minute ago beats a view hours ago.
+                last_activity_at = max(
+                    (t for t in (viewed_at, reacted_at, replied_at) if t),
+                    default=None,
+                )
                 rows.append(
                     {
                         "entity": entity,
-                        "viewed_at": viewed.get(entity_id)
-                        or (reaction[2] if reaction else None),
+                        "viewed_at": viewed_at or reacted_at or replied_at,
+                        "last_activity_at": last_activity_at,
                         "reaction": {"emoji_id": reaction[0], "emoji": reaction[1]}
                         if reaction
                         else None,
@@ -587,7 +743,7 @@ class _EphemeralViewersView(APIView):
             elif wanted == "replied":
                 rows = [row for row in rows if row["replied"]]
 
-            rows.sort(key=lambda row: row["viewed_at"] or post.date_posted, reverse=True)
+            rows.sort(key=lambda row: row["last_activity_at"] or post.date_posted, reverse=True)
 
             paginator = self.pagination_class()
             page = paginator.paginate_queryset(rows, request, view=self)
@@ -596,6 +752,7 @@ class _EphemeralViewersView(APIView):
                     {
                         "entity": EntitySerializer(row["entity"]).data,
                         "viewed_at": row["viewed_at"],
+                        "last_activity_at": row["last_activity_at"],
                         "reaction": row["reaction"],
                         "replied": row["replied"],
                     }
@@ -629,8 +786,10 @@ class MomentDetailView(APIView):
     """
     PUT moments/<post_id>/ - the author changes a moment's audience
     (`privacy_status`: public | connections) or its "allow replies &
-    reactions" (`allow_replies`). Everything else about a moment is fixed once
-    posted; its timer never moves.
+    reactions" (`allow_replies`), or archives it now (`archive: true`): its
+    timer is ended, so it leaves the board and rings and lands in Archives -
+    the same place it would have gone at 24h. The timer never moves otherwise,
+    and never forward.
     """
 
     permission_classes = [IsAuthenticated]
@@ -661,6 +820,12 @@ class MomentDetailView(APIView):
                 }
                 fields.append("details")
 
+            if request.data.get("archive") is True:
+                current = now()
+                if post.expires_at is None or post.expires_at > current:
+                    post.expires_at = current
+                    fields.append("expires_at")
+
             if fields:
                 post.save(update_fields=fields)
 
@@ -669,6 +834,7 @@ class MomentDetailView(APIView):
                     "status": True,
                     "privacy_status": post.privacy_status,
                     "details": post.details or {},
+                    "expires_at": post.expires_at,
                 }
             )
         except Exception as e:
@@ -831,6 +997,9 @@ class ThoughtsRailView(APIView):
                         for thought in others
                         if str(thought.entity_id) in authors
                     ],
+                    # Only when there is nobody's thought to show: people to
+                    # fill the rail with, so it never reads as empty.
+                    "suggestions": [] if others else _ranked_connections(viewer),
                 }
             )
         except Exception as e:
@@ -840,8 +1009,8 @@ class ThoughtsRailView(APIView):
 
 class MomentArchiveView(APIView):
     """
-    GET archive/moments/ - the acting entity's own moments, live AND expired,
-    newest first. The archive's "Moments" tab; its "Feed" tab is the existing
+    GET archive/moments/ - the acting entity's own EXPIRED moments, newest
+    first. Live ones are on the board and the profile ring, not here. The archive's "Moments" tab; its "Feed" tab is the existing
     profile endpoint with archive=true.
     """
 
@@ -853,14 +1022,23 @@ class MomentArchiveView(APIView):
         try:
             queryset = (
                 _annotated_posts(viewer)
-                .filter(entity=viewer, on_feed=PostKind.MOMENT, deleted_at=None)
+                .filter(
+                    entity=viewer,
+                    on_feed=PostKind.MOMENT,
+                    deleted_at=None,
+                    expires_at__lte=now(),
+                )
                 .order_by("-date_posted")
             )
 
             paginator = self.pagination_class()
             page = paginator.paginate_queryset(queryset, request, view=self)
+            shared_previews = _shared_previews(viewer, page)
             return paginator.get_paginated_response(
-                PostSerializer(page, many=True).data
+                [
+                    {**data, "shared_preview": shared_previews.get(post.post_id)}
+                    for post, data in zip(page, PostSerializer(page, many=True).data)
+                ]
             )
         except Exception as e:
             logger.exception("MomentArchiveView.get failed")
