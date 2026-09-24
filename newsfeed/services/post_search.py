@@ -19,6 +19,7 @@ from django.db.models.functions import Coalesce
 from entity.utils import entity_side_is_visible
 from newsfeed.models import Post
 from newsfeed.services.post_visibility import visible_posts_filter
+from newsfeed.services.post_kinds import SEARCH_KINDS, live_kinds_filter
 
 
 def build_post_search_queryset(entity, query, blocked_ids):
@@ -51,6 +52,7 @@ def build_post_search_queryset(entity, query, blocked_ids):
         Post.objects.filter(
             entity_side_is_visible("entity"),
             visible_posts_filter(entity),
+            live_kinds_filter(SEARCH_KINDS),
             caption__icontains=query,
             is_archived=False,
             deleted_at__isnull=True,

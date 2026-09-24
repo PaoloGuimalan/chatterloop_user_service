@@ -8,6 +8,7 @@ from mongoengine import (
     IntField,
     DateTimeField,
     DictField,
+    DynamicField,
 )
 
 from datetime import datetime
@@ -41,7 +42,11 @@ class Message(Document):
     content = StringField()
     messageDate = EmbeddedDocumentField(MessageDate)
     isReply = BooleanField(default=False)
-    replyingTo = StringField(blank=True)
+    # A message id string (a reply to a message - every message ever written
+    # before moments), or {"type": "post"|"moment"|"thought", "id": ...} for a
+    # reply to something that is not a message. See Node
+    # reusables/hooks/replyTargets.js.
+    replyingTo = DynamicField(blank=True)
     reactions = ListField(EmbeddedDocumentField(Reaction))
     isDeleted = BooleanField(default=False)
     messageType = StringField()

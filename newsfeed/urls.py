@@ -2,7 +2,7 @@ from django.conf.urls import include
 from django.urls import re_path, path
 from rest_framework import routers
 
-from newsfeed import views
+from newsfeed import views, moment_views
 
 router = routers.DefaultRouter()
 
@@ -79,5 +79,37 @@ urlpatterns = [
         "link-preview/image",
         views.LinkPreviewImageProxyView.as_view(),
         name="newsfeed-link-preview-image",
+    ),
+    # Moments & thoughts (read side - creation is Node's /posts/moments/create
+    # and /posts/thoughts/create). All NEW routes.
+    path(
+        "moments/tray/",
+        moment_views.MomentTrayView.as_view(),
+        name="newsfeed-moments-tray",
+    ),
+    path(
+        "moments/entity/<str:entity_id>/",
+        moment_views.EntityMomentsView.as_view(),
+        name="newsfeed-moments-entity",
+    ),
+    path(
+        "moments/<str:post_id>/seen/",
+        moment_views.MomentSeenView.as_view(),
+        name="newsfeed-moments-seen",
+    ),
+    path(
+        "moments/<str:post_id>/viewers/",
+        moment_views.MomentViewersView.as_view(),
+        name="newsfeed-moments-viewers",
+    ),
+    path(
+        "thoughts/",
+        moment_views.ThoughtsView.as_view(),
+        name="newsfeed-thoughts",
+    ),
+    path(
+        "archive/moments/",
+        moment_views.MomentArchiveView.as_view(),
+        name="newsfeed-archive-moments",
     ),
 ]

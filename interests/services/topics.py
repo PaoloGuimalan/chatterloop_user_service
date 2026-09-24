@@ -44,6 +44,7 @@ from interests.models import Interest, PostInterestLink, normalize_key
 from entity.utils import get_entity_name, get_entity_profile_picture
 from newsfeed.models import Post
 from newsfeed.services.post_visibility import visible_posts_filter
+from newsfeed.services.post_kinds import TOPIC_KINDS, live_kinds_filter
 
 # Rows pulled to build the face stacks. Faces need the RECENT posters, and
 # taking three per topic in SQL means a window function and a subquery wrapper
@@ -57,7 +58,10 @@ FACES_PER_TOPIC = 3
 def visible_posts(entity):
     """The posts `entity` may read - the feed's own rule, nothing narrower."""
     return Post.objects.filter(
-        visible_posts_filter(entity), deleted_at=None, is_archived=False
+        visible_posts_filter(entity),
+        live_kinds_filter(TOPIC_KINDS),
+        deleted_at=None,
+        is_archived=False,
     )
 
 

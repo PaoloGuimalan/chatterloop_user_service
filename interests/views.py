@@ -21,6 +21,7 @@ from entity.permissions import PermissionEffect
 from newsfeed.models import Post, PostSave, Reaction
 from newsfeed.serializers import PostSerializer
 from newsfeed.services.post_visibility import visible_posts_filter
+from newsfeed.services.post_kinds import TOPIC_KINDS, live_kinds_filter
 import logging
 
 logger = logging.getLogger(__name__)
@@ -448,6 +449,7 @@ class TopicPostsView(APIView):
                 )
                 .filter(
                     visible_posts_filter(entity),
+                    live_kinds_filter(TOPIC_KINDS),
                     postinterestlink__interest=interest,
                     deleted_at=None,
                     is_archived=False,

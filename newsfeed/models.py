@@ -1,5 +1,6 @@
 import uuid
 import random
+from datetime import timedelta
 from django.db import models
 from django.db.models import Q
 from django.utils.timezone import now
@@ -22,6 +23,28 @@ def generate_random_digit(digit):
 
 def generate_post_id():
     return generate_random_digit(25)
+
+
+class PostKind(models.TextChoices):
+    """
+    What a newsfeed_post row IS, stored in Post.on_feed.
+
+    One table for all three so moments and thoughts inherit everything a post
+    already has - privacy, tagging, references, reactions, scoring, moderation,
+    reporting, deletion and data export - instead of re-implementing each.
+
+    Which kinds a given read path returns is NOT decided here: every reader
+    goes through a kind list in newsfeed/services/post_kinds.py, so wiring
+    moments into (say) the feed is appending to one list.
+    """
+
+    FEED = "feed", "Feed"
+    MOMENT = "moment", "Moment"  # 24h media, one per row
+    THOUGHT = "thought", "Thought"  # 24h text note, one live per entity
+
+
+# How long a moment or thought stays live. Feed posts never expire.
+EPHEMERAL_LIFETIME = timedelta(hours=24)
 
 
 class Post(models.Model):
@@ -64,7 +87,14 @@ class Post(models.Model):
     is_sponsored = models.BooleanField(default=False)
     is_live = models.BooleanField(default=False)
     is_archived = models.BooleanField(default=False)
-    on_feed = models.CharField(max_length=50)
+    on_feed = models.CharField(
+        max_length=50, choices=PostKind.choices, default=PostKind.FEED
+    )
+    # NULL for feed posts, date_posted + EPHEMERAL_LIFETIME for moments and
+    # thoughts. Expiry is only ever a READ filter (expires_at > now()) - nothing
+    # deletes or flips anything when it passes, so there is no job to keep in
+    # sync, and the author's archive can still list expired moments.
+    expires_at = models.DateTimeField(null=True, blank=True, default=None)
     date_posted = models.DateTimeField(default=now)
     from_system = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(null=True, blank=True, default=None)
@@ -87,6 +117,19 @@ class Post(models.Model):
     interests = models.ManyToManyField(
         Interest, through="interests.PostInterestLink", blank=True, related_name="posts"
     )
+
+    class Meta:
+        indexes = [
+            # Serves "which of these entities have a live moment/thought" (the
+            # tray, the contacts thought lookup) and the author's moment
+            # archive. Partial: feed posts are the overwhelming majority and
+            # none of these reads ever wants them.
+            models.Index(
+                fields=["entity", "on_feed", "expires_at"],
+                name="newsfeed_post_ephemeral_idx",
+                condition=~Q(on_feed=PostKind.FEED),
+            ),
+        ]
 
 
 class PostTag(models.Model):
@@ -350,6 +393,15 @@ class NewsfeedIndex(DjangoCassandraModel):
     # guessing; they age out on the 14-day TTL below.
     triggered_by = columns.Text()
 
+    # WHAT the post is - a PostKind value (feed | moment | thought). Not to be
+    # confused with `type` above, which is why the row is here. Written by the
+    # worker from newsfeed_post.on_feed; rows from before the column existed
+    # read back None and count as feed (see post_kinds.index_row_kind).
+    #
+    # The column must exist in Astra BEFORE this model ships - cqlengine names
+    # every column in its SELECTs. See newsfeed/cql/0001_*.cql.
+    kind = columns.Text()
+
     __options__ = {
         # 14 days = 14 * 24 * 60 * 60
         "default_time_to_live": 1209600,
@@ -373,6 +425,10 @@ class TrendingPool(DjangoCassandraModel):
     post_id = columns.Text(primary_key=True)
     created_at = columns.DateTime(primary_key=True, clustering_order="DESC")
     author_id = columns.Text()
+
+    # PostKind value, same meaning as NewsfeedIndex.kind. Nothing writes this
+    # table yet; whatever does must set it (None counts as feed).
+    kind = columns.Text()
 
     __options__ = {
         "default_time_to_live": 259200,  # 3 days

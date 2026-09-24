@@ -86,6 +86,15 @@ from entity.services.follows import get_profile_relationship_state
 from interests.services.hashtags import save_comment_hashtags
 from newsfeed.services.content_tagging import queue_comment
 from newsfeed.services.post_visibility import visible_posts_filter, can_view_post
+from newsfeed.services.post_kinds import (
+    FEED_KINDS,
+    TRENDING_KINDS,
+    PROFILE_KINDS,
+    PREVIEW_KINDS,
+    SAVED_KINDS,
+    is_live,
+    live_kinds_filter,
+)
 from newsfeed.services.post_realtime import (
     publish_comment_created,
     publish_comment_reaction,
@@ -261,6 +270,11 @@ class NewsfeedView(APIView):
                 )
                 .filter(
                     visible_posts_filter(entity),
+                    # Moments and thoughts fan out into the same buckets; the
+                    # kind list is what decides whether this feed serves them.
+                    live_kinds_filter(
+                        FEED_KINDS if current_mode == "friends" else TRENDING_KINDS
+                    ),
                     post_id__in=candidate_post_ids,
                     deleted_at=None,
                     is_archived=False,
@@ -301,14 +315,31 @@ class NewsfeedView(APIView):
             logger.exception("NewsfeedView.post failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    # The only fields an author may change on their own post through this
+    # endpoint. It used to pass `fields` straight into update(**fields), which
+    # let an owner rewrite anything on the row - is_sponsored, from_system,
+    # date_posted, and now on_feed and expires_at (turning a 24h moment
+    # permanent). Archiving is the one thing either client sends.
+    EDITABLE_POST_FIELDS = {"is_archived"}
+
     def put(self, request):
         user = self.request.user
         try:
             post_id = request.data.get("post_id")
-            fields = request.data.get("fields")
+            fields = request.data.get("fields") or {}
 
             post = get_object_or_404(Post, post_id=post_id)
             assert_owns(request, post)
+
+            disallowed = set(fields) - self.EDITABLE_POST_FIELDS
+            if disallowed:
+                return Response(
+                    {
+                        "status": False,
+                        "message": f"Field(s) not editable: {', '.join(sorted(disallowed))}",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
             if fields:
                 Post.objects.filter(post_id=post_id).update(**fields)
@@ -474,6 +505,9 @@ class NewsfeedProfileView(APIView):
                 # behind.
                 .filter(
                     visible_posts_filter(entity),
+                    # Also the archive's "Feed" tab (archive=true): moments
+                    # have their own archive endpoint, MomentArchiveView.
+                    live_kinds_filter(PROFILE_KINDS),
                     deleted_at=None,
                     is_archived=archive,
                 )
@@ -548,6 +582,21 @@ class NewsfeedPostPreviewView(APIView):
             # public link. 404 rather than 403: whether a given post id
             # exists is itself part of what is being withheld.
             if not can_view_post(queryset, entity):
+                return Response(
+                    {"message": "Post not available"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            # Kinds this page serves, live. The author is the exception: their
+            # own posts open whatever the kind and however old, which is how the
+            # moment archive shows an expired moment. Same 404 as above, for the
+            # same reason.
+            is_author = entity is not None and str(queryset.entity_id) == str(
+                entity.id
+            )
+            if not is_author and not (
+                queryset.on_feed in PREVIEW_KINDS and is_live(queryset)
+            ):
                 return Response(
                     {"message": "Post not available"},
                     status=status.HTTP_404_NOT_FOUND,
@@ -1638,7 +1687,11 @@ class PostSaveView(APIView):
 
             post_save_query = (
                 PostSave.objects.select_related("post")
-                .filter(entity=entity, post__deleted_at=None)
+                .filter(
+                    live_kinds_filter(SAVED_KINDS, prefix="post__"),
+                    entity=entity,
+                    post__deleted_at=None,
+                )
                 .order_by("-saved_at")
             )
 
