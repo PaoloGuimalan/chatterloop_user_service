@@ -26,7 +26,7 @@ import logging
 import uuid
 from datetime import timezone as dt_timezone
 
-from django.db.models import Exists, F, OuterRef, Subquery, Value
+from django.db.models import Exists, F, OuterRef, Q, Subquery, Value
 from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from django.utils.timezone import now
@@ -794,10 +794,14 @@ class MomentDetailView(APIView):
     """
     PUT moments/<post_id>/ - the author changes a moment's audience
     (`privacy_status`: public | connections) or its "allow replies &
-    reactions" (`allow_replies`), or archives it now (`archive: true`): its
-    timer is ended, so it leaves the board and rings and lands in Archives -
-    the same place it would have gone at 24h. The timer never moves otherwise,
-    and never forward.
+    reactions" (`allow_replies`), or archives / unarchives it
+    (`archive: true | false`).
+
+    Archiving is the post-wide `is_archived` flag - the same one feed posts
+    use: the moment leaves the board, the rings and everyone else's view and
+    shows in the author's Archives, but its timer is left alone. So until it
+    would have expired anyway it can come back (`archive: false`); once it has
+    expired there is nothing to return to and unarchiving is refused.
     """
 
     permission_classes = [IsAuthenticated]
@@ -828,11 +832,16 @@ class MomentDetailView(APIView):
                 }
                 fields.append("details")
 
-            if request.data.get("archive") is True:
-                current = now()
-                if post.expires_at is None or post.expires_at > current:
-                    post.expires_at = current
-                    fields.append("expires_at")
+            if "archive" in request.data:
+                archive = request.data.get("archive") is True
+                if not archive and post.is_archived and not is_live(post):
+                    return Response(
+                        {"message": "This moment has expired - it can't come back"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if post.is_archived != archive:
+                    post.is_archived = archive
+                    fields.append("is_archived")
 
             if fields:
                 post.save(update_fields=fields)
@@ -843,6 +852,7 @@ class MomentDetailView(APIView):
                     "privacy_status": post.privacy_status,
                     "details": post.details or {},
                     "expires_at": post.expires_at,
+                    "is_archived": post.is_archived,
                 }
             )
         except Exception as e:
@@ -1024,8 +1034,9 @@ class ThoughtsRailView(APIView):
 
 class MomentArchiveView(APIView):
     """
-    GET archive/moments/ - the acting entity's own EXPIRED moments, newest
-    first. Live ones are on the board and the profile ring, not here. The archive's "Moments" tab; its "Feed" tab is the existing
+    GET archive/moments/ - the acting entity's own moments that are off the
+    board: expired, or archived by hand (those can still be unarchived while
+    their 24h last - `is_archived` and a future `expires_at`). Newest first. The archive's "Moments" tab; its "Feed" tab is the existing
     profile endpoint with archive=true.
     """
 
@@ -1038,10 +1049,10 @@ class MomentArchiveView(APIView):
             queryset = (
                 _annotated_posts(viewer)
                 .filter(
+                    Q(expires_at__lte=now()) | Q(is_archived=True),
                     entity=viewer,
                     on_feed=PostKind.MOMENT,
                     deleted_at=None,
-                    expires_at__lte=now(),
                 )
                 .order_by("-date_posted")
             )

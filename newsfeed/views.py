@@ -673,7 +673,13 @@ def _ephemeral_reaction_refusal(post, entity):
     """
     if post.on_feed == PostKind.FEED:
         return None
-    if post.deleted_at is not None or not is_live(post) or not can_view_post(post, entity):
+    # Archived by its author: off everyone's screen, so nothing to react to.
+    if (
+        post.deleted_at is not None
+        or post.is_archived
+        or not is_live(post)
+        or not can_view_post(post, entity)
+    ):
         return Response(
             {"message": f"This {post.on_feed} is not available"},
             status=status.HTTP_404_NOT_FOUND,
