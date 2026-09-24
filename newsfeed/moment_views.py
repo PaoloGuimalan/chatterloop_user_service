@@ -46,6 +46,7 @@ from user.services.connections import ConnectionHelpers
 from user_service.services.rabbitmq import RabbitMQClient, Queues
 
 from .models import (
+    EPHEMERAL_LIFETIME,
     THOUGHT_MAX_LENGTH,
     THOUGHT_MOODS,
     Post,
@@ -834,14 +835,27 @@ class MomentDetailView(APIView):
 
             if "archive" in request.data:
                 archive = request.data.get("archive") is True
-                if not archive and post.is_archived and not is_live(post):
-                    return Response(
-                        {"message": "This moment has expired - it can't come back"},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                if post.is_archived != archive:
-                    post.is_archived = archive
-                    fields.append("is_archived")
+                if archive:
+                    if not post.is_archived:
+                        post.is_archived = True
+                        fields.append("is_archived")
+                else:
+                    # Back on the board until its NATURAL end - posted + 24h.
+                    # Restoring that (not only clearing the flag) also brings
+                    # back moments archived the earlier way, which ended the
+                    # timer early instead of flagging.
+                    natural_end = post.date_posted + EPHEMERAL_LIFETIME
+                    if natural_end <= now():
+                        return Response(
+                            {"message": "This moment has expired - it can't come back"},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    if post.is_archived:
+                        post.is_archived = False
+                        fields.append("is_archived")
+                    if post.expires_at is None or post.expires_at < natural_end:
+                        post.expires_at = natural_end
+                        fields.append("expires_at")
 
             if fields:
                 post.save(update_fields=fields)
