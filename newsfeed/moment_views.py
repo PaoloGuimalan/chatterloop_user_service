@@ -302,15 +302,30 @@ def _moment_preview(post, shared_preview=None):
             "date_posted": post.date_posted,
             "expires_at": post.expires_at,
         }
+    details = post.details or {}
+    poster = details.get("poster") if isinstance(details.get("poster"), dict) else None
+    # Encoded on the device: the tile shows the POSTER (a still image), so
+    # every client - including ones that know nothing of posters - draws an
+    # image instead of loading the video to show its first frame.
+    if poster and poster.get("url"):
+        thumbnail, media_type = poster["url"], "image/jpeg"
+    elif first is None:
+        thumbnail, media_type = None, None
+    else:
+        thumbnail, media_type = first.reference, first.reference_media_type
     return {
         "post_id": post.post_id,
         "caption": post.caption or "",
         "is_shared": is_shared,
         "shared_post_id": first.reference if (is_shared and first) else None,
-        "thumbnail": None if (is_shared or first is None) else first.reference,
-        "media_type": None
-        if (is_shared or first is None)
-        else first.reference_media_type,
+        "thumbnail": thumbnail,
+        "media_type": media_type,
+        # What it was made from ("photo" | "video"), whether it has sound,
+        # and its length - for a play icon and the viewer's timing. Absent
+        # on moments not encoded on the device.
+        "source": details.get("source"),
+        "has_audio": details.get("has_audio"),
+        "duration_ms": details.get("duration_ms"),
         "date_posted": post.date_posted,
         "expires_at": post.expires_at,
     }
