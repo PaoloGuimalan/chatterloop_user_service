@@ -117,6 +117,21 @@ RABBITMQ_URL = (
 RABBITMQ_CONNECT_TIMEOUT = float(os.getenv("RABBITMQ_CONNECT_TIMEOUT", "3"))
 RABBITMQ_PUBLISH_MAX_RETRIES = int(os.getenv("RABBITMQ_PUBLISH_MAX_RETRIES", "2"))
 
+# At most one reaction push per post / moment / thought per window. A post
+# that takes off can collect reactions by the thousand a minute; without this
+# every one of them is a queued job and a buzz on its owner's phone. Reactions
+# inside the window are still stored and still notify in-app - they just
+# don't push.
+PUSH_REACTION_COOLDOWN_SECONDS = int(
+    os.getenv("PUSH_REACTION_COOLDOWN_SECONDS", "900")
+)
+# Same, for "commented on your post". Only that one: a reply to your comment
+# and an @mention are addressed to one person about one thing, so they always
+# push.
+PUSH_COMMENT_COOLDOWN_SECONDS = int(
+    os.getenv("PUSH_COMMENT_COOLDOWN_SECONDS", "900")
+)
+
 MONGODB_CLUSTER_USER = os.getenv("MONGODB_CLUSTER_USER")
 MONGODB_CLUSTER_PASS = os.getenv("MONGODB_CLUSTER_PASS")
 MONGODB_CLUSTER_HOST = os.getenv("MONGODB_CLUSTER_HOST")

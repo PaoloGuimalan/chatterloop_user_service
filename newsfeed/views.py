@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.shortcuts import render
 from django.http import HttpResponse
 from rest_framework.views import APIView
@@ -55,12 +56,18 @@ from user.services.mongohelpers import NotificationService
 from .drf_permissions import AllowsInternalService
 from .services.link_preview import extract_first_url, get_preview, fetch_image
 from .services.comment_mentions import (
+    comment_push_route,
     extract_mention_handles,
     notify_comment_mentions,
     resolve_mentioned_entities,
 )
-from entity.utils import get_entity_display_username, get_entity_profile_path
+from entity.utils import (
+    get_entity_display_username,
+    get_entity_profile_path,
+    get_entity_profile_picture,
+)
 from interests.services.affinity import bump_interest_affinity
+from user_service.services import push
 from user_service.services.rabbitmq import RabbitMQClient, Queues
 from user_service.services.redis import RedisPubSubClient
 from django.utils.timezone import now
@@ -661,6 +668,46 @@ def _reaction_noun(post):
     return "post"
 
 
+def _reaction_push_route(post):
+    """
+    Where tapping a reaction push opens in the app, or "" for the
+    notifications list.
+
+    The push goes to the post's OWNER, so a moment opens "my moments, starting
+    at this one" - `self` is whichever entity the device is acting as, which is
+    always the owner, since pushes are addressed per entity session. The viewer
+    falls back to the archive once the moment has expired. A thought has no
+    screen of its own in the app, so it lands where the in-app row does.
+    """
+    if post.on_feed == PostKind.MOMENT:
+        return f"/moments/self?post={post.post_id}"
+    if post.on_feed == PostKind.THOUGHT:
+        return ""
+    return f"/post/{post.post_id}"
+
+
+def _post_push_image(post):
+    """
+    A still of the post a push is about (reacted to, commented on), for the
+    push's expanded view, or None.
+
+    Only ever a STILL: the app downloads it before it can post the
+    notification, so a video URL would pull the whole clip over the wire just
+    to fail decoding it. A moment encoded on the device (always a video) has a
+    poster for exactly this. Thoughts are text, and a shared post's media is
+    someone else's post, so neither gets one.
+    """
+    if post.file_type == "shared_post":
+        return None
+    poster = (post.details or {}).get("poster")
+    if isinstance(poster, dict) and poster.get("url"):
+        return poster["url"]
+    for ref in post.references.all():
+        if (ref.reference_media_type or "").startswith("image"):
+            return ref.reference
+    return None
+
+
 def _ephemeral_reaction_refusal(post, entity):
     """
     The response refusing a reaction to a moment or thought that cannot take
@@ -824,6 +871,30 @@ class PostReactionsView(APIView):
 
                     RedisPubSubClient.publish_json(f"events_{sse_sendToUser}", data)
 
+                    # Alongside the SSE, not instead of it: the worker only
+                    # pushes to devices with no live connection, so the two
+                    # never reach the same device. Changing the emoji later
+                    # (PUT) deliberately does not push again - the owner was
+                    # already told about this reaction.
+                    push.send_activity(
+                        [post.entity.id],
+                        # One push per post per window, whoever reacts: a
+                        # trending post would otherwise buzz its owner (and
+                        # queue a job) for every single reaction. Keyed on the
+                        # post rather than the reactor, so a remove/re-add
+                        # can't slip a second one through either.
+                        cooldown_key=f"reaction:{post.post_id}",
+                        cooldown_seconds=settings.PUSH_REACTION_COOLDOWN_SECONDS,
+                        type=f"{noun}_reaction",
+                        # Same headline/details the stored notification
+                        # carries, so the push and the list can't drift apart.
+                        title=f"{noun.capitalize()} Reaction",
+                        body=sse_sendToDetails,
+                        route=_reaction_push_route(post),
+                        image_url=_post_push_image(post),
+                        sender_avatar_url=get_entity_profile_picture(entity),
+                    )
+
                 return Response(
                     {"message": "Reaction has been added"}, status=status.HTTP_200_OK
                 )
@@ -872,14 +943,17 @@ class PostReactionsView(APIView):
                 publish_post_reaction(post_id, entity, "updated")
 
                 if post.entity.id != entity.id:
+                    # Worded by kind like the add path - a hardcoded "post"
+                    # here renamed a moment/thought reaction on every swap.
+                    noun = _reaction_noun(post)
                     service = NotificationService()
                     service.update_content(
                         reaction_id=reaction.reaction_id,
-                        new_content=f"{get_entity_display_username(entity)} reacted {new_emoji.emoji_content} to your post.",
+                        new_content=f"{get_entity_display_username(entity)} reacted {new_emoji.emoji_content} to your {noun}.",
                     )
 
                     sse_sendToUser = post.entity.id
-                    sse_sendToDetails = f"{get_entity_display_username(entity)} reacted {new_emoji.emoji_content} to your post."
+                    sse_sendToDetails = f"{get_entity_display_username(entity)} reacted {new_emoji.emoji_content} to your {noun}."
 
                     now = datetime.now()
                     data = {
@@ -1547,6 +1621,19 @@ class CommentsView(APIView):
                         RedisPubSubClient.publish_json(
                             f"events_{replied_to.entity.id}", data
                         )
+
+                        # No cooldown: a reply is addressed to one person
+                        # about their own comment, not a function of how
+                        # popular the post is.
+                        push.send_activity(
+                            [replied_to.entity.id],
+                            type="comment_reply",
+                            title="Replied Comment",
+                            body=reply_text,
+                            route=comment_push_route(post.post_id, new_comment_id),
+                            image_url=_post_push_image(post),
+                            sender_avatar_url=get_entity_profile_picture(entity),
+                        )
                         notified_ids.append(replied_to.entity.id)
 
                 else:
@@ -1583,6 +1670,22 @@ class CommentsView(APIView):
                         }
 
                         RedisPubSubClient.publish_json(f"events_{post.entity.id}", data)
+
+                        # One push per post per window, whoever comments: the
+                        # post owner's count grows with the post's reach. Its
+                        # own key, so a recent reaction push can't swallow the
+                        # first comment's.
+                        push.send_activity(
+                            [post.entity.id],
+                            cooldown_key=f"comment:{post.post_id}",
+                            cooldown_seconds=settings.PUSH_COMMENT_COOLDOWN_SECONDS,
+                            type="post_comment",
+                            title="Post Comment",
+                            body=f"{get_entity_display_username(entity)} commented on your post.",
+                            route=comment_push_route(post.post_id, new_comment_id),
+                            image_url=_post_push_image(post),
+                            sender_avatar_url=get_entity_profile_picture(entity),
+                        )
                         notified_ids.append(post.entity.id)
 
                 notify_comment_mentions(comment, entity, mention_entities, notified_ids)

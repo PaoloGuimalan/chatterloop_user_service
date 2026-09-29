@@ -59,6 +59,9 @@ class Queues:
     REMOVE_FEED_ON_UNFRIEND = "remove_feed_on_unfriend"
     REMOVE_ENGAGEMENT_LOG = "remove_engagement_log"
     SEND_EMAIL = "send_email"
+    # Publish through user_service.services.push rather than directly - it
+    # owns the payload shape the worker decodes and the app renders.
+    SEND_PUSH = "send_push"
     # Consumed by chatterloop_services/moderation_service, NOT the Go worker -
     # the only queue in this class that is. ONE ingress for all content: the
     # backend hands over the whole unit and the moderation pipeline decides

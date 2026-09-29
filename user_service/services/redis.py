@@ -96,6 +96,34 @@ class RedisPubSubClient:
         return result is True
 
     @classmethod
+    def acquire_push_cooldown(cls, key, ttl):
+        """
+        True the first time [key] is claimed within [ttl] seconds (the push
+        should go out), False while that window is still open.
+
+        FAILS CLOSED, the opposite of acquire_email_cooldown. That one guards
+        against one extra email to one person; this one guards against a
+        trending post fanning a push out per reaction. A Redis outage costs a
+        few skipped pushes here - the reactions and their in-app notifications
+        are unaffected - whereas failing open would let exactly that fan-out
+        through for as long as the outage lasts.
+
+        Never raises: it runs from a transaction.on_commit callback, where an
+        exception would surface as a failed request for a write that has
+        already committed.
+        """
+        try:
+            conn = cls.get_redis_connection()
+            if not conn:
+                return False
+
+            result = conn.set(f"chatterloop:push:{key}_cooldown", "1", nx=True, ex=ttl)
+            return result is True
+        except Exception as err:
+            logger.warning("push: cooldown check failed, skipping push: %s", err)
+            return False
+
+    @classmethod
     def get_and_toggle_feed_mode(cls, entity_id, fallback_mode="friends"):
         """
         Determines the feed mode for the current request by reading the

@@ -20,9 +20,10 @@ from datetime import datetime
 from django.db.models import Q
 
 from entity.models import Entity
-from entity.utils import get_entity_display_username
+from entity.utils import get_entity_display_username, get_entity_profile_picture
 from user.services.mongohelpers import NotificationService
 from user.utils.blocking import get_blocked_account_ids
+from user_service.services import push
 from user_service.services.redis import RedisPubSubClient
 
 # A comment is short form; past this the input is a spam vector rather than a
@@ -143,6 +144,16 @@ def resolve_mentioned_entities(text, author_entity):
     ][:MAX_MENTIONS_PER_COMMENT]
 
 
+def comment_push_route(post_id, comment_id):
+    """
+    Where a push about a comment opens in the app: the post, anchored at the
+    comment - the same destination its in-app row has there
+    (server/reusables/models/notificationactions.js, withQueryAnchor). A build
+    that doesn't read `anchor` just opens the post.
+    """
+    return f"/post/{post_id}?anchor={comment_id}"
+
+
 def notify_comment_mentions(comment, author_entity, entities, already_notified_ids=()):
     """
     Notification + SSE ping per mentioned entity.
@@ -159,6 +170,7 @@ def notify_comment_mentions(comment, author_entity, entities, already_notified_i
         f"{get_entity_display_username(author_entity)} mentioned you in a comment."
     )
     service = NotificationService()
+    mentioned_ids = []
 
     for entity in entities:
         if str(entity.id) in skip:
@@ -197,3 +209,17 @@ def notify_comment_mentions(comment, author_entity, entities, already_notified_i
         )
 
         skip.add(str(entity.id))
+        mentioned_ids.append(entity.id)
+
+    # One job for everyone named: the content is identical for each, and the
+    # worker resolves all their devices in a single query. No cooldown - it is
+    # addressed to each of them personally, and already capped at
+    # MAX_MENTIONS_PER_COMMENT.
+    push.send_activity(
+        mentioned_ids,
+        type="comment_mention",
+        title="Comment Mention",
+        body=mention_text,
+        route=comment_push_route(comment.post_id, comment.comment_id),
+        sender_avatar_url=get_entity_profile_picture(author_entity),
+    )
