@@ -18,6 +18,11 @@ from .serializers import EntrySerializer, TagSerializer, MoodSerializer
 from django.utils import timezone
 from datetime import datetime
 from entity.services.follows import get_profile_relationship_state
+from newsfeed.services.media_release import (
+    UploadRejected,
+    attach_upload,
+    resolve_own_upload,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -238,6 +243,23 @@ class DiaryCRUDView(APIView):
                     status=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 )
 
+            # Each attachment must be the author's own finished diary upload
+            # (/media/uploads). Only its link is taken from the request: the
+            # name, type and id stored are the upload record's.
+            try:
+                uploads = [
+                    resolve_own_upload(
+                        (a or {}).get("url") if isinstance(a, dict) else None,
+                        user.id,
+                        "diary",
+                    )
+                    for a in (attachments or [])
+                ]
+            except UploadRejected as rejected:
+                return Response(
+                    {"message": str(rejected)}, status=status.HTTP_400_BAD_REQUEST
+                )
+
             with transaction.atomic():
                 # Both branches resolve through the same canonical,
                 # race-safe, case/whitespace-insensitive lookup now -
@@ -283,6 +305,23 @@ class DiaryCRUDView(APIView):
 
                 final_id = queryset.id
 
+                for upload in uploads:
+                    Attachment.objects.create(
+                        entry=queryset,
+                        file_id=str(upload.fileID),
+                        file_name=upload.name,
+                        file_type=upload.mime,
+                        url=upload.fileDetails["data"],
+                    )
+                    transaction.on_commit(
+                        lambda upload=upload: attach_upload(
+                            upload, "diary", final_id
+                        )
+                    )
+
+                # Read back AFTER the attachments exist: the prefetch runs as
+                # soon as the row is fetched, so reading it first answered
+                # every new entry with an empty attachment list.
                 created_entry_queryset = Entry.objects.select_related(
                     "entry_map_info"
                 ).prefetch_related("attachments")
@@ -291,16 +330,6 @@ class DiaryCRUDView(APIView):
                     Q(account=user) | Q(is_private=False),
                     id=final_id,
                 )
-
-                if attachments and len(attachments) > 0:
-                    for attachment in attachments:
-                        Attachment.objects.create(
-                            entry=queryset,
-                            file_id=attachment["file_id"],
-                            file_name=attachment["file_name"],
-                            file_type=attachment["file_type"],
-                            url=attachment["url"],
-                        )
 
                 serialized_response = EntrySerializer(final_query)
 

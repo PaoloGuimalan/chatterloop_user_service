@@ -1514,8 +1514,8 @@ class CommentsView(APIView):
             # either way by the "Replied Comment" branch below.
             mention_entities = resolve_mentioned_entities(new_comment, entity)
 
-            # A file uploaded straight to storage must be the commenter's own
-            # finished comment upload; anything older still passes for now.
+            # An attached file must be the commenter's own finished comment
+            # upload. Only the attachment - links in the text are untouched.
             try:
                 own_upload = resolve_comment_upload(new_attachment, user.id)
             except UploadRejected as rejected:

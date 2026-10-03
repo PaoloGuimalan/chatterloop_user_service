@@ -6,9 +6,10 @@ worker_service consumes it (internal/services/media) and decides per file: kept 
 reported, otherwise removed from storage. This module only says which
 content went and which URLs it used.
 
-Comments may carry a file uploaded straight to storage (Node's
-/media/uploads). resolve_comment_upload checks it is the commenter's own
-finished upload; attach_upload records the comment on it.
+Comments and diary entries carry files uploaded straight to storage (Node's
+/media/uploads). resolve_own_upload checks each is the author's own finished
+upload of the right purpose - nothing else is accepted - and attach_upload
+records the content on it.
 """
 
 import logging
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class UploadRejected(Exception):
-    """A comment named a file the commenter may not use."""
+    """Content named a file its author may not use."""
 
 
 def _url(value):
@@ -80,25 +81,36 @@ def publish_media_release(items):
         logger.exception("media_release publish failed")
 
 
-def resolve_comment_upload(url, account_id):
+def resolve_own_upload(url, account_id, purpose):
     """
-    The direct-upload record behind a comment attachment, checked - or None
-    when the URL has no such record (an older upload or a link, still
-    accepted until the old upload paths are retired).
+    The upload record behind `url`, checked: a file `account_id` uploaded
+    through /media/uploads for `purpose`, and confirmed. Anything else - an
+    external link, someone else's file, a file from the retired upload
+    paths - raises UploadRejected.
     """
-    url = _url(url)
-    if not url:
-        return None
-    record = UploadedFile.objects(version=2, fileDetails__data=url).first()
+    if not isinstance(url, str) or not url.strip():
+        raise UploadRejected("Files must be uploaded to Chatterloop first")
+    record = UploadedFile.objects(version=2, fileDetails__data=url.strip()).first()
     if record is None:
-        return None
+        raise UploadRejected("Files must be uploaded to Chatterloop first")
     if record.ownerAccount != str(account_id):
         raise UploadRejected("You can only use files you uploaded")
     if record.status not in ("ready", "attached"):
         raise UploadRejected("That file isn't ready to use")
-    if record.purpose != "comment":
+    if record.purpose != purpose:
         raise UploadRejected("That file was uploaded for something else")
     return record
+
+
+def resolve_comment_upload(value, account_id):
+    """
+    The upload record behind a comment's ATTACHED file, checked - or None
+    when the comment has no attachment. Links typed in the comment's text are
+    a different field and never come through here.
+    """
+    if value is None or value == "":
+        return None
+    return resolve_own_upload(value, account_id, "comment")
 
 
 def attach_upload(record, target_type, target_id):
