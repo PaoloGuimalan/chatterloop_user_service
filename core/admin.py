@@ -1,7 +1,7 @@
 from django import forms
 from django.contrib import admin
 from django.db import models
-from .models import TPAuthentication, PolicyDocument
+from .models import TPAuthentication, PolicyDocument, Variable
 
 admin.site.register(TPAuthentication)
 
@@ -19,3 +19,10 @@ class PolicyDocumentAdmin(admin.ModelAdmin):
     @admin.display(boolean=True, description="Has content")
     def has_content(self, obj):
         return bool(obj.content)
+
+
+@admin.register(Variable)
+class VariableAdmin(admin.ModelAdmin):
+    list_display = ("key", "updated_at")
+    readonly_fields = ("updated_at",)
+    ordering = ("key",)

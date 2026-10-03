@@ -39,3 +39,30 @@ class PolicyDocument(models.Model):
 
     def __str__(self):
         return f"{self.document_type} {self.version}"
+
+
+class Variable(models.Model):
+    """
+    Platform settings that are tuned, not deployed: one row per key, the value
+    a JSON document. Editable in the admin; readers cache it briefly, so a
+    change takes effect within about a minute.
+
+    Read directly by the Node server too (server/reusables/media/config.js)
+    as `core_variable`, Django's own name for it.
+
+    Never put a secret here - credentials stay in the environment.
+
+    Keys in use:
+      upload_limits    {feature: {maxMB, types}} - what each upload feature
+                       accepts; clients fetch it on boot
+      upload_transfer  {multipartThresholdMB, partSizeMB, concurrency} - how
+                       clients send big files
+    """
+
+    key = models.CharField(max_length=100, primary_key=True)
+    value = models.JSONField()
+    description = models.TextField(blank=True, default="")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.key

@@ -157,7 +157,54 @@ def delete_account(account, entity):
         PostPrivacy,
     )
 
+    from diary.models import Attachment as DiaryAttachment
+    from newsfeed.services.media_release import (
+        comment_items,
+        post_items,
+        publish_media_release,
+    )
+
     account_id = account.id
+
+    # What the account's files belonged to, gathered BEFORE anything is
+    # deleted: afterwards the soft-delete filters no longer match these rows,
+    # and diary attachments are gone entirely.
+    live_post_ids = list(
+        Post.objects.filter(entity=entity, deleted_at__isnull=True).values_list(
+            "post_id", flat=True
+        )
+    )
+    live_comment_ids = list(
+        Comment.objects.filter(entity=entity, deleted_at__isnull=True).values_list(
+            "comment_id", flat=True
+        )
+    )
+    release = post_items(live_post_ids) + comment_items(live_comment_ids)
+    for entry_id, url in DiaryAttachment.objects.filter(
+        entry__account=account
+    ).values_list("entry_id", "url"):
+        release.append({"target": {"type": "diary", "id": str(entry_id)}, "urls": [url]})
+    old_pictures = [
+        u for u in (account.profile, account.coverphoto) if u and u.startswith("http")
+    ]
+    if old_pictures:
+        release.append(
+            {"target": {"type": "avatar", "id": str(entity.id)}, "urls": old_pictures}
+        )
+    for message in Message.objects(sender=str(entity.id), isDeleted=False).only(
+        "messageID", "conversationID", "content", "messageType"
+    ):
+        if str(message.messageType or "") in ("text", "notif", "post"):
+            continue
+        url = (message.content or "").split("%%%")[0]
+        if url.startswith("http"):
+            release.append(
+                {
+                    "target": {"type": "message", "id": message.messageID},
+                    "urls": [url],
+                    "context": {"conversationID": message.conversationID},
+                }
+            )
 
     with transaction.atomic():
         Post.objects.filter(entity=entity, deleted_at__isnull=True).update(
@@ -209,5 +256,9 @@ def delete_account(account, entity):
     Notification.objects(toUserID=str(entity.id)).delete()
     Notification.objects(fromUserID=str(entity.id)).delete()
     Session.objects(entityID=str(entity.id)).delete()
+
+    # The Node server deletes each file unless something live still uses it
+    # or its content was reported.
+    publish_media_release(release)
 
     return account

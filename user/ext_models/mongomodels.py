@@ -207,3 +207,22 @@ class Session(Document):
     lastSeen = DateTimeField(default=None)
 
     __v = IntField(db_field="__v")
+
+
+class UploadedFile(Document):
+    """
+    A stored file - the Node server's `files` collection. Only the fields
+    this service reads or writes are declared; strict=False keeps the rest
+    (server/schema/posts/uploadedfiles.js is the full shape).
+    """
+
+    meta = {"collection": "files", "strict": False}
+
+    fileID = DynamicField()
+    version = IntField()
+    status = StringField()
+    purpose = StringField()
+    ownerAccount = StringField()
+    fileDetails = DictField()
+    attachedTo = ListField(DictField())
+

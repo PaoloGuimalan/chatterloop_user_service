@@ -68,6 +68,10 @@ class Queues:
     # which stages it needs internally, so the per-media queues stay that
     # service's own business.
     CONTENT_TAGGING = "content_tagging"
+    # Files whose post / comment / message was deleted - the worker
+    # (internal/services/media) decides and deletes. Publish through
+    # newsfeed.services.media_release, which owns the payload shape.
+    MEDIA_RELEASE = "media_release"
 
 
 def _normalize(value):

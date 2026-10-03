@@ -69,6 +69,14 @@ from entity.utils import (
 from interests.services.affinity import bump_interest_affinity
 from user_service.services import push
 from user_service.services.rabbitmq import RabbitMQClient, Queues
+from .services.media_release import (
+    UploadRejected,
+    attach_upload,
+    comment_items,
+    post_items,
+    publish_media_release,
+    resolve_comment_upload,
+)
 from user_service.services.redis import RedisPubSubClient
 from django.utils.timezone import now
 from datetime import datetime
@@ -385,6 +393,8 @@ class NewsfeedView(APIView):
                 Post.objects.filter(post_id__in=post_ids).update(
                     deleted_at=now(), deleted_by=entity
                 )
+                # Their files go too, unless still used or reported.
+                publish_media_release(post_items(post_ids))
 
             return Response(
                 {
@@ -1504,6 +1514,13 @@ class CommentsView(APIView):
             # either way by the "Replied Comment" branch below.
             mention_entities = resolve_mentioned_entities(new_comment, entity)
 
+            # A file uploaded straight to storage must be the commenter's own
+            # finished comment upload; anything older still passes for now.
+            try:
+                own_upload = resolve_comment_upload(new_attachment, user.id)
+            except UploadRejected as rejected:
+                return Response({"error": str(rejected)}, status=400)
+
             with transaction.atomic():
                 new_comment_id = str(uuid.uuid4())
                 comment = Comment.objects.create(
@@ -1513,6 +1530,9 @@ class CommentsView(APIView):
                     text=new_comment,
                     attachment=new_attachment,
                     entity=entity,
+                )
+                transaction.on_commit(
+                    lambda: attach_upload(own_upload, "comment", new_comment_id)
                 )
 
                 # Wakes any comment section currently open on this post, on
@@ -1771,6 +1791,8 @@ class CommentsView(APIView):
                             deleted_at=deleted_at, deleted_by=entity
                         )
                         deleted_ids.extend(reply_ids)
+
+                publish_media_release(comment_items(deleted_ids))
 
                 # post() counts EVERY comment, replies included, so removal has
                 # to give back the same amount - the whole thread, not just the
