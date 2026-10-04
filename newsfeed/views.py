@@ -35,11 +35,13 @@ from .models import (
     ActivityCount,
     PostScore,
     PostSave,
+    PostTag,
     NewsfeedIndex,
 )
 from user.models import Account
 from .serializers import (
     PostSerializer,
+    PostTagSerializer,
     EmojiSerializer,
     PreviewCountSerializer,
     CommentSerializer,
@@ -94,6 +96,7 @@ import uuid
 from community.models import Follow, Realm
 from entity.models import Entity
 from django.shortcuts import get_object_or_404
+from django.http import Http404
 from user.utils.blocking import get_blocked_account_ids, is_blocked
 from rest_framework.exceptions import PermissionDenied
 from entity.ownership import assert_owns
@@ -1922,6 +1925,66 @@ class PostSaveView(APIView):
         except Exception as e:
             logger.exception("PostSaveView.delete failed")
             return Response({"error": str(e)}, status=500)
+
+
+class PostTagView(APIView):
+    """
+    DELETE {post_id, entity_id} - takes one tag off a post.
+
+    Two can: the TAGGED entity removing itself - the privacy case, and the post
+    then leaves its profile, which lists the posts it is tagged in - and the
+    post's AUTHOR removing anyone it tagged. Acting as a page counts as that
+    page, as everywhere request.entity is read.
+
+    Answers with the tags that remain, in the post payload's own `tagging`
+    shape, so a client redraws "is with ..." without refetching the post.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request):
+        try:
+            entity = getattr(request, "entity", None)
+            post_id = request.data.get("post_id")
+            tagged_id = request.data.get("entity_id")
+            if not post_id or not tagged_id:
+                return Response(
+                    {"status": False, "message": "post_id and entity_id are required"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            post = get_object_or_404(Post, post_id=post_id, deleted_at=None)
+            acting = str(getattr(entity, "id", ""))
+            if not acting or acting not in (str(post.entity_id), str(tagged_id)):
+                raise PermissionDenied(
+                    "Only the post's author or the tagged entity can remove this tag."
+                )
+
+            with transaction.atomic():
+                PostTag.objects.filter(post=post, entity_id=tagged_id).delete()
+                remaining = PostTag.objects.filter(post=post).select_related("entity")
+                # is_tagged is what the worker and the feed read; a post with
+                # no tags left must stop claiming to have any.
+                if post.is_tagged and not remaining.exists():
+                    Post.objects.filter(post_id=post.post_id).update(is_tagged=False)
+
+            return Response(
+                {
+                    "status": True,
+                    "data": PostTagSerializer(
+                        remaining, many=True, context={"request": request}
+                    ).data,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except (PermissionDenied, Http404):
+            raise
+        except Exception as e:
+            logger.exception("PostTagView.delete failed")
+            return Response(
+                {"status": False, "message": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 def _empty_preview(status_value="failed"):

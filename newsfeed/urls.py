@@ -71,6 +71,11 @@ urlpatterns = [
         name="newsfeed-saves",
     ),
     path(
+        "tags",
+        views.PostTagView.as_view(),
+        name="newsfeed-tags",
+    ),
+    path(
         "link-preview",
         views.LinkPreviewView.as_view(),
         name="newsfeed-link-preview",
