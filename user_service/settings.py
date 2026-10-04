@@ -187,6 +187,11 @@ CACHES = {
 
 ALLOWED_HOSTS = ["*"]
 
+# Path prefix the gateway serves this app under (api.chatterloop.app/us, with
+# the prefix stripped by Traefik). Set in the stack file, unset locally. Makes
+# generated URLs - admin redirects, static links - carry the prefix.
+FORCE_SCRIPT_NAME = os.getenv("FORCE_SCRIPT_NAME")
+
 # Application definition
 
 INSTALLED_APPS = [
@@ -357,7 +362,11 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = "static/"
+# Prefixed here rather than left relative ("static/"): Django only adds the
+# script prefix to a relative STATIC_URL on first read, and WhiteNoise reads it
+# at startup, before any request has set that prefix. WhiteNoise strips
+# FORCE_SCRIPT_NAME back off when matching files.
+STATIC_URL = f"{(FORCE_SCRIPT_NAME or '').rstrip('/')}/static/"
 
 # collectstatic writes here at image build time; WhiteNoise serves from it.
 STATIC_ROOT = BASE_DIR / "staticfiles"

@@ -34,7 +34,7 @@ from urllib.parse import quote, urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 from django.core.cache import cache
-from django.urls import reverse
+from django.urls import get_script_prefix, reverse
 
 CACHE_TTL_OK = 60 * 60 * 24  # 24h
 CACHE_TTL_FAILED = 60 * 60  # 1h
@@ -525,6 +525,10 @@ def build_image_proxy_path(raw_url):
     Entry) aren't reliably given a `request` in this codebase's existing
     call sites - the frontend prepends its own known API base URL.
 
+    Relative to the app root, not the script prefix (FORCE_SCRIPT_NAME): that
+    base URL already ends in the gateway prefix, so including it here would
+    double it - and these paths are persisted on messages and cached.
+
     Some sites declare `<link rel="icon" href="data:,">` to explicitly opt
     out of favicon requests - a data: URI has no external target to proxy
     (it's inline bytes, no privacy leak either), so pass it through as-is
@@ -541,6 +545,7 @@ def build_image_proxy_path(raw_url):
         return None
 
     path = reverse("api-newsfeed:newsfeed-link-preview-image")
+    path = "/" + path.removeprefix(get_script_prefix())
     return f"{path}?url={quote(raw_url, safe='')}"
 
 
