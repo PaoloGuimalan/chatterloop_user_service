@@ -66,3 +66,82 @@ class Variable(models.Model):
 
     def __str__(self):
         return self.key
+
+
+class Update(models.Model):
+    """
+    A client release that older installs should be told about. Clients ask
+    /api/user/system-update with their platform and build; see pending_for.
+
+    Compared by `build`, never `version`: build is the integer the stores force
+    up on every upload (Android versionCode / iOS CFBundleVersion - the mobile
+    app's AppVersion.build), while version is a display string that can move
+    in any direction.
+    """
+
+    PLATFORM_CHOICES = [
+        ("android", "Android"),
+        ("ios", "iOS"),
+        ("web", "Web"),
+    ]
+
+    SEVERITY_CHOICES = [
+        # The client may dismiss it.
+        ("optional", "Optional"),
+        # The client blocks until updated.
+        ("required", "Required"),
+    ]
+
+    platform = models.CharField(max_length=20, choices=PLATFORM_CHOICES)
+    # Shown to the user, e.g. "1.2.0".
+    version = models.CharField(max_length=50)
+    build = models.PositiveIntegerField()
+    severity = models.CharField(
+        max_length=20, choices=SEVERITY_CHOICES, default="optional"
+    )
+    title = models.CharField(max_length=150, blank=True, default="")
+    # What changed, shown in the banner. Plain text.
+    details = models.TextField(blank=True, default="")
+    # Where "Update" goes. Blank: Android opens its Play listing by package
+    # name; iOS (App Store id) and web need it set.
+    store_url = models.CharField(max_length=500, blank=True, default="")
+    # Off pulls a release (a bad build, a rollout put on hold) without losing
+    # its row.
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=now)
+
+    class Meta:
+        ordering = ["platform", "-build"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["platform", "build"], name="unique_update_build"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.platform} {self.version} ({self.build}, {self.severity})"
+
+    @classmethod
+    def pending_for(cls, platform, build):
+        """
+        The update a client on `build` should be offered, or None.
+
+        Describes the LATEST release, but is required when ANY release newer
+        than the client is - so a user several versions behind cannot skip
+        past a required one just because the newest happens to be optional.
+        """
+        newer = cls.objects.filter(
+            platform=platform, is_active=True, build__gt=build
+        )
+        latest = newer.order_by("-build").first()
+        if latest is None:
+            return None
+        required = newer.filter(severity="required").exists()
+        return {
+            "severity": "required" if required else "optional",
+            "version": latest.version,
+            "build": latest.build,
+            "title": latest.title,
+            "details": latest.details,
+            "store_url": latest.store_url,
+        }

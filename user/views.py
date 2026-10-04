@@ -40,7 +40,7 @@ from django.utils.timezone import make_aware
 from django.utils.timezone import now
 from .ext_models.mongomodels import Message, Conversation, Session
 from .services.mongohelpers import NotificationService, SessionService
-from core.models import TPAuthentication
+from core.models import TPAuthentication, Update
 from .utils.bcrypt_tools import hash_password
 from .utils.generators import generate_unique_username
 from .utils.external_requests import emailer
@@ -1858,6 +1858,50 @@ class PolicyDocumentList(APIView):
             )
         except Exception as e:
             logger.exception("PolicyDocumentList.get failed")
+            return Response(
+                {"status": False, "message": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class SystemUpdateCheck(APIView):
+    """
+    GET ?platform=android&build=12 - the update this client should be offered,
+    or null. Public: a required update has to block the login screen too.
+
+    Query parameters rather than the X-Platform/X-App-Version headers the app
+    already sends, so a browser client can ask without a CORS preflight.
+    """
+
+    permission_classes = [AllowAny]
+
+    def get_authenticators(self):
+        return []
+
+    def get(self, request):
+        platform = request.query_params.get("platform", "")
+        try:
+            build = int(request.query_params.get("build", ""))
+        except ValueError:
+            build = 0
+
+        platforms = {value for value, _ in Update.PLATFORM_CHOICES}
+        # Build 0 is what a client sends when it could not read its own
+        # version; answering it would offer every release ever made.
+        if platform not in platforms or build < 1:
+            return Response(
+                {"status": False, "message": "platform and build are required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            update = Update.pending_for(platform, build)
+            return Response(
+                {"status": True, "data": update},
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            logger.exception("SystemUpdateCheck.get failed")
             return Response(
                 {"status": False, "message": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,

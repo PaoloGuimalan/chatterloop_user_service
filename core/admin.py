@@ -1,7 +1,7 @@
 from django import forms
 from django.contrib import admin
 from django.db import models
-from .models import TPAuthentication, PolicyDocument, Variable
+from .models import TPAuthentication, PolicyDocument, Variable, Update
 
 admin.site.register(TPAuthentication)
 
@@ -26,3 +26,10 @@ class VariableAdmin(admin.ModelAdmin):
     list_display = ("key", "updated_at")
     readonly_fields = ("updated_at",)
     ordering = ("key",)
+
+
+@admin.register(Update)
+class UpdateAdmin(admin.ModelAdmin):
+    list_display = ("platform", "version", "build", "severity", "is_active", "created_at")
+    list_filter = ("platform", "severity", "is_active")
+    ordering = ("platform", "-build")

@@ -31,6 +31,13 @@ urlpatterns = [
         views.AccountDataExport.as_view(),
         name="account-data-export",
     ),
+    # Before the unanchored re_paths below, like deletion/ - none match this
+    # path today, but they would swallow a future name containing "me".
+    path(
+        "system-update",
+        views.SystemUpdateCheck.as_view(),
+        name="system-update-check",
+    ),
     # Placed before the "me" re_path below, which is unanchored and so matches
     # ANY path containing "me". None of the current step names do, but a later
     # one ("deletion/remove") would be swallowed by it.
