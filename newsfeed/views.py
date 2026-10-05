@@ -725,13 +725,21 @@ def _ephemeral_reaction_refusal(post, entity):
     """
     The response refusing a reaction to a moment or thought that cannot take
     one - expired, not visible to the reactor, or with its author's "allow
-    replies & reactions" off - or None to go ahead. Feed posts are not gated
-    here; they never have been.
+    replies & reactions" off - or None to go ahead. Of a feed post only one
+    thing is asked: that it has not been deleted.
 
     Removing a reaction (DELETE) is deliberately NOT gated: taking yours back
     must work even after the moment expires or replies are turned off.
     """
     if post.on_feed == PostKind.FEED:
+        # The preview endpoint still serves a deleted post (caption emptied),
+        # so a client could open one and react - reaching its author as a
+        # notification about a post that no longer exists.
+        if post.deleted_at is not None:
+            return Response(
+                {"message": "This post is not available"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
         return None
     # Archived by its author: off everyone's screen, so nothing to react to.
     if (
@@ -1487,6 +1495,14 @@ class CommentsView(APIView):
             new_attachment = request.data.get("new_attachment")
 
             post = Post.objects.get(post_id=post_id)
+
+            # Gone from every screen, so nothing to comment on - and a comment
+            # would still notify its author about a post they deleted.
+            if post.deleted_at is not None:
+                return Response(
+                    {"status": False, "message": "This post is not available"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
             # `or ""` because text is nullable: an attachment-only comment
             # legitimately sends no text, and .strip() on None is a 500.
