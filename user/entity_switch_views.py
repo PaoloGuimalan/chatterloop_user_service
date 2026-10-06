@@ -128,6 +128,62 @@ class EntitySwitch(APIView):
             )
 
 
+class SwitchablePages(APIView):
+    """
+    The pages this account may act as - EntitySwitch's own rule: a page its
+    personal entity owns or administers.
+
+    Read off the account, never request.entity. /api/realm/my-list is scoped
+    to the acting entity, so while switched into one page it lists that page
+    alone, and none of the account's other pages could be picked without
+    first switching back to yourself.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        try:
+            members = (
+                Member.objects.filter(
+                    entity=user.entity,
+                    role__in=(MemberRole.OWNER, MemberRole.ADMIN),
+                    realm__type="page",
+                )
+                .select_related("realm")
+                .order_by("realm__name")
+            )
+
+            pages = [
+                {
+                    "realm_id": member.realm.id,
+                    "entity_id": str(member.realm.entity_id),
+                    "name": member.realm.name,
+                    "slug": member.realm.slug,
+                    "profile": member.realm.profile,
+                    "role": member.role,
+                }
+                for member in members
+            ]
+
+            return Response(
+                {
+                    "status": True,
+                    "result": {
+                        "personal_entity_id": str(user.entity.id),
+                        "pages": pages,
+                    },
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            logger.exception("SwitchablePages.get failed")
+            return Response(
+                {"status": False, "message": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
 class EntitySwitchBack(APIView):
     """Switches back to the account's own personal entity."""
 

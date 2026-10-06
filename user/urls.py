@@ -3,7 +3,7 @@ from django.urls import re_path, path
 from rest_framework import routers
 
 from user import views
-from user.entity_switch_views import EntitySwitch, EntitySwitchBack
+from user.entity_switch_views import EntitySwitch, EntitySwitchBack, SwitchablePages
 
 router = routers.DefaultRouter()
 
@@ -73,4 +73,5 @@ urlpatterns = [
     path("poke", views.PokeUser.as_view(), name="user-poke"),
     path("entity/switch", EntitySwitch.as_view(), name="entity-switch"),
     path("entity/switch-back", EntitySwitchBack.as_view(), name="entity-switch-back"),
+    path("entity/pages", SwitchablePages.as_view(), name="entity-switchable-pages"),
 ]
