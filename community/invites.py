@@ -1,6 +1,11 @@
 """
-Realm invites: by email or by username, into a group, a server (with its
-channels), a conference, or a page - to join its team or to follow it.
+Realm invites: by email, by @handle or picked from search, into a group, a
+server (with its channels), a conference, or a page - to join its team or to
+follow it.
+
+Invitees are ENTITIES: a person, or a page, whose team answers while switched
+into it. A typed @handle is a person's username or a page's slug; a typed email
+is a person's sign-up address or, failing that, a page's contact email.
 
 WHO HEARS ABOUT AN INVITE
 -------------------------
@@ -105,17 +110,43 @@ def assert_can_invite(entity, realm, purpose, role):
 # --- the target -----------------------------------------------------------
 
 
+def _page_entity(**lookup):
+    """The entity of the active page matching `lookup`, or None."""
+    realm = (
+        Realm.objects.select_related("entity")
+        .filter(type="page", is_active=True, **lookup)
+        .first()
+    )
+    return realm.entity if realm else None
+
+
+def acting_email(entity, account):
+    """
+    The address the acting entity answers to: the account's own while acting
+    as yourself, the page's contact email while switched into a page. "" when
+    there is none.
+
+    An invite sent to an address is the entity's that answers to it - a page
+    invited by its contact email is accepted by its team, switched into it,
+    not by whoever's personal address that happens not to be.
+    """
+    if entity is not None and entity.type == "realm":
+        realm = Realm.objects.filter(entity=entity).only("email").first()
+        return ((realm.email if realm else None) or "").strip().lower()
+    return ((account.email if account else None) or "").strip().lower()
+
+
 def resolve_target(raw_target=None, target_email=None, target_entity_id=None):
     """
     (entity or None, email or None) for whoever is being invited.
 
     Three ways in: someone picked from contacts or search (target_entity_id),
-    what was typed into the box (raw_target: an email or a username), or the
-    older target_email field. A username must exist; an email need not.
+    what was typed into the box (raw_target: an email or an @handle), or the
+    older target_email field. A handle must exist; an email need not.
 
-    A picked PAGE can be invited too - the direct add it replaces took pages -
-    and its team answers when switched to it. A bot cannot: nobody acts as a
-    bot to accept anything.
+    A PAGE can be invited every way a person can - picked, by its @slug, or by
+    its contact email - and its team answers when switched to it. A bot
+    cannot: nobody acts as a bot to accept anything.
     """
     if target_entity_id:
         entity = Entity.objects.filter(id=target_entity_id).first()
@@ -134,21 +165,31 @@ def resolve_target(raw_target=None, target_email=None, target_entity_id=None):
 
     kind, value = parse_target(raw_target)
     if kind == "email":
+        # A person's sign-up address first - it is proven - then a page that
+        # gives it as its contact email. Neither: the invite waits for the
+        # address (claim_pending_invites). The address is emailed either way.
         account = (
             Account.objects.select_related("entity")
             .filter(email__iexact=value, is_active=True)
             .first()
         )
-        return (account.entity if account else None), value
+        if account is not None:
+            return account.entity, value
+        return _page_entity(email__iexact=value), value
 
     account = (
         Account.objects.select_related("entity")
         .filter(username__iexact=value, is_active=True)
         .first()
     )
-    if account is None:
+    if account is not None:
+        return account.entity, None
+    # Not a person: a page goes by its slug - its @handle in a mention, and
+    # what the invite box's search finds it by.
+    page = _page_entity(slug__iexact=value)
+    if page is None:
         raise InviteError(f"No one goes by @{value}", 404)
-    return account.entity, None
+    return page, None
 
 
 def _assert_not_already_in(target_entity, realm, purpose):

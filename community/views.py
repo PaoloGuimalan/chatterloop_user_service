@@ -43,6 +43,7 @@ from user.utils.blocking import is_blocked
 from community.invite_rules import InviteError
 from community.invites import (
     accept_side_effects,
+    acting_email,
     create_invite,
     settle_invite_notifications,
 )
@@ -1044,10 +1045,11 @@ class InviteView(APIView):
     def _request_access(self, realm, user, entity):
         """
         A conference participant asking to be let in. The requester is the
-        caller - it used to be looked up by the email in the body, which
-        crashed (None.entity) whenever no account matched it.
+        caller - whichever entity is acting, a page included - and it used to
+        be looked up by the email in the body, which crashed (None.entity)
+        whenever no account matched it.
         """
-        email = (user.email or "").strip().lower() or None
+        email = acting_email(entity, user) or None
         pending = (
             Invite.objects.filter(
                 realm=realm, kind="request", status="pending", target_entity=entity
@@ -1102,7 +1104,7 @@ class InviteView(APIView):
                 # members. This answered for any address before, invite token
                 # included - which is the realm and the token for whoever's
                 # email you happen to know.
-                own_email = (request.user.email or "").strip().lower()
+                own_email = acting_email(request.entity, request.user)
                 if normalized_email != own_email:
                     realm = get_object_or_404(Realm, realm_id=realm_id)
                     if not has_permission(
@@ -1233,10 +1235,12 @@ class InviteView(APIView):
                 "declined",
             }:
                 # Compared as strings: an id read back is a str, one made in
-                # this request is still a uuid.UUID.
+                # this request is still a uuid.UUID. The address is the ACTING
+                # entity's - a page switched into answers to its contact email,
+                # not to its admin's personal one.
                 if (
                     invite.target_email
-                    and invite.target_email != (user.email or "").lower()
+                    and invite.target_email.lower() != acting_email(entity, user)
                     and str(invite.target_entity_id) != str(entity.id)
                 ):
                     return Response(
