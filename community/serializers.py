@@ -36,6 +36,11 @@ class InviteSerializer(serializers.ModelSerializer):
     realm_id = serializers.CharField(source="realm.realm_id", read_only=True)
     realm_name = serializers.CharField(source="realm.name", read_only=True)
     realm_type = serializers.CharField(source="realm.type", read_only=True)
+    # What the invite page draws: the realm's picture and where it lives, and
+    # who sent it - "Maya invited you to ...".
+    realm_slug = serializers.CharField(source="realm.slug", read_only=True)
+    realm_profile = serializers.CharField(source="realm.profile", read_only=True)
+    inviter = EntitySerializer(source="created_by", read_only=True)
     target_entity = EntitySerializer(read_only=True)
     accepted_by_entity = EntitySerializer(read_only=True)
     created_by_id = serializers.SerializerMethodField()
@@ -57,8 +62,13 @@ class InviteSerializer(serializers.ModelSerializer):
             "realm_id",
             "realm_name",
             "realm_type",
+            "realm_slug",
+            "realm_profile",
             "kind",
             "status",
+            "purpose",
+            "role",
+            "inviter",
             "target_email",
             "target_entity",
             "accepted_by_entity",

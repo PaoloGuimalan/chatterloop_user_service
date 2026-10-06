@@ -72,6 +72,12 @@ class Queues:
     # (internal/services/media) decides and deletes. Publish through
     # newsfeed.services.media_release, which owns the payload shape.
     MEDIA_RELEASE = "media_release"
+    # A notice line in a conversation ("maya joined"), written by the worker
+    # exactly as Node writes its own "X added Y" - the message, the
+    # conversation's participants and preview, the live frames and the push.
+    # The sentence travels written: {conversation_id, actor_entity_id, text,
+    # push}. See the worker's conversationnotice.go.
+    POST_CONVERSATION_NOTICE = "post_conversation_notice"
 
 
 def _normalize(value):

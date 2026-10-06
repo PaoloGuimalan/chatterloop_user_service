@@ -45,6 +45,8 @@ class NotificationService:
         target_type=None,
         target_id=None,
         target_anchor=None,
+        redirects=None,
+        actions=None,
     ):
         """
         ``target_*`` describe where the CLIENT should go when the row is tapped,
@@ -52,6 +54,11 @@ class NotificationService:
         the action). Optional and keyword-only in practice: a call site that
         omits them writes no target, and the Node read path falls back to what
         it can infer from the notification type.
+
+        ``redirects`` / ``actions`` are STORED per-platform destination and
+        buttons (server/schema/users/notifications.js). Leave them out unless
+        the buttons address something only this row knows - a realm invite's
+        token - since Node derives the ordinary ones from ``type``.
         """
         notification_id = f"NTF_{generate_random_digit(20)}"
 
@@ -109,6 +116,9 @@ class NotificationService:
             type=type,
             isRead=resolved_is_read,
             target=target,
+            # None when not given, so nothing is stored - see the model.
+            redirects=redirects or None,
+            actions=actions or None,
         )
         notif.save()
         return notif
@@ -144,6 +154,21 @@ class NotificationService:
         result = Notification.objects(**query).update(
             set__referenceStatus=new_status, multi=True
         )
+        return result > 0
+
+    def settle_with_stored_actions(self, reference_id, notif_type):
+        """
+        Settle a notification whose buttons are STORED on it - an invite's
+        Accept / Decline, addressed to its token.
+
+        The Node read path returns stored buttons exactly as they are; it only
+        drops DERIVED ones once referenceStatus flips. So flipping it alone
+        would leave Accept on an invite already accepted. The stored buttons
+        go with it, and the row falls back to its destination only.
+        """
+        result = Notification.objects(
+            referenceID=reference_id, type=notif_type
+        ).update(set__referenceStatus=True, unset__actions=True, multi=True)
         return result > 0
 
     def update_content(self, reaction_id, new_content):

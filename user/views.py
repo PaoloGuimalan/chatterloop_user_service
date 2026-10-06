@@ -87,6 +87,20 @@ logger = logging.getLogger(__name__)
 jwt = JWTTools
 
 
+def _claim_invites_quietly(account):
+    """
+    Realm invites emailed to this account's address before it existed become
+    its in-app invites (community/invites.py). Never allowed to fail a sign-up
+    or a verification - the invites still wait, and the email still works.
+    """
+    try:
+        from community.invites import claim_pending_invites
+
+        claim_pending_invites(account)
+    except Exception:
+        logger.exception("Failed to claim pending realm invites")
+
+
 class Pagination(PageNumberPagination):
     page_size = 10
     page_size_query_param = "page_size"
@@ -678,6 +692,10 @@ class ThirdPartyAuthentication(APIView):
 
                         if create_user_query:
                             serialized_user = AccountSerializer(create_user_query)
+
+                            # Google proved the address, so invites emailed to
+                            # it before this account existed are theirs now.
+                            _claim_invites_quietly(create_user_query)
 
                             if not session.exists(
                                 device_token, create_user_query.entity.id
@@ -1969,6 +1987,11 @@ class CodeVerification(APIView):
                 user = ver.user
                 user.is_verified = True
                 user.save()
+
+                # The address is proven now - not at registration, or anyone
+                # could sign up with someone else's email and see what they
+                # had been invited to.
+                _claim_invites_quietly(user)
 
                 return Response(
                     {"status": True, "message": "Account has been verified"},

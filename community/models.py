@@ -151,6 +151,15 @@ class Invite(models.Model):
         ("revoked", "Revoked"),
     ]
 
+    # What accepting does - see community/invite_rules.py. "join" for a group,
+    # a server or a conference; a page invites to "manage" (its team, with
+    # `role`) or to "follow".
+    INVITE_PURPOSE_CHOICES = [
+        ("join", "Join"),
+        ("manage", "Manage"),
+        ("follow", "Follow"),
+    ]
+
     id = models.CharField(
         max_length=150, default=uuid.uuid4, unique=True, blank=True, primary_key=True
     )
@@ -166,7 +175,14 @@ class Invite(models.Model):
     status = models.CharField(
         max_length=150, choices=INVITE_STATUS_CHOICES, default="pending"
     )
-    target_email = models.EmailField(db_index=True)
+    purpose = models.CharField(
+        max_length=20, choices=INVITE_PURPOSE_CHOICES, default="join"
+    )
+    # A "manage" invite's role: admin or moderator. Null otherwise.
+    role = models.CharField(max_length=20, null=True, blank=True, default=None)
+    # Only what the inviter TYPED. A username invite has none - storing the
+    # account's address would hand it to the inviter in every reply.
+    target_email = models.EmailField(db_index=True, null=True, blank=True)
     target_entity = models.ForeignKey(
         Entity,
         null=True,

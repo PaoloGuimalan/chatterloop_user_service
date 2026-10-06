@@ -40,6 +40,12 @@ from entity.services.follows import (
 from entity.services.realtime import publish_profile_relationship_update
 from user.services.mongohelpers import NotificationService
 from user.utils.blocking import is_blocked
+from community.invite_rules import InviteError
+from community.invites import (
+    accept_side_effects,
+    create_invite,
+    settle_invite_notifications,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -979,103 +985,100 @@ class InviteView(APIView):
         )
 
     def post(self, request):
+        """
+        Invite someone, or ask to be let in.
+
+        kind="invite" (the default) - see community/invites.py:
+          {realm_id, target}            what was typed: an email or a username
+          {realm_id, target_entity_id}  a person picked from search
+          {realm_id, target_email}      the older field, still accepted
+          + purpose ("join" | "manage" | "follow") and role (for "manage");
+            a realm with one purpose takes it when none is sent.
+
+        kind="request" - a conference participant asking for access, as before.
+        """
         user = self.request.user
         entity = self.request.entity
 
         try:
             realm_id = request.data.get("realm_id")
-            target_email = request.data.get("target_email")
-            kind = request.data.get("kind", "invite")
-
-            if not realm_id or not target_email:
+            if not realm_id:
                 return Response(
-                    {
-                        "status": False,
-                        "message": "realm_id and target_email are required",
-                    },
+                    {"status": False, "message": "realm_id is required"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-
             realm = get_object_or_404(Realm, realm_id=realm_id)
-            normalized_kind = "request" if kind == "request" else "invite"
 
-            if normalized_kind != "request" and not has_permission(
-                entity, Permission.REALM_INVITE_CREATE, realm=realm
-            ):
+            if request.data.get("kind") == "request":
+                return self._request_access(realm, user, entity)
+
+            try:
+                invite, created = create_invite(
+                    realm,
+                    entity,
+                    raw_target=request.data.get("target"),
+                    target_email=request.data.get("target_email"),
+                    target_entity_id=request.data.get("target_entity_id"),
+                    purpose=request.data.get("purpose"),
+                    role=request.data.get("role"),
+                )
+            except InviteError as err:
                 return Response(
-                    {"status": False, "message": "You are not allowed to invite users"},
-                    status=status.HTTP_401_UNAUTHORIZED,
+                    {"status": False, "message": err.message},
+                    status=err.status_code,
                 )
-
-            normalized_email = str(target_email).strip().lower()
-            target_entity = Account.objects.filter(
-                email__iexact=normalized_email
-            ).first()
-
-            existing_pending_invite = (
-                Invite.objects.filter(
-                    realm=realm,
-                    target_email=normalized_email,
-                    status="pending",
-                )
-                .order_by("-created_at")
-                .first()
-            )
-
-            if existing_pending_invite:
-                existing_pending_invite.kind = normalized_kind
-                existing_pending_invite.target_entity = target_entity.entity
-                existing_pending_invite.created_by = entity
-                existing_pending_invite.created_at = now()
-                existing_pending_invite.resolved_at = None
-                if normalized_kind == "invite":
-                    existing_pending_invite.invite_token = generate_invite_token()
-                existing_pending_invite.save()
-                invite = existing_pending_invite
-            else:
-                invite = Invite.objects.create(
-                    realm=realm,
-                    kind=normalized_kind,
-                    status="pending",
-                    target_email=normalized_email,
-                    target_entity=target_entity.entity,
-                    created_by=entity,
-                )
-
-            if normalized_kind == "invite":
-                frontend_base_url = getattr(
-                    settings, "FRONTEND_URL", "https://chatterloop.app"
-                ).rstrip("/")
-                invite_path = (
-                    f"/conference/{realm.slug}"
-                    if realm.type == "conference" and realm.slug
-                    else f"/{realm.slug or realm.realm_id}"
-                )
-                invite_link = f"{frontend_base_url}{invite_path}?invite_token={invite.invite_token}"
-                emailer.send_realm_invite_email(
-                    to_email=normalized_email,
-                    realm_name=realm.name,
-                    invite_link=invite_link,
-                    inviter_name=user.username,
-                )
-            else:
-                self._notify_requests_changed(realm)
 
             return Response(
                 {
                     "status": True,
-                    "message": (
-                        "Invite created"
-                        if normalized_kind == "invite"
-                        else "Access request submitted"
-                    ),
+                    "message": "Invite sent" if created else "Already invited",
+                    "already_invited": not created,
                     "result": self._serialize_invite(invite),
                 },
-                status=status.HTTP_201_CREATED,
+                status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
             )
         except Exception as e:
             logger.exception("InviteView.post failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def _request_access(self, realm, user, entity):
+        """
+        A conference participant asking to be let in. The requester is the
+        caller - it used to be looked up by the email in the body, which
+        crashed (None.entity) whenever no account matched it.
+        """
+        email = (user.email or "").strip().lower() or None
+        pending = (
+            Invite.objects.filter(
+                realm=realm, kind="request", status="pending", target_entity=entity
+            )
+            .order_by("-created_at")
+            .first()
+        )
+        if pending:
+            pending.created_at = now()
+            pending.resolved_at = None
+            pending.save(update_fields=["created_at", "resolved_at"])
+            invite = pending
+        else:
+            invite = Invite.objects.create(
+                realm=realm,
+                kind="request",
+                status="pending",
+                target_email=email,
+                target_entity=entity,
+                created_by=entity,
+            )
+
+        self._notify_requests_changed(realm)
+        return Response(
+            {
+                "status": True,
+                "message": "Access request submitted",
+                "result": self._serialize_invite(invite),
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
     def get(self, request):
         try:
@@ -1094,10 +1097,25 @@ class InviteView(APIView):
                 )
 
             if realm_id and target_email:
+                normalized_email = str(target_email).strip().lower()
+                # Your OWN invite, or anyone's if you may see the realm's
+                # members. This answered for any address before, invite token
+                # included - which is the realm and the token for whoever's
+                # email you happen to know.
+                own_email = (request.user.email or "").strip().lower()
+                if normalized_email != own_email:
+                    realm = get_object_or_404(Realm, realm_id=realm_id)
+                    if not has_permission(
+                        request.entity, Permission.REALM_MEMBER_VIEW, realm=realm
+                    ):
+                        return Response(
+                            {"status": False, "message": "Invite not found"},
+                            status=status.HTTP_404_NOT_FOUND,
+                        )
                 invite = (
                     Invite.objects.filter(
                         realm__realm_id=realm_id,
-                        target_email=str(target_email).strip().lower(),
+                        target_email=normalized_email,
                     )
                     .order_by("-created_at")
                     .first()
@@ -1150,7 +1168,9 @@ class InviteView(APIView):
                     status=status.HTTP_200_OK,
                 )
 
-            invites = Invite.objects.filter(created_by=request.user).order_by(
+            # Invites the caller SENT. created_by is an Entity - this used to
+            # filter on request.user, an Account, which matched nothing.
+            invites = Invite.objects.filter(created_by=request.entity).order_by(
                 "-created_at"
             )
             return Response(
@@ -1193,6 +1213,50 @@ class InviteView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+            # Answered once. An accepted, declined or revoked invite used to
+            # take any answer again - a revoked one could still be accepted.
+            if invite.status != "pending":
+                return Response(
+                    {
+                        "status": False,
+                        "message": f"This invite was already {invite.status}",
+                        "result": self._serialize_invite(invite),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            # Accepting or declining an INVITE is the invitee's call alone.
+            # Declining had no check at all: anyone holding the token could
+            # turn someone else's invite down.
+            if invite.kind != "request" and normalized_status in {
+                "accepted",
+                "declined",
+            }:
+                # Compared as strings: an id read back is a str, one made in
+                # this request is still a uuid.UUID.
+                if (
+                    invite.target_email
+                    and invite.target_email != (user.email or "").lower()
+                    and str(invite.target_entity_id) != str(entity.id)
+                ):
+                    return Response(
+                        {
+                            "status": False,
+                            "message": "This invite is not assigned to your account",
+                        },
+                        status=status.HTTP_401_UNAUTHORIZED,
+                    )
+                if invite.target_entity_id and str(invite.target_entity_id) != str(
+                    entity.id
+                ):
+                    return Response(
+                        {
+                            "status": False,
+                            "message": "This invite was assigned to another account",
+                        },
+                        status=status.HTTP_401_UNAUTHORIZED,
+                    )
+
             if normalized_status == "accepted":
                 if invite.kind == "request":
                     # A host/admin approves another member's join request.
@@ -1206,28 +1270,6 @@ class InviteView(APIView):
                             },
                             status=status.HTTP_401_UNAUTHORIZED,
                         )
-                else:
-                    if (
-                        invite.target_email
-                        and invite.target_email != user.email.lower()
-                    ):
-                        return Response(
-                            {
-                                "status": False,
-                                "message": "This invite is not assigned to your account",
-                            },
-                            status=status.HTTP_401_UNAUTHORIZED,
-                        )
-
-                    if invite.target_entity and invite.target_entity != entity:
-                        return Response(
-                            {
-                                "status": False,
-                                "message": "This invite was assigned to another account",
-                            },
-                            status=status.HTTP_401_UNAUTHORIZED,
-                        )
-
             if normalized_status == "declined" and invite.kind == "request":
                 # A host/admin can decline an incoming join request, or the
                 # requester can withdraw their own request - the latter is a
@@ -1269,10 +1311,21 @@ class InviteView(APIView):
                 invite.save()
 
                 if normalized_status == "accepted":
-                    self._add_member_if_missing(invite, entity)
+                    if invite.kind == "request" or invite.realm.type == "conference":
+                        # Unchanged: a conference member row, as it always was.
+                        self._add_member_if_missing(invite, entity)
+                    else:
+                        # Groups, servers (with their channels) and pages -
+                        # see community/invites.py.
+                        accept_side_effects(invite, entity)
 
-            # Accepting adds a member, so the participants list changed.
-            if normalized_status == "accepted":
+            # The Accept / Decline on the invitee's notification go away now
+            # that it is answered.
+            if invite.kind == "invite":
+                settle_invite_notifications(invite)
+
+            # Accepting into a conference adds a participant.
+            if normalized_status == "accepted" and invite.realm.type == "conference":
                 self._notify_members_changed(invite.realm)
 
             # A resolved join request changes the host's pending list, and the

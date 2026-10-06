@@ -148,6 +148,16 @@ class Notification(Document):
     # Optional: rows written before this existed have none, and the Node read
     # path falls back to what it can infer from `type` + `referenceID`.
     target = EmbeddedDocumentField(NotificationTarget)
+    # STORED row destination and buttons, per platform - the shapes in
+    # server/schema/users/notifications.js. Most types leave these out and
+    # Node derives them from `type` at read time; a row whose buttons address
+    # one specific thing (a realm invite's token) stores its own.
+    #
+    # default=None, not []: an empty array is still a stored value, and the
+    # grouping key (server notificationgroups.js) compares stored buttons - a
+    # row written with [] must read the same as one written without.
+    redirects = ListField(DictField(), default=None)
+    actions = ListField(DictField(), default=None)
     __v = IntField(db_field="__v")
 
     meta = {"collection": "notifications"}
