@@ -2,6 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
+from entity.services.acting import is_switchable_realm
 from django.shortcuts import get_object_or_404
 
 from community.models import Realm, Member
@@ -40,14 +41,14 @@ def _active_entity_payload(realm=None, personal_entity_id=None):
 class EntitySwitch(APIView):
     """
     Switches the active acting entity for this account from its personal
-    entity to a page it administers - re-issues the authtoken with a
+    entity to a realm it administers - re-issues the authtoken with a
     different `entity` claim (userID stays the same account, only `entity`
     changes), so everything downstream that reads request.entity (post
     authorship, comments, permission checks - both here and in the Node
     `server` repo, which shares this JWT_SECRET) attributes actions to the
-    page instead of the personal user.
+    realm instead of the personal user. This includes pages and non-page realms.
 
-    Direct page-to-page switching is allowed: membership is validated
+    Direct realm-to-realm switching is allowed: membership is validated
     against the account's own personal entity (request.user.entity), not
     whatever entity happens to be currently active, so this works whether
     you're currently acting as yourself or already acting as another page.
@@ -70,11 +71,11 @@ class EntitySwitch(APIView):
 
             realm = get_object_or_404(Realm, id=realm_id)
 
-            if realm.type != "page":
+            if not is_switchable_realm(realm):
                 return Response(
                     {
                         "status": False,
-                        "message": "Only page realms support entity switching.",
+                        "message": "This realm is not available for entity switching.",
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
@@ -88,7 +89,7 @@ class EntitySwitch(APIView):
                 return Response(
                     {
                         "status": False,
-                        "message": "You are not allowed to act as this page.",
+                        "message": "You are not allowed to act as this realm.",
                     },
                     status=status.HTTP_403_FORBIDDEN,
                 )

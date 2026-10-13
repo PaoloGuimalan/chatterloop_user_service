@@ -213,6 +213,7 @@ INSTALLED_APPS = [
     "interests",
     "newsfeed",
     "diary",
+    "notes",
     "entity",
     "bot",
 ]

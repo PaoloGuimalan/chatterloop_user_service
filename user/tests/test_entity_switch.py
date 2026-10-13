@@ -85,7 +85,7 @@ class EntitySwitchTests(TestCase):
         )
         self.assertEqual(response.status_code, 403)
 
-    def test_non_page_realm_rejected(self):
+    def test_server_owner_can_switch(self):
         server_entity = _make_entity(entity_type="realm")
         server_realm = Realm.objects.create(
             entity=server_entity,
@@ -103,7 +103,8 @@ class EntitySwitchTests(TestCase):
         response = self._post(
             EntitySwitch, {"realm_id": server_realm.id}, self.personal_entity
         )
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["result"]["active_entity"]["realm_type"], "server")
 
     def test_owner_can_switch_and_session_is_created(self):
         Member.objects.create(

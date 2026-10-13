@@ -88,6 +88,7 @@ class Permission:
     # .type - user vs realm - unlike REALM_SCOPED above, which is about a
     # Member.role within some OTHER realm being visited/administered) ---
     MODULE_DIARY_ACCESS = "module.diary.access"
+    MODULE_NOTES_ACCESS = "module.notes.access"
     MODULE_POKE_ACCESS = "module.poke.access"
     MODULE_CONTACTS_ACCESS = "module.contacts.access"
     MODULE_PAGE_DASHBOARD_ACCESS = "module.page_dashboard.access"
@@ -128,6 +129,7 @@ class Permission:
     }
 
     ENTITY_TYPE_SCOPED = {
+        MODULE_NOTES_ACCESS,
         MODULE_DIARY_ACCESS,
         MODULE_POKE_ACCESS,
         MODULE_CONTACTS_ACCESS,

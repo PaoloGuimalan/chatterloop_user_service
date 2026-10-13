@@ -233,6 +233,7 @@ class UploadedFile(Document):
     status = StringField()
     purpose = StringField()
     ownerAccount = StringField()
+    ownerEntity = StringField()
     name = StringField()
     mime = StringField()
     fileDetails = DictField()

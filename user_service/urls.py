@@ -31,6 +31,7 @@ urlpatterns = [
                 path("user/", include("user.urls", namespace="api-user")),
                 path("newsfeed/", include("newsfeed.urls", namespace="api-newsfeed")),
                 path("diary/", include("diary.urls", namespace="api-diary")),
+                path("notes/", include("notes.urls", namespace="api-notes")),
                 path("realm/", include("community.urls", namespace="api-community")),
                 path("entity/", include("entity.urls", namespace="api-entity")),
                 path("interests/", include("interests.urls", namespace="api-interests")),
