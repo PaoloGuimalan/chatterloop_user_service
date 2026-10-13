@@ -35,39 +35,28 @@ RUN pip wheel --no-cache-dir --no-deps --find-links /app/wheels \
 # --- Stage 2: Final Runtime Stage ---
 FROM python:3.13-slim
 
-# Set recommended production environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=8003
 
 WORKDIR /app
 
-# Install only essential runtime system libraries
 RUN apt-get update && apt-get install -y \
     libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy wheels from builder and install them
 COPY --from=builder /app/wheels /wheels
-RUN pip install --no-cache /wheels/*
+COPY requirements.txt .
 
-# Copy the rest of your application code
+RUN pip install --no-cache-dir \
+      --find-links /wheels \
+      -r requirements.txt
+
 COPY . .
 
-# Security: Create and use a non-root user
 RUN useradd -m django_user && chown -R django_user /app
 USER django_user
 
-# Expose the production port
 EXPOSE 8003
 
-# Run with Gunicorn instead of manage.py runserver
-# Workers formula: (2 * cores) + 1
-# collectstatic runs here, not at build time: django_cassandra_engine opens a
-# real Cassandra connection during django.setup(), so manage.py needs the
-# runtime secret. `exec` keeps gunicorn as PID 1 so SIGTERM still reaches it.
-# --access-logfile/--error-logfile "-" send Gunicorn's own logs to the
-# container's stdout/stderr. Access logging is OFF by default in Gunicorn, so
-# without this there is no record that a request even arrived - only Django's
-# application logs appear.
 CMD ["sh", "-c", "python manage.py collectstatic --noinput && exec gunicorn --bind 0.0.0.0:8003 --workers 3 --timeout 120 --access-logfile - --error-logfile - user_service.wsgi:application"]
