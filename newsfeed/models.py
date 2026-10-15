@@ -152,7 +152,7 @@ class Post(models.Model):
         ]
 
     def save(self, *args, **kwargs):
-        if self.pk:
+        if not self._state.adding:
             self.updated_at = now()
 
         super().save(*args, **kwargs)
@@ -264,7 +264,7 @@ class Comment(models.Model):
     deleted_at = models.DateTimeField(blank=True, null=True)
 
     def save(self, *args, **kwargs):
-        if self.pk:
+        if not self._state.adding:
             self.updated_at = now()
 
         super().save(*args, **kwargs)
