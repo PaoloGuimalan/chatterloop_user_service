@@ -16,7 +16,7 @@ def _attribute(tag, name, value):
     return tag == "a" and name in {"href", "title"}
 
 
-def normalize_note_content(content: str) -> tuple[str, str]:
+def normalize_note_content(content: str, *, allow_empty=False) -> tuple[str, str]:
     if not isinstance(content, str):
         raise ValueError("Content must be HTML text")
     soup = BeautifulSoup(content, "html.parser")
@@ -28,6 +28,15 @@ def normalize_note_content(content: str) -> tuple[str, str]:
     plain = BeautifulSoup(html, "html.parser").get_text(" ", strip=True)
     plain = re.sub(r"[\u200b-\u200d\ufeff]", "", plain)
     plain = " ".join(plain.split())
-    if not plain:
+    if not plain and not allow_empty:
         raise ValueError("Write something first")
+    return html, plain
+
+
+def normalize_note_fields(title: str, content: str) -> tuple[str, str]:
+    """Validate the complete note, including retained fields during PATCH."""
+    html, plain = normalize_note_content(content, allow_empty=True)
+    visible_title = re.sub(r"[\u200b-\u200d\ufeff]", "", title).strip()
+    if not visible_title and not plain:
+        raise ValueError("Write a title or some content first")
     return html, plain

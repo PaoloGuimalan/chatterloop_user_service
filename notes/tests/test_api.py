@@ -38,7 +38,7 @@ class ApiTests(unittest.TestCase):
 
     def test_validation_title_body_and_version(self):
         from notes.serializers import NoteWriteSerializer, VersionSerializer
-        for data in ({"title": " "}, {"title": "x" * 256}, {"content": "<p><br></p>"}, {"is_private": "false"}):
+        for data in ({"title": "x" * 256}, {"is_private": "false"}):
             serializer = NoteWriteSerializer(data={"title": "Plan", "content": "Text", **data})
             self.assertFalse(serializer.is_valid())
         for value in (0, -1, True, "1", 1.5):

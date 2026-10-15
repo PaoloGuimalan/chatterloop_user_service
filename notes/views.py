@@ -8,8 +8,8 @@ from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 from .models import Entry
 from .permissions import OptionalNotesAuthentication, require_notes_access, can_read_note
-from .serializers import NoteReadSerializer, NoteWriteSerializer, VersionSerializer
-from .services.notes import create_note, update_note, delete_note
+from .serializers import NoteReadSerializer, NoteWriteSerializer, VersionSerializer, NoteReorderSerializer
+from .services.notes import create_note, update_note, delete_note, reorder_notes
 
 
 class NotePagination(PageNumberPagination):
@@ -36,7 +36,7 @@ class NoteListView(NotesView):
         if search:
             queryset = queryset.filter(Q(title__icontains=search) | Q(search_text__icontains=search))
         paginator = NotePagination()
-        page = paginator.paginate_queryset(queryset.order_by("-updated_at", "-id"), request, view=self)
+        page = paginator.paginate_queryset(queryset.order_by("-sort", "-id"), request, view=self)
         return paginator.get_paginated_response(NoteReadSerializer(page, many=True).data)
 
     def post(self, request):
@@ -75,5 +75,13 @@ class NoteDetailView(NotesView):
         serializer.is_valid(raise_exception=True)
         delete_note(note_id=note_id, entity=entity, expected_version=serializer.validated_data["version"])
         return Response(status=204)
+
+
+class NoteReorderView(NotesView):
+    def post(self, request):
+        entity = require_notes_access(request)
+        serializer = NoteReorderSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return Response({"order": reorder_notes(entity=entity, **serializer.validated_data)})
 
 

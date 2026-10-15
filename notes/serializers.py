@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from rest_framework import serializers
 from .models import Entry, Attachment
-from .services.content import normalize_note_content
+from .services.content import normalize_note_content, normalize_note_fields
 
 
 class StrictSerializer(serializers.Serializer):
@@ -49,20 +49,30 @@ class VersionSerializer(StrictSerializer):
     version = StrictVersionField(min_value=1)
 
 
+class NoteReorderSerializer(StrictSerializer):
+    note_id = serializers.UUIDField()
+    before_id = serializers.UUIDField(allow_null=True)
+
+
 class NoteWriteSerializer(StrictSerializer):
-    title = serializers.CharField(max_length=255)
-    content = serializers.CharField(trim_whitespace=False)
+    title = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    content = serializers.CharField(trim_whitespace=False, required=False, allow_blank=True)
     is_private = StrictBooleanField(required=False)
     version = StrictVersionField(min_value=1, required=False)
     attachments = AttachmentWriteSerializer(many=True, required=False, max_length=100)
 
     def validate_content(self, value):
         try:
-            return normalize_note_content(value)[0]
+            return normalize_note_content(value, allow_empty=True)[0]
         except ValueError as exc:
             raise serializers.ValidationError(str(exc)) from exc
 
     def validate(self, attrs):
+        if not self.partial:
+            try:
+                normalize_note_fields(attrs.get("title", ""), attrs.get("content", ""))
+            except ValueError as exc:
+                raise serializers.ValidationError(str(exc)) from exc
         items = attrs.get("attachments", [])
         identities = [str(item.get("id") or item.get("url")) for item in items]
         if len(set(identities)) != len(identities):
@@ -81,5 +91,5 @@ class NoteReadSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Entry
-        fields = ["id", "entity_id", "title", "content", "is_private", "version", "created_at", "updated_at", "attachments"]
+        fields = ["id", "entity_id", "title", "content", "is_private", "version", "sort", "created_at", "updated_at", "attachments"]
         read_only_fields = fields

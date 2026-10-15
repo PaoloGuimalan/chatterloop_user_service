@@ -5,17 +5,18 @@ from django.db import models
 class Entry(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     entity = models.ForeignKey("entity.Entity", on_delete=models.CASCADE, related_name="notes")
-    title = models.CharField(max_length=255)
-    content = models.TextField()
+    title = models.CharField(max_length=255, blank=True, default="")
+    content = models.TextField(blank=True, default="")
     search_text = models.TextField(default="")
     is_private = models.BooleanField(default=True)
     version = models.PositiveBigIntegerField(default=1)
+    sort = models.PositiveBigIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ["-updated_at", "-id"]
-        indexes = [models.Index(fields=["entity", "-updated_at", "-id"], name="notes_entity_updated_idx")]
+        ordering = ["-sort", "-id"]
+        indexes = [models.Index(fields=["entity", "-sort", "-id"], name="notes_entity_sort_idx")]
 
 
 class Attachment(models.Model):
