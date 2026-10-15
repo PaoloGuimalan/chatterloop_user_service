@@ -35,9 +35,13 @@ class PostPrivacySerializer(serializers.ModelSerializer):
 
 
 class PostReferenceSerializer(serializers.ModelSerializer):
+    is_edited = serializers.BooleanField(read_only=True)
+
     class Meta:
         model = PostReference
         fields = "__all__"
+
+        read_only_fields = ["is_edited"]
 
 
 class MapInfoSerializer(serializers.ModelSerializer):

@@ -2,7 +2,7 @@ import uuid
 import random
 from datetime import timedelta
 from django.db import models
-from django.db.models import Q
+from django.db.models import Q, functions
 from django.utils.timezone import now
 from user.models import Account
 from community.models import Realm
@@ -197,6 +197,18 @@ class PostReference(models.Model):
     caption = models.TextField(blank=True, null=True)
     reference_media_type = models.CharField(max_length=50)
     reference_name = models.TextField(blank=True, null=True)
+    date_posted = models.DateTimeField(db_default=functions.Now())
+    updated_at = models.DateTimeField(null=True, blank=True, default=None)
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            self.updated_at = now()
+
+        super().save(*args, **kwargs)
+
+    @property
+    def is_edited(self):
+        return self.updated_at is not None
 
 
 class MapView(models.Model):
