@@ -96,13 +96,6 @@ class Post(models.Model):
     )
 
     entity = models.ForeignKey(Entity, on_delete=models.CASCADE, related_name="posts")
-    # author_realm = models.ForeignKey(
-    #     Realm,
-    #     null=True,
-    #     blank=True,
-    #     on_delete=models.DO_NOTHING,
-    #     related_name="posts",
-    # )
     is_shared = models.BooleanField(default=False)
     file_type = models.CharField(max_length=50)
     caption = models.TextField(blank=True, null=True)
@@ -130,16 +123,9 @@ class Post(models.Model):
     # and a NOT NULL column would fail any insert that does not name it.
     details = models.JSONField(null=True, blank=True, default=None)
     date_posted = models.DateTimeField(default=now)
+    updated_at = models.DateTimeField(null=True, blank=True, default=None)
     from_system = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(null=True, blank=True, default=None)
-    # ENTITY, not Account - matching Comment.deleted_by, which has always been
-    # entity-keyed.
-    #
-    # Two things were wrong with the Account version. A post deleted while
-    # acting as a PAGE recorded the person behind the page rather than the page
-    # itself, which is not who performed the deletion. And a non-user deleter -
-    # the moderation bot - could not be recorded at all, because a bot has no
-    # Account row to point at.
     deleted_by = models.ForeignKey(
         Entity,
         null=True,
@@ -164,6 +150,16 @@ class Post(models.Model):
                 condition=~Q(on_feed=PostKind.FEED),
             ),
         ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            self.updated_at = now()
+
+        super().save(*args, **kwargs)
+
+    @property
+    def is_edited(self):
+        return self.updated_at is not None
 
 
 class PostTag(models.Model):
@@ -245,11 +241,6 @@ class Reaction(models.Model):
 
 class Comment(models.Model):
     comment_id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
-    # Threads are flattened to TWO levels: a top-level comment (parent_comment
-    # None) and its replies. Replying to a reply re-parents to that reply's
-    # top-level ancestor and mentions its author instead of nesting deeper -
-    # see CommentsView.post(). So `replies` is always the full thread under a
-    # top-level comment and never itself has children.
     parent_comment = models.ForeignKey(
         "self",
         on_delete=models.DO_NOTHING,
@@ -262,7 +253,7 @@ class Comment(models.Model):
     attachment = models.TextField(null=True, blank=True)
     entity = models.ForeignKey(Entity, on_delete=models.DO_NOTHING)
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(blank=True, null=True, default=None)
     deleted_by = models.ForeignKey(
         Entity,
         on_delete=models.DO_NOTHING,
@@ -271,6 +262,16 @@ class Comment(models.Model):
         null=True,
     )
     deleted_at = models.DateTimeField(blank=True, null=True)
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            self.updated_at = now()
+
+        super().save(*args, **kwargs)
+
+    @property
+    def is_edited(self):
+        return self.updated_at is not None
 
 
 class CommentReaction(models.Model):

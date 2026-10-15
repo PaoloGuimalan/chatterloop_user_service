@@ -92,12 +92,11 @@ class PostSerializer(serializers.ModelSerializer):
     preview = PreviewCountSerializer(read_only=True, many=True)
     entity_reaction = serializers.CharField()
     entity = EntitySerializer(read_only=True)
-    # author_realm = RealmPreviewSerializer(read_only=True)
-    # activity_counts = ActivityCountSerializer(read_only=True, many=True)
     score = PostScoreSerializer(read_only=True)
     is_saved = serializers.BooleanField(read_only=True)
     link_preview = serializers.SerializerMethodField()
     feed_reason = serializers.SerializerMethodField()
+    is_edited = serializers.BooleanField(read_only=True)
 
     def get_link_preview(self, obj):
         url = extract_first_url(obj.caption or "")
@@ -128,6 +127,8 @@ class PostSerializer(serializers.ModelSerializer):
         model = Post
         fields = "__all__"
 
+        read_only_fields = ["is_edited"]
+
 
 class EmojiSerializer(serializers.ModelSerializer):
     class Meta:
@@ -149,6 +150,7 @@ class CommentSerializer(serializers.ModelSerializer):
     reply_count = serializers.SerializerMethodField()
     preview = CommentPreviewCountSerializer(read_only=True, many=True)
     entity_reaction = serializers.SerializerMethodField()
+    is_edited = serializers.BooleanField(read_only=True)
 
     def get_entity_reaction(self, obj):
         # Annotated by CommentsView for the viewer; absent for a guest (the
@@ -172,13 +174,18 @@ class CommentSerializer(serializers.ModelSerializer):
         model = Comment
         fields = "__all__"
 
+        read_only_fields = ["is_edited"]
+
 
 class PostBasicSerializer(serializers.ModelSerializer):
     entity = EntitySerializer(read_only=True)
+    is_edited = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Post
         fields = "__all__"
+
+        read_only_fields = ["is_edited"]
 
 
 class PostSaveSerializer(serializers.ModelSerializer):
