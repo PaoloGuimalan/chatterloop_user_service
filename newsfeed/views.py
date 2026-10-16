@@ -98,7 +98,7 @@ from entity.models import Entity
 from django.shortcuts import get_object_or_404
 from django.http import Http404
 from user.utils.blocking import get_blocked_account_ids, is_blocked
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import APIException, PermissionDenied
 from entity.ownership import assert_owns
 from entity.permissions import Permission
 from entity.drf_permissions import RequiresPermission
@@ -335,44 +335,28 @@ class NewsfeedView(APIView):
             logger.exception("NewsfeedView.post failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-    # The only fields an author may change on their own post through this
-    # endpoint. It used to pass `fields` straight into update(**fields), which
-    # let an owner rewrite anything on the row - is_sponsored, from_system,
-    # date_posted, and now on_feed and expires_at (turning a 24h moment
-    # permanent). Archiving is the one thing either client sends.
-    EDITABLE_POST_FIELDS = {"is_archived"}
-
     def put(self, request):
-        user = self.request.user
+        from .services.post_editing import post_patch, update_post
+        from rest_framework.exceptions import ValidationError
         try:
-            post_id = request.data.get("post_id")
-            fields = request.data.get("fields") or {}
-
-            post = get_object_or_404(Post, post_id=post_id)
-            assert_owns(request, post)
-
-            disallowed = set(fields) - self.EDITABLE_POST_FIELDS
-            if disallowed:
-                return Response(
-                    {
-                        "status": False,
-                        "message": f"Field(s) not editable: {', '.join(sorted(disallowed))}",
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            if fields:
-                Post.objects.filter(post_id=post_id).update(**fields)
-
+            if not isinstance(request.data, dict):
+                raise ValidationError({"body": "Send an object with post_id and fields"})
+            post, changed = update_post(
+                request=request,
+                post_id=request.data.get("post_id"),
+                fields=request.data.get("fields", {}),
+            )
             return Response(
                 {
                     "status": True,
-                    "message": "Post/s has been deleted",
-                    "reference": post_id,
+                    "message": "Post updated" if changed else "Post unchanged",
+                    "reference": post.post_id,
+                    "changed": changed,
+                    "post": post_patch(post),
                 },
                 status=status.HTTP_200_OK,
             )
-        except PermissionDenied:
+        except (APIException, Http404):
             raise
         except Exception as e:
             logger.exception("NewsfeedView.put failed")

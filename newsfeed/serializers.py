@@ -34,6 +34,14 @@ class PostPrivacySerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class OrderedPostReferences(serializers.ListSerializer):
+    def to_representation(self, data):
+        # Stable append order for every read path, including prefetch results.
+        items = data.all() if hasattr(data, "all") else data
+        ordered = sorted(items, key=lambda item: (item.date_posted, item.reference_id))
+        return super().to_representation(ordered)
+
+
 class PostReferenceSerializer(serializers.ModelSerializer):
     is_edited = serializers.BooleanField(read_only=True)
 
@@ -42,6 +50,7 @@ class PostReferenceSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
         read_only_fields = ["is_edited"]
+        list_serializer_class = OrderedPostReferences
 
 
 class MapInfoSerializer(serializers.ModelSerializer):
