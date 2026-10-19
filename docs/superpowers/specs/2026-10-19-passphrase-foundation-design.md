@@ -7,9 +7,11 @@ Status: Proposed for user review; implementation has not started.
 
 Implement the reusable encryption-configuration foundation before connecting it
 to Diary. Add Passphrase as the first top-level section inside Settings > Data &
-Privacy in both the React webapp and Flutter app. A user can set up a passphrase,
-confirm the current passphrase, and replace it after successfully confirming the
-old one. Setup must work without any diary entries.
+Privacy in both the React webapp and Flutter app. Group named configuration rows
+by purpose context, initially Diary. Users can add, name, rename, activate,
+and deactivate configurations. Passphrase deletion is deferred. Each context can
+have one active configuration or none. Switching from active A to inactive B requires successful
+confirmation of both passphrases. Setup must work without any diary entries.
 
 The backend stores public derivation metadata and an encrypted verification
 payload. It never receives a passphrase or a usable encryption key. There is no
@@ -43,8 +45,10 @@ agreed privacy requirement. Select an independent entity-owned configuration
 with encrypted verification material and an explicit lifecycle.
 
 The model is reusable across entity/user/purpose scopes. The first settings
-surface manages only the authenticated account's personal entity and purpose
-`personal`. Future Diary consumes this configuration explicitly. This does not
+surface manages only the authenticated account's personal entity, initially with
+purpose `diary` displayed as Diary. The purpose registry is extensible, but this
+release must not advertise Notes or other unwired consumers. Future Diary
+consumes this configuration explicitly. This does not
 implement shared entity encryption or grant different users access to the same
 encrypted content.
 
@@ -57,8 +61,10 @@ Add EncryptionConfiguration to entity/models.py with a schema migration.
 | id | UUID identifying this immutable configuration generation |
 | entity | ForeignKey to entity.Entity; database column entity_id |
 | user | ForeignKey to user.Account; database column user_id |
-| purpose | Bounded context string; this settings release uses personal |
+| purpose | Allowlisted context identifier; this settings release uses diary |
+| name | User-chosen public label, 1-80 trimmed Unicode code points |
 | is_active | Whether normal clients can select it for new encryption |
+| revision | Monotonically increasing value on rename or lifecycle changes |
 | format_version | Version of the verification/encryption contract |
 | kdf_algorithm | Allowlisted Argon2id identifier |
 | kdf_parameters | Bounded, validated derivation parameters |
@@ -67,19 +73,32 @@ Add EncryptionConfiguration to entity/models.py with a schema migration.
 | verification_nonce | Base64 encoding of a fresh 12-byte nonce |
 | verification_ciphertext | Base64 ciphertext including its 16-byte tag |
 | verification_digest | SHA-256 digest of a random verification token |
-| replaces | Nullable reference to the previous configuration generation |
+| replaces | Optional protected lineage reference to a predecessor configuration |
 | created_at | Creation timestamp |
-| deactivated_at | Timestamp when the active generation was retired |
+| updated_at | Timestamp of the most recent label/lifecycle change |
+| deactivated_at | Most recent deactivation timestamp; cleared on reactivation |
 
-Permit multiple historical rows. Enforce at most one active row per
+Permit multiple named rows, including never-activated and historical rows.
+Enforce at most one active row per
 (entity, user, purpose) with a conditional database uniqueness constraint.
 Cryptographic parameters, identifiers, and verification material are immutable
-after creation. Replacement creates a new generation rather than updating old
-salt/settings in place.
+after creation. Name and lifecycle fields may change through their controlled
+services. A name is a server-readable reminder, never the passphrase itself;
+the UI explicitly tells users not to put their secret in the name. Duplicate
+labels are permitted, with creation dates distinguishing them.
+
+Adding a passphrase creates a new inactive row and never silently changes the
+active selection. Different rows have independent salts and verification tokens,
+even if the user happens to choose the same passphrase text. Reactivation uses
+the row's original salt and verification payload, not newly generated material.
 
 Lifecycle services serialize changes by locking an existing owner row; locking
 only a configuration is insufficient during two concurrent first setups.
-Stale expected configuration IDs and concurrent setup/replacement return 409.
+GET returns a scope_version calculated from the complete ordered set of row IDs,
+revisions, and active states for that entity/user/purpose. Mutations require the
+expected_scope_version and verify it while holding the owner lock. This detects
+concurrent additions, renames, and A-to-B-to-A activation changes that
+an expected active ID alone would miss. A stale scope returns 409 with no writes.
 Administrative inspection is read-only for cryptographic material; do not expose
 an ordinary form or bulk action that overwrites active configurations.
 
@@ -108,17 +127,24 @@ ID, personal entity ID, account ID, purpose, and format version using a specifie
 canonical byte representation. Save only the encrypted payload and the token's
 SHA-256 digest. The digest is not a passphrase hash or an encryption key.
 
-The token makes old-passphrase confirmation enforceable by the backend. A
+The token makes row-specific passphrase confirmation enforceable by the backend. A
 constant publicly known check string alone verifies unlocking on the client but
 does not give the server proof that the old configuration was unlocked.
 
 To confirm locally, derive the key, authenticate/decrypt the verification
-payload, and validate its marker and identity. To replace, send the recovered
-verification token as `verification_proof`, bound to the expected current
-configuration ID. The backend hashes it and compares in constant time. It does
-not run passphrase derivation or receive a passphrase/key. A retired token
-cannot authorize a later generation. The proof is an operation credential and
-must be protected and redacted accordingly.
+payload, and validate its marker and identity. To authorize a lifecycle mutation,
+send recovered verification tokens in explicit row-bound proof fields:
+`active_verification_proof` for the active row and
+`target_verification_proof` for the selected row. The backend hashes each token
+and compares it in constant time against the corresponding row's digest. It
+does not run passphrase derivation or receive a passphrase/key. Proof for one
+row cannot authorize another row. Do not retain a proof between dialogs or reuse
+it as a remembered-unlock feature. Proofs are operation credentials and must be
+protected and redacted accordingly.
+
+The verification associated data excludes mutable names, revisions, and active
+states, so changing a label or reactivating a row does not break decryption. Its
+immutable configuration/owner/purpose/version binding must still be checked.
 
 Verification failure can mean an incorrect passphrase or damaged configuration;
 do not claim to distinguish these cryptographically. Show a generic unlock
@@ -132,19 +158,33 @@ settings resolve user and entity from the authenticated account on the server;
 clients cannot supply another user_id or claim authority by posting entity_id.
 The model remains ready for future explicitly authorized entity-scope routes.
 
-- GET personal/: return owner context, the supported profile, and active
-  configuration or null. Configuration absence is the source of setup status.
-  Fetch failure must never be interpreted as absence.
-- POST personal/: register a client-generated configuration UUID, public
-  derivation metadata, encrypted verification material, and token digest. Reject
-  setup with an existing active generation. A retry with the same UUID and
-  identical material may return the original successful result.
-- POST personal/<uuid>/replace/: require expected current configuration UUID,
-  verification_proof, and the complete new generation. Verify scope and proof
-  before changing any state. Create the replacement, retire the previous record,
-  and activate the new record in one transaction. Preserve previous records.
-- Do not expose unauthenticated reads, generic writable model endpoints, deletion,
-  or deactivation without old-passphrase proof.
+- GET personal/: return authenticated owner context, supported crypto profile,
+  and the purpose groups. Each group includes its label, named configuration
+  rows, active_configuration_id or null, and scope_version. Distinguish no rows
+  from existing rows with all disabled. Fetch failure is never setup absence.
+  Include the encrypted verification material required for local unlock, but
+  do not return the server-only verification digest or operation proofs.
+- POST personal/: register a named, client-generated configuration UUID, purpose,
+  public derivation metadata, encrypted verification material, and token digest.
+  Create it inactive, even if another row is active. A retry with the same UUID
+  and identical material may return the original successful result without
+  creating a duplicate. Recheck identity/scope, not only UUID, for idempotency.
+- PATCH personal/<uuid>/: rename only. Require expected_scope_version. Reject
+  attempts to edit cryptographic material or is_active through this endpoint.
+- POST personal/<uuid>/activate/: activate the selected inactive row. With no
+  active row, require its target_verification_proof. If another row is active,
+  require both that row's active_verification_proof and the selected row's
+  target_verification_proof. Validate both before any state changes. Deactivate
+  A and activate B atomically. No intermediate committed two-active state.
+- POST personal/<uuid>/deactivate/: the selected row must be the active row;
+  require its active_verification_proof. Leave the context with no active row.
+  Do not promote another row automatically.
+- All mutations require expected_scope_version. Wrong/missing proofs, invalid
+  scope, and stale state leave all rows unchanged.
+- Do not expose unauthenticated reads, generic writable model endpoints, direct
+  flag updates, deletion, or endpoints accepting plaintext passphrases/encryption
+  keys. Configuration deletion is not implemented in this release, even for
+  unused rows. Admin inspection must not allow deleting configurations either.
 
 Validate strict payload schemas, canonical base64, exact nonce/salt/digest
 lengths, bounded ciphertext, allowlisted formats/algorithms, and bounded cost
@@ -156,18 +196,34 @@ The backend cannot prove that an arbitrary client encrypted its verification
 payload correctly. Supported clients perform a successful local round trip
 before registration. Do not describe schema validation as cryptographic proof.
 
-## Replacement and future encrypted content
+## Lifecycle rules and future encrypted content
 
-This preparation stage has no encrypted-content consumers. Replacement therefore
-only rotates the configuration after old-passphrase confirmation; it changes no
-diary or note records.
+This preparation stage has no encrypted-content consumers. Configuration actions
+change no diary or note records. At most one row is active per context, but zero
+is a valid persistent state. Presence of rows and presence of an active row are
+different facts and must remain distinct in the API and UI.
 
-Add an explicit replacement-readiness service boundary. A future content
-consumer must register usage detection and migration coordination before it
-begins encrypting records. Once referenced encrypted content exists, simple
-replacement must return a migration-required conflict rather than retiring a
-configuration and stranding content. Existing plaintext Diary entries do not
-block this preparation-stage replacement.
+An active row selects the default for future encryption; it is not the only row
+that can decrypt older data. Activating B does not re-encrypt A's content, and
+disabling every row does not decrypt or erase existing content. Future encrypted
+records must retain their exact configuration ID and require that configuration's
+passphrase when opened, even if the row is now inactive. When all rows are
+disabled, future encrypted writes must require activation; never silently fall
+back to plaintext. Current unmodified legacy Diary behavior is not changed in
+this preparation stage.
+
+Retain inactive configurations and their verification metadata so referenced
+entries can be unlocked later. No row deletion API, action, or consumer-usage
+query is needed in this release. Any future deletion feature must introduce an
+authoritative reference check and prohibit deleting configurations still needed
+by encrypted content. Disabling is allowed for referenced rows because their
+material remains available for reading existing records.
+
+Replacing an active passphrase means adding a new named inactive row, then
+activating it after confirming both old and new passphrases. This changes only
+the default for new encryption. It must not be presented as changing the secret
+of existing encrypted entries. A future distinct Change passphrase for existing
+content operation requires explicit migration coordination.
 
 Future re-encryption must pause conflicting writes, retain old and pending
 configuration references, resume interrupted batches safely, and activate the
@@ -175,25 +231,74 @@ new default only when migration completes. Deactivation does not erase copied
 keys or revoke offline decryption. These properties cannot be provided by the
 is_active flag alone.
 
+## Future Diary unlock experience (not implemented in this stage)
+
+Preserve the user's original requirement to prompt when opening the Diary base
+page. If a configuration is active, ask for that configuration's passphrase and
+verify it locally. Use its temporary key to reveal titles and body previews of
+entries referencing that configuration. If none is active, offer the available
+configurations to select and unlock, without silently activating any of them.
+
+Entries referencing another configuration remain locked. Show blurred placeholder
+lines for their titles/previews, a lock indicator, and the message: "This entry
+uses a different passphrase. Unlock to view." Do not decrypt hidden content for
+this display or insert real titles/previews into the DOM, accessibility tree,
+tooltips, navigation state, or persistent caches underneath a CSS blur.
+
+Selecting a locked entry opens an entry-triggered unlock dialog showing its
+configuration's public name. Retrieve that exact configuration's original salt
+and derivation settings using the ID stored in the encrypted packages. Ask for
+its passphrase, verify the configuration payload, and decrypt/authenticate the
+entry's title and content before displaying them. Keep a separate temporary key
+per unlocked configuration for this Diary visit, so opening another entry using
+the same configuration does not prompt again. Never try the active key against
+an unrelated configuration and present the resulting failure as damaged data.
+
+Locked means the correct configuration key is not available in the current
+session. Inactive does not mean the entry must remain blurred after that key is
+successfully unlocked. Unlocking an inactive configuration does not activate it
+or change the default for new entries. Legacy is_encrypted=False entries keep
+their existing readable format. Leaving Diary, identity change, logout, and
+mobile backgrounding clear accessible keys and decrypted view state.
+
+The chosen behavior preserves historical configurations and asks for additional
+passphrases when needed; changing the active default does not automatically
+migrate old entries. A future explicit migration can consolidate entries if the
+user supplies all required old and destination passphrases. Missing historical
+configurations, unsupported formats, and damaged encrypted entries have specific
+unavailable/error states, never plaintext fallback or destructive reset.
+
 ## Settings experience
 
 Add a Passphrase section before Private profile on both clients, using the
 existing settings styles rather than introducing a separate settings category.
 
-Not configured: explain that a passphrase is used to unlock encrypted features,
-offer Set up passphrase, and state that existing content is not changed.
-Setup form has new/confirmation fields, visibility controls, matching validation,
-and a clear acknowledgement that there is no passphrase recovery in this design.
+Group rows under purpose headings, initially Diary. Each group has Add passphrase,
+an explicit None active state when appropriate, and a list showing name, creation
+date, an Active or Inactive badge, and row actions. Inactive rows have Activate;
+the active row has Disable. Rows also have Rename; no Delete action is shown.
+Use action buttons and status badges instead of independent checkboxes, which would imply
+multiple selections and obscure the confirmation required for a state change.
 
-Configured: show Configured, with Confirm passphrase and Change passphrase.
-Confirmation happens locally and stores no unlocked key persistently. Changing
-requires successful current-passphrase confirmation before enabling the new and
-confirmation fields. Reconfirm against the current server generation immediately
-before mutation; a stale configuration asks the user to reload and retry.
+An empty group explains that a passphrase is used to unlock encrypted features
+and that existing content is not changed. The add dialog asks for Name,
+Passphrase, and Confirm passphrase, with visibility controls, matching validation,
+and an acknowledgement that there is no recovery in this design. Save creates
+an inactive row. Do not automatically switch the active configuration on add.
 
-Do not expose a Disable button in this first release; the lifecycle model exists
-for future controlled deactivation. Do not claim that Diary or any existing
-content is encrypted merely because configuration setup is complete.
+Activation dialogs name the current and selected rows. With active A and target
+B, first confirm A's passphrase, then B's passphrase; submit both proofs with the
+observed scope_version. With no active row, ask only for B's passphrase. Disabling
+asks for the active row's passphrase. Clear
+successful proof/key state when the dialog closes; a later action prompts again.
+Rename changes only a public label and does not require a passphrase.
+
+Show distinct statuses for No passphrases, All disabled, and a named Active row.
+Explain that disabling does not change existing encrypted data. Do not expose a
+Change passphrase label that falsely implies existing content is re-encrypted.
+Do not claim that Diary or any existing content is encrypted merely because a
+configuration exists or is active. A stale scope asks the user to reload and
+repeat proof entry; never silently apply an action to refreshed rows.
 
 During derivation or submission, prevent duplicate actions and announce progress.
 Preserve the ability to cancel before submission. Never retain passphrases,
@@ -204,7 +309,8 @@ Managed runtimes cannot guarantee physical memory zeroization.
 
 ## Logging, export, and deletion
 
-Redact verification_proof and any accidental secret fields recursively in API
+Redact verification_proof, active_verification_proof,
+target_verification_proof, and any accidental secret fields recursively in API
 failure logging. Client errors must not dump request objects containing proof
 material. Avoid reflecting sensitive values in serializer errors.
 
@@ -218,18 +324,24 @@ or transient keys. Do not modify Diary export semantics in this phase.
 - Fresh migration creates the model and active-scope constraint; migration-state
   checks report no missing model changes.
 - Backend tests cover authentication, account/entity isolation including switched
-  contexts, invalid payloads/costs/lengths, concurrent setup, idempotent setup,
-  stale replacement, missing/wrong/replayed old proof, correct replacement,
-  historical retention, no-store responses, and log redaction.
-- Server-verified proof tests demonstrate that a logged-in client cannot replace
-  an active configuration merely by bypassing the old-passphrase UI.
+  contexts, purpose separation, invalid payloads/costs/lengths/names, multiple
+  inactive rows, zero/one active states, concurrent creation/activation,
+  idempotent registration, stale scope versions including A-to-B-to-A changes,
+  missing/wrong/swapped row proofs, rename restrictions, absent deletion routes,
+  inactive-history retention, no-store, and log redaction.
+- Proof tests demonstrate that switching A to B requires both secrets, reactivating
+  B with none active requires B's secret, and disabling A requires A's secret.
+  Direct flag changes cannot bypass lifecycle services. Correctly proving
+  one row never authorizes another row's action.
 - Cross-platform fixtures cover exact passphrase encoding including Unicode and
   spaces, Argon2id output, AES-GCM verification, identity binding, wrong secret,
   and modified nonce/tag/ciphertext. New setup passes a local encryption/decryption
   round trip before any registration request.
-- Web tests/build cover absent/configured/error/loading states, old-passphrase
-  gating, successful replacement, stale generations, cancellation, and no secret
-  persistence. Run the existing web build and applicable test harness.
+- Web tests/build cover grouped named rows, empty/all-disabled/active states,
+  add/rename/activate/disable dialogs, no Delete action, both-passphrase switching,
+  reactivation with none active, failure without partial mutation, stale scopes, cancellation,
+  inactive-row retention, and no secret persistence. Run the existing web build and
+  applicable test harness.
 - Flutter tests/analyzer cover the same state transitions and identity/background
   cleanup. Verify derivation does not freeze the settings screen.
 - Check relevant pre-existing settings behavior still works. Inspect the settings
