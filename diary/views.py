@@ -280,7 +280,8 @@ class DiaryCRUDView(DiaryContentView):
                 # Serialize against passphrase activation/deactivation and
                 # account retirement using the same existing Account lock.
                 owner = Account.objects.select_for_update().get(pk=user.pk, is_active=True)
-                validate_entry_encryption(owner, title, content, is_encrypted, is_private)
+                validate_entry_encryption(owner, title, content, is_encrypted, is_private,
+                                          explicit_choice="is_encrypted" in request.data)
                 # Both branches resolve through the same canonical,
                 # race-safe, case/whitespace-insensitive lookup now -
                 # previously this used a separate bulk_create(

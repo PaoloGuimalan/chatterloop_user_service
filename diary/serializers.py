@@ -94,6 +94,7 @@ class EntrySerializer(serializers.ModelSerializer):
                 attrs.get("content", instance.content if instance else ""),
                 attrs.get("is_encrypted", instance.is_encrypted if instance else False),
                 attrs.get("is_private", instance.is_private if instance else True), instance,
+                explicit_choice="is_encrypted" in getattr(self, "initial_data", {}),
             )
         return attrs
 

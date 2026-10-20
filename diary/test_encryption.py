@@ -139,6 +139,15 @@ class DiaryEncryptionTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertFalse(Entry.objects.exists())
 
+    def test_active_configuration_allows_an_explicit_unencrypted_choice(self):
+        for private in [True, False]:
+            response = self.post({"title": "My day", "content": "<p>Chosen plaintext</p>",
+                                  "entry_date": "2026-10-20", "is_private": private,
+                                  "is_encrypted": False, "tags": [], "attachments": []})
+            self.assertEqual(response.status_code, 200, response.data)
+            self.assertIs(response.data["is_encrypted"], False)
+            self.assertIs(response.data["is_private"], private)
+
     def test_capability_is_advertised_only_with_diary_backend_support(self):
         result = get_personal_configurations(self.owner)
         self.assertEqual(result.get("consumer_capabilities"), {"diary": {"format_version": 1}})

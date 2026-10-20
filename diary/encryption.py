@@ -47,7 +47,7 @@ def _looks_encrypted(value):
         return False
 
 
-def validate_entry_encryption(account, title, content, is_encrypted, is_private, instance=None):
+def validate_entry_encryption(account, title, content, is_encrypted, is_private, instance=None, *, explicit_choice=False):
     """Call inside the Account write lock before storing a new entry.
 
     Ciphertext stays in the two existing text fields. Both field envelopes
@@ -65,10 +65,10 @@ def validate_entry_encryption(account, title, content, is_encrypted, is_private,
             raise ValidationError({"message": "Encrypted fields require the encryption marker."})
         if len(title) > 255:
             raise ValidationError({"title": "Use at most 255 characters."})
-        if instance is None and EncryptionConfiguration.objects.filter(
+        if instance is None and not explicit_choice and EncryptionConfiguration.objects.filter(
             user=account, entity_id=account.entity_id, purpose="diary", is_active=True,
         ).exists():
-            raise ValidationError({"code": "diary_encryption_required", "message": "An active Diary passphrase requires encrypted title and content. Update your client before saving."})
+            raise ValidationError({"code": "diary_encryption_required", "message": "Choose whether to encrypt this entry. Update your client before saving."})
         return
     if is_private is not True:
         raise ValidationError({"message": "Encrypted Diary entries must be private."})
