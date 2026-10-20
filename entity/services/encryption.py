@@ -10,7 +10,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import F
 from django.utils.timezone import now
 
-from entity.encryption_contract import PURPOSES, SUPPORTED_PROFILE, canonical_json, decode_base64
+from entity.encryption_contract import CONSUMER_CAPABILITIES, PURPOSES, SUPPORTED_PROFILE, canonical_json, decode_base64
 from entity.encryption_serializers import EncryptionConfigurationSerializer
 from entity.models import EncryptionConfiguration
 from user.models import Account
@@ -76,6 +76,7 @@ def _check_proof(row, proof):
 def get_personal_configurations(account):
     owner = _owner(account)
     return {"owner": {"entity_id": str(owner.entity_id), "user_id": str(owner.pk)},
+            "consumer_capabilities": deepcopy(CONSUMER_CAPABILITIES),
             "supported_profile": deepcopy(SUPPORTED_PROFILE),
             "purposes": [_group(owner, purpose) for purpose in PURPOSES]}
 

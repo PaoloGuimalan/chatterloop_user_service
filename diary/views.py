@@ -1,4 +1,5 @@
 from django.shortcuts import render
+from django.http import Http404
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -7,6 +8,8 @@ from django.db.models.functions import Coalesce
 from django.db import transaction
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.exceptions import ValidationError
+from .encryption import validate_entry_encryption
 from .models import Entry, Mood, Attachment
 from interests.models import Interest, EntityInterestAffinity
 from user_service.services.rabbitmq import RabbitMQClient, Queues
@@ -129,7 +132,14 @@ class DiaryTotalView(APIView):
             return Response(str(ex), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class DiaryListView(APIView):
+class DiaryContentView(APIView):
+    def finalize_response(self, request, response, *args, **kwargs):
+        response = super().finalize_response(request, response, *args, **kwargs)
+        response["Cache-Control"] = "no-store"
+        return response
+
+
+class DiaryListView(DiaryContentView):
     permission_classes = [IsAuthenticated]
     pagination_class = Pagination
 
@@ -198,7 +208,7 @@ class TagListView(InterestListView):
     pass
 
 
-class DiaryCRUDView(APIView):
+class DiaryCRUDView(DiaryContentView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, entry_id):
@@ -209,12 +219,14 @@ class DiaryCRUDView(APIView):
                 "attachments"
             )
             final_query = get_object_or_404(
-                queryset, Q(account=user) | Q(is_private=False), id=entry_id
+                queryset, Q(account=user) | Q(is_private=False, is_encrypted=False), id=entry_id
             )
 
             serialized_response = EntrySerializer(final_query)
 
             return Response(serialized_response.data, status=status.HTTP_200_OK)
+        except Http404:
+            return Response({"message": "Entry not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as ex:
             logger.exception("DiaryCRUDView.get failed")
             return Response(str(ex), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -230,6 +242,10 @@ class DiaryCRUDView(APIView):
             entry_date = request.data.get("entry_date")
             is_private = request.data.get("is_private")
             attachments = request.data.get("attachments")
+            is_encrypted = request.data.get("is_encrypted", False)
+
+            if not isinstance(title, str) or not isinstance(content, str):
+                raise ValidationError({"message": "Title and content must be text."})
 
             date_part = entry_date.split(" ")[0]  # "2026-01-17"
             dt = timezone.make_aware(datetime.strptime(date_part, "%Y-%m-%d"))
@@ -261,6 +277,10 @@ class DiaryCRUDView(APIView):
                 )
 
             with transaction.atomic():
+                # Serialize against passphrase activation/deactivation and
+                # account retirement using the same existing Account lock.
+                owner = Account.objects.select_for_update().get(pk=user.pk, is_active=True)
+                validate_entry_encryption(owner, title, content, is_encrypted, is_private)
                 # Both branches resolve through the same canonical,
                 # race-safe, case/whitespace-insensitive lookup now -
                 # previously this used a separate bulk_create(
@@ -269,7 +289,7 @@ class DiaryCRUDView(APIView):
                 # is_new flag even though it can be stale by request time.
                 combined_tags = [
                     Interest.objects.get_or_create_by_name(tag["name"])[0]
-                    for tag in tags
+                    for tag in (tags or [])
                 ]
 
                 entry_mood = None
@@ -280,6 +300,7 @@ class DiaryCRUDView(APIView):
                 queryset = Entry.objects.create(
                     title=title,
                     content=content,
+                    is_encrypted=is_encrypted,
                     mood=entry_mood,
                     entry_date=formatted_entry_date,
                     is_private=is_private,
@@ -334,6 +355,8 @@ class DiaryCRUDView(APIView):
                 serialized_response = EntrySerializer(final_query)
 
                 return Response(serialized_response.data, status=status.HTTP_200_OK)
+        except ValidationError as ex:
+            return Response(ex.detail, status=status.HTTP_400_BAD_REQUEST)
         except Exception as ex:
             logger.exception("DiaryCRUDView.post failed")
             return Response(str(ex), status=status.HTTP_500_INTERNAL_SERVER_ERROR)

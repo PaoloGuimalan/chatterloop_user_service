@@ -5,6 +5,9 @@ import json
 from entity.models import EncryptionConfiguration
 
 PURPOSES = EncryptionConfiguration.PURPOSE_CHOICES
+# Consumer formats are advertised only after their storage/validation support
+# exists. Adding a purpose alone must not advertise encryption support for it.
+CONSUMER_CAPABILITIES = {"diary": {"format_version": 1}}
 KDF_PARAMETERS = {"version": 19, "memory_kib": 65536, "iterations": 3, "parallelism": 1, "output_length": 32}
 SUPPORTED_PROFILE = {
     "format_version": 1, "kdf_algorithm": "argon2id", "kdf_parameters": KDF_PARAMETERS,

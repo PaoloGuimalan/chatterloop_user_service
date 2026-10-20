@@ -13,8 +13,9 @@ class Entry(models.Model):
 
     id = models.UUIDField(default=uuid.uuid4, primary_key=True, unique=True)
     account = models.ForeignKey(Account, null=False, on_delete=models.DO_NOTHING)
-    title = models.CharField(max_length=255, blank=True)
+    title = models.TextField(blank=True)
     content = models.TextField()
+    is_encrypted = models.BooleanField(default=False)
     entry_date = models.DateField()
     mood = models.ForeignKey(Mood, null=True, blank=True, on_delete=models.DO_NOTHING)
     is_private = models.BooleanField(default=True)

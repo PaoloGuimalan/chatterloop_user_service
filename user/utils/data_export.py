@@ -76,6 +76,7 @@ def export_account_data(account, entity):
                 "id",
                 "title",
                 "content",
+                "is_encrypted",
                 "entry_date",
                 "is_private",
                 "created_at",

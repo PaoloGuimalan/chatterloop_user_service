@@ -4,6 +4,9 @@ from interests.models import Interest
 from user_service.services.rabbitmq import RabbitMQClient, Queues
 from interests.services.interest_resolver import ensure_grant_override
 from newsfeed.services.link_preview import extract_first_url_from_html, get_preview
+from diary.encryption import validate_entry_encryption
+from django.db import transaction
+from user.models import Account
 
 
 class TagSerializer(serializers.ModelSerializer):
@@ -54,6 +57,8 @@ class EntrySerializer(serializers.ModelSerializer):
     link_preview = serializers.SerializerMethodField()
 
     def get_link_preview(self, obj):
+        if obj.is_encrypted:
+            return None
         url = extract_first_url_from_html(obj.content or "")
         return get_preview(url) if url else None
 
@@ -64,6 +69,7 @@ class EntrySerializer(serializers.ModelSerializer):
             "account",
             "title",
             "content",
+            "is_encrypted",
             "entry_date",
             "mood",
             "is_private",
@@ -76,6 +82,20 @@ class EntrySerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
+
+    def validate(self, attrs):
+        instance = self.instance
+        if instance is not None and "account" in attrs and attrs["account"].pk != instance.account_id:
+            raise serializers.ValidationError({"account": "An entry's owner cannot be changed."})
+        account = instance.account if instance is not None else attrs.get("account")
+        if account is not None:
+            validate_entry_encryption(
+                account, attrs.get("title", instance.title if instance else ""),
+                attrs.get("content", instance.content if instance else ""),
+                attrs.get("is_encrypted", instance.is_encrypted if instance else False),
+                attrs.get("is_private", instance.is_private if instance else True), instance,
+            )
+        return attrs
 
     def _handle_tags(self, entry, tag_names):
         if tag_names is None:
@@ -101,13 +121,21 @@ class EntrySerializer(serializers.ModelSerializer):
             )
             ensure_grant_override(entry.account.entity_id, tag_ids)
 
+    @transaction.atomic
     def create(self, validated_data):
+        Account.objects.select_for_update().get(pk=validated_data["account"].pk)
+        self.validate(validated_data)
         tag_names = validated_data.pop("tags", [])
         entry = super().create(validated_data)
         self._handle_tags(entry, tag_names)
         return entry
 
+    @transaction.atomic
     def update(self, instance, validated_data):
+        Account.objects.select_for_update().get(pk=instance.account_id)
+        instance = Entry.objects.select_for_update().get(pk=instance.pk, account_id=instance.account_id)
+        self.instance = instance
+        self.validate(validated_data)
         tag_names = validated_data.pop("tags", None)
         entry = super().update(instance, validated_data)
         if tag_names is not None:
