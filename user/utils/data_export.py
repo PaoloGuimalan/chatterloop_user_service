@@ -8,8 +8,13 @@ def export_account_data(account, entity):
     from community.models import Realm, Member, Follow, Invite
     from diary.models import Entry
     from newsfeed.models import Post, Comment, PostSave
+    from entity.models import EncryptionConfiguration
+    from entity.encryption_serializers import EncryptionConfigurationSerializer
 
     return {
+        "encryption_configurations": list(EncryptionConfigurationSerializer(
+            EncryptionConfiguration.objects.filter(user=account), many=True,
+        ).data),
         "profile": {
             "id": account.id,
             "username": account.username,

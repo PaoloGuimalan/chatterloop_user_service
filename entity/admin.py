@@ -6,6 +6,7 @@ from .models import (
     EntityPermission,
     EntityTypeDefaultPermission,
     Token,
+    EncryptionConfiguration,
 )
 
 admin.site.register(Entity)
@@ -13,6 +14,24 @@ admin.site.register(PermissionCatalogEntry)
 admin.site.register(RolePermission)
 admin.site.register(EntityPermission)
 admin.site.register(EntityTypeDefaultPermission)
+
+
+@admin.register(EncryptionConfiguration)
+class EncryptionConfigurationAdmin(admin.ModelAdmin):
+    list_display = ("name", "purpose", "entity", "user", "is_active", "created_at")
+    list_filter = ("purpose", "is_active")
+    search_fields = ("name", "=entity__id", "=user__id")
+    readonly_fields = tuple(field.name for field in EncryptionConfiguration._meta.fields)
+    actions = None
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(Token)

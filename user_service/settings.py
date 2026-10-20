@@ -17,6 +17,7 @@ from urllib.parse import quote
 from dotenv import load_dotenv
 from corsheaders.defaults import default_headers
 from cassandra.auth import PlainTextAuthProvider
+from user_service.profiling import should_profile_request
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -182,9 +183,19 @@ CACHES = {
     }
 }
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
+# Shared rate limits for encryption configuration changes.
+# Redis errors must block changes rather than bypass these limits.
+CACHES["encryption_mutations"] = {
+    **CACHES["default"],
+    "KEY_PREFIX": "encryption_mutations",
+    "OPTIONS": {**CACHES["default"]["OPTIONS"], "IGNORE_EXCEPTIONS": False},
+}
+ENCRYPTION_MUTATION_CACHE_ALIAS = "encryption_mutations"
+ENCRYPTION_MUTATION_ACCOUNT_RATE = os.getenv("ENCRYPTION_MUTATION_ACCOUNT_RATE", "60/hour")
+ENCRYPTION_MUTATION_IP_RATE = os.getenv("ENCRYPTION_MUTATION_IP_RATE", "120/hour")
+ENCRYPTION_TRUST_PROXY_HEADERS = os.getenv("ENCRYPTION_TRUST_PROXY_HEADERS", "").lower() == "true"
 
+# See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 ALLOWED_HOSTS = ["*"]
 
 # Path prefix the gateway serves this app under (api.chatterloop.app/us, with
@@ -222,6 +233,8 @@ INSTALLED_APPS = [
 # development-only tool. Enabling it follows DEBUG.
 if DEBUG:
     INSTALLED_APPS += ["silk"]
+
+SILKY_INTERCEPT_FUNC = should_profile_request
 
 # CorsMiddleware has to sit above anything that can produce a response of its
 # own -- CommonMiddleware and WhiteNoise both can -- or those responses go out

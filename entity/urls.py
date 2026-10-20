@@ -1,10 +1,11 @@
-from django.urls import path
+from django.urls import include, path
 
 from entity import moderation_views, network_views, search_views, views
 
 app_name = "entity"
 
 urlpatterns = [
+    path("encryption-configurations/", include("entity.encryption_urls")),
     path("me/modules", views.MyAllowedModules.as_view(), name="my-allowed-modules"),
     # The one read path that renders soft-deleted content, gated to the owner
     # and staff - see entity/moderation_views.py.

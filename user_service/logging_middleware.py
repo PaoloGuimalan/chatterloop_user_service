@@ -30,6 +30,7 @@ by the time the response reaches here, which is why the `except` blocks call
 import logging
 
 from django.conf import settings
+from user_service.profiling import ENCRYPTION_API_PREFIX
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,9 @@ _SENSITIVE_KEYS = {
     "new_password",
     "old_password",
     "secret",
+    "passphrase", "current_passphrase", "new_passphrase", "old_passphrase",
+    "key", "encryption_key", "derived_key", "private_key", "key_material",
+    "verification_proof", "active_verification_proof", "target_verification_proof",
 }
 
 # A failure body is normally `{"status": False, "message": "<str(e)>"}` or a
@@ -71,9 +75,12 @@ def _describe_actor(request):
 def _redact(data):
     if isinstance(data, dict):
         return {
-            key: ("<redacted>" if str(key).lower() in _SENSITIVE_KEYS else value)
+            key: ("<redacted>" if str(key).lower() in _SENSITIVE_KEYS or "passphrase" in str(key).lower()
+                  or str(key).lower().endswith("verification_proof") else _redact(value))
             for key, value in data.items()
         }
+    if isinstance(data, (list, tuple)):
+        return [_redact(item) for item in data]
     return data
 
 
@@ -135,7 +142,7 @@ class ApiFailureLogMiddleware:
             level,
             "%s %s -> %s | actor=%s | ip=%s | body=%s",
             request.method,
-            request.get_full_path(),
+            request.path if request.path_info.startswith(ENCRYPTION_API_PREFIX) else request.get_full_path(),
             response.status_code,
             _describe_actor(request),
             _client_ip(request),

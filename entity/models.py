@@ -32,6 +32,48 @@ class Entity(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
 
+class EncryptionConfiguration(models.Model):
+    """Public client-encryption envelope; never a passphrase or usable key.
+
+    Writes belong to entity.services.encryption. Inactive generations are kept
+    so future encrypted records can continue to reference their original ID.
+    """
+
+    PURPOSE_CHOICES = ["diary"]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    entity = models.ForeignKey(Entity, on_delete=models.CASCADE, related_name="encryption_configurations")
+    user = models.ForeignKey("user.Account", on_delete=models.CASCADE, related_name="encryption_configurations")
+    purpose = models.CharField(max_length=40, choices=[(purpose, purpose) for purpose in PURPOSE_CHOICES])
+    name = models.CharField(max_length=80)
+    is_active = models.BooleanField(default=False)
+    revision = models.PositiveBigIntegerField(default=1)
+    format_version = models.PositiveSmallIntegerField()
+    kdf_algorithm = models.CharField(max_length=32)
+    kdf_parameters = models.JSONField()
+    salt = models.CharField(max_length=24)
+    cipher_algorithm = models.CharField(max_length=32)
+    verification_nonce = models.CharField(max_length=16)
+    verification_ciphertext = models.TextField()
+    verification_digest = models.CharField(max_length=64)
+    replaces = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT, related_name="successors")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    deactivated_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "entity_encryption_configuration"
+        ordering = ["created_at", "id"]
+        constraints = [models.UniqueConstraint(
+            fields=["entity", "user", "purpose"], condition=models.Q(is_active=True),
+            name="unique_active_encryption_scope",
+        )]
+        indexes = [models.Index(fields=["entity", "user", "purpose"], name="encryption_owner_purpose_idx")]
+
+    def __str__(self):
+        return f"{self.purpose}: {self.name}"
+
+
 class EntityPermission(models.Model):
     """
     Explicit grant/deny override for a single (entity, permission, realm)

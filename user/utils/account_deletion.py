@@ -163,6 +163,8 @@ def delete_account(account, entity):
         post_items,
         publish_media_release,
     )
+    from entity.services.encryption import retire_account_configurations
+    from user.models import Account
 
     account_id = account.id
 
@@ -207,6 +209,10 @@ def delete_account(account, entity):
             )
 
     with transaction.atomic():
+        # The same existing owner row serializes configuration writes, including
+        # first setup. A waiting writer must observe the deactivated account.
+        account = Account.objects.select_for_update().get(pk=account.pk)
+        retire_account_configurations(account)
         Post.objects.filter(entity=entity, deleted_at__isnull=True).update(
             deleted_at=now(), deleted_by=entity
         )
