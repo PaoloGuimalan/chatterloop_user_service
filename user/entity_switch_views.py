@@ -45,7 +45,7 @@ class EntitySwitch(APIView):
     different `entity` claim (userID stays the same account, only `entity`
     changes), so everything downstream that reads request.entity (post
     authorship, comments, permission checks - both here and in the Node
-    `server` repo, which shares this JWT_SECRET) attributes actions to the
+    `server` repo, which shares AUTHENTICATION_SECRET) attributes actions to the
     realm instead of the personal user. This includes pages and non-page realms.
 
     Direct realm-to-realm switching is allowed: membership is validated

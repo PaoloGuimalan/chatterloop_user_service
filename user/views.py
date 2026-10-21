@@ -538,7 +538,8 @@ class UserAuthentication(APIView):
                                     {
                                         **serialized_user.data,
                                         "entity_id": user.entity.id,
-                                    }
+                                    },
+                                    authentication=False
                                 ),
                                 "authtoken": jwt.encoder(
                                     {
@@ -632,7 +633,8 @@ class ThirdPartyAuthentication(APIView):
                                         {
                                             **serialized_user.data,
                                             "entity_id": str(user.entity.id),
-                                        }
+                                        },
+                                        authentication=False
                                     ),
                                     "authtoken": jwt.encoder(
                                         {
@@ -720,7 +722,8 @@ class ThirdPartyAuthentication(APIView):
                                                 "entity_id": str(
                                                     create_user_query.entity.id
                                                 ),
-                                            }
+                                            },
+                                            authentication=False
                                         ),
                                         "authtoken": jwt.encoder(
                                             {
@@ -1708,7 +1711,8 @@ class UserAccountManagement(APIView):
                         {
                             **serialized_user.data,
                             "entity_id": str(new_user.entity.id),
-                        }
+                        },
+                        authentication=False
                     ),
                     "allowed_modules": allowed_modules,
                     "active_entity": active_entity,

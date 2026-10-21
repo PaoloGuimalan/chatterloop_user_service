@@ -159,12 +159,12 @@ EMAIL_USE_TLS = True
 
 # Default Credentials (for noreply)
 EMAIL_HOST_USER = os.getenv("EMAIL_NOREPLY_USER")
-EMAIL_HOST_PASSWORD = JWT_TOKEN
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", JWT_TOKEN)
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
 # Additional Credentials for Manual Use (for verify)
 EMAIL_VERIFY_USER = os.getenv("EMAIL_VERIFY_USER")
-EMAIL_VERIFY_PASS = JWT_TOKEN
+EMAIL_VERIFY_PASS = os.getenv("EMAIL_VERIFY_PASS", JWT_TOKEN)
 
 CSRF_TRUSTED_ORIGINS = ["https://*.chatterloop.app", "https://*.neonsystems.net"]
 
