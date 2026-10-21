@@ -97,6 +97,8 @@ class AutheticationBackend(BaseBackend):
                 raise PermissionDenied("Invalid Nonce")
 
             decoded_header = jwt.decoder(token)
+            if not jwt.matches_device_hash(decoded_header.get("hash"), device_token):
+                raise PermissionDenied("Device not recognized. Try logging in again.")
             decoded_id = decoded_header["userID"]
 
             user = Account.objects.get(id=decoded_id)

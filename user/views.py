@@ -546,7 +546,8 @@ class UserAuthentication(APIView):
                                         "userID": str(user.id),
                                         "username": user.username,
                                         "entity": str(user.entity.id),
-                                    }
+                                    },
+                                    device_token=device_token,
                                 ),
                                 "allowed_modules": allowed_modules,
                                 "active_entity": active_entity,
@@ -641,7 +642,8 @@ class ThirdPartyAuthentication(APIView):
                                             "userID": str(user.id),
                                             "username": user.username,
                                             "entity": str(user.entity.id),
-                                        }
+                                        },
+                                        device_token=device_token,
                                     ),
                                     "allowed_modules": allowed_modules,
                                     "active_entity": active_entity,
@@ -732,7 +734,8 @@ class ThirdPartyAuthentication(APIView):
                                                 "entity": str(
                                                     create_user_query.entity.id
                                                 ),
-                                            }
+                                            },
+                                            device_token=device_token,
                                         ),
                                         "allowed_modules": allowed_modules,
                                         "active_entity": active_entity,
@@ -1705,7 +1708,8 @@ class UserAccountManagement(APIView):
                             "userID": str(new_user.id),
                             "username": new_user.username,
                             "entity": str(new_user.entity.id),
-                        }
+                        },
+                        device_token=device_token,
                     ),
                     "usertoken": jwt.encoder(
                         {

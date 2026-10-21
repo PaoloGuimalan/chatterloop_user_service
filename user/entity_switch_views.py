@@ -107,7 +107,8 @@ class EntitySwitch(APIView):
                     "userID": str(user.id),
                     "username": user.username,
                     "entity": str(realm.entity_id),
-                }
+                },
+                device_token=device_token,
             )
 
             return Response(
@@ -215,7 +216,8 @@ class EntitySwitchBack(APIView):
                     "userID": str(user.id),
                     "username": user.username,
                     "entity": str(user.entity.id),
-                }
+                },
+                device_token=device_token,
             )
 
             return Response(

@@ -48,7 +48,8 @@ class RegistrationUuidSerializationTests(TestCase):
                 "email": email,
                 "given_name": "Test",
                 "family_name": "User",
-            }
+            },
+            authentication=False,
         )
 
         request = self.factory.post(
@@ -98,7 +99,8 @@ class RegistrationUuidSerializationTests(TestCase):
                 "azp": service_id,
                 "email": email,
                 "given_name": "Madonna",
-            }
+            },
+            authentication=False,
         )
 
         request = self.factory.post(
@@ -135,7 +137,8 @@ class RegistrationUuidSerializationTests(TestCase):
                 "azp": service_id,
                 "email": email,
                 "given_name": "Juan Miguel Dela Cruz",
-            }
+            },
+            authentication=False,
         )
 
         request = self.factory.post(
