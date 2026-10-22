@@ -32,6 +32,18 @@ class Entity(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
 
+class EncryptionPurpose(models.Model):
+    code = models.CharField(max_length=40, primary_key=True)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = "entity_encryption_purpose"
+        ordering = ["code"]
+
+    def __str__(self):
+        return self.code
+
+
 class EncryptionConfiguration(models.Model):
     """Public client-encryption envelope; never a passphrase or usable key.
 
@@ -39,12 +51,12 @@ class EncryptionConfiguration(models.Model):
     so future encrypted records can continue to reference their original ID.
     """
 
-    PURPOSE_CHOICES = ["diary"]
-
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     entity = models.ForeignKey(Entity, on_delete=models.CASCADE, related_name="encryption_configurations")
     user = models.ForeignKey("user.Account", on_delete=models.CASCADE, related_name="encryption_configurations")
-    purpose = models.CharField(max_length=40, choices=[(purpose, purpose) for purpose in PURPOSE_CHOICES])
+    purposes = models.ManyToManyField(EncryptionPurpose, related_name="configurations")
+    # Immutable v1 authentication context, independent of reusable memberships.
+    verification_purpose = models.CharField(max_length=40)
     name = models.CharField(max_length=80)
     is_active = models.BooleanField(default=False)
     revision = models.PositiveBigIntegerField(default=1)
@@ -65,13 +77,13 @@ class EncryptionConfiguration(models.Model):
         db_table = "entity_encryption_configuration"
         ordering = ["created_at", "id"]
         constraints = [models.UniqueConstraint(
-            fields=["entity", "user", "purpose"], condition=models.Q(is_active=True),
+            fields=["entity", "user"], condition=models.Q(is_active=True),
             name="unique_active_encryption_scope",
         )]
-        indexes = [models.Index(fields=["entity", "user", "purpose"], name="encryption_owner_purpose_idx")]
+        indexes = [models.Index(fields=["entity", "user"], name="encryption_owner_idx")]
 
     def __str__(self):
-        return f"{self.purpose}: {self.name}"
+        return self.name
 
 
 class EntityPermission(models.Model):

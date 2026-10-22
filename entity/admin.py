@@ -7,6 +7,7 @@ from .models import (
     EntityTypeDefaultPermission,
     Token,
     EncryptionConfiguration,
+    EncryptionPurpose,
 )
 
 admin.site.register(Entity)
@@ -16,13 +17,33 @@ admin.site.register(EntityPermission)
 admin.site.register(EntityTypeDefaultPermission)
 
 
+@admin.register(EncryptionPurpose)
+class EncryptionPurposeAdmin(admin.ModelAdmin):
+    list_display = ("code", "is_active")
+    list_filter = ("is_active",)
+    search_fields = ("code",)
+
+    def get_readonly_fields(self, request, obj=None):
+        return ("code",) if obj else ()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(EncryptionConfiguration)
 class EncryptionConfigurationAdmin(admin.ModelAdmin):
-    list_display = ("name", "purpose", "entity", "user", "is_active", "created_at")
-    list_filter = ("purpose", "is_active")
+    list_display = ("name", "purpose_codes", "entity", "user", "is_active", "created_at")
+    list_filter = ("purposes", "is_active")
     search_fields = ("name", "=entity__id", "=user__id")
-    readonly_fields = tuple(field.name for field in EncryptionConfiguration._meta.fields)
+    readonly_fields = tuple(field.name for field in EncryptionConfiguration._meta.fields) + ("purposes",)
     actions = None
+
+    @admin.display(description="Purposes")
+    def purpose_codes(self, obj):
+        return ", ".join(purpose.code for purpose in obj.purposes.all())
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related("purposes")
 
     def has_add_permission(self, request):
         return False

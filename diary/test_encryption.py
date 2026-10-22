@@ -13,7 +13,7 @@ from diary.models import Entry
 from diary.serializers import EntrySerializer
 from diary.views import DiaryCRUDView, DiaryListView
 from entity.encryption_contract import KDF_PARAMETERS
-from entity.models import EncryptionConfiguration, Entity
+from entity.models import EncryptionConfiguration, EncryptionPurpose, Entity
 from entity.services.encryption import get_personal_configurations
 from user.models import Account
 
@@ -31,13 +31,15 @@ class DiaryEncryptionTests(TestCase):
         )
 
     def configuration_for(self, account, active=True):
-        return EncryptionConfiguration.objects.create(
-            entity=account.entity, user=account, purpose="diary", name="Everyday",
+        configuration = EncryptionConfiguration.objects.create(
+            entity=account.entity, user=account, verification_purpose="diary", name="Everyday",
             is_active=active, format_version=1, kdf_algorithm="argon2id",
             kdf_parameters=KDF_PARAMETERS, salt=base64.b64encode(bytes(16)).decode(),
             cipher_algorithm="aes-256-gcm", verification_nonce=base64.b64encode(bytes(12)).decode(),
             verification_ciphertext=base64.b64encode(bytes(32)).decode(), verification_digest="0" * 64,
         )
+        configuration.purposes.add(EncryptionPurpose.objects.get_or_create(code="diary")[0])
+        return configuration
 
     def payload(self, configuration=None):
         configuration = configuration or self.configuration
@@ -83,8 +85,9 @@ class DiaryEncryptionTests(TestCase):
         unsupported = self.configuration_for(self.account())
         unsupported.user = self.owner
         unsupported.entity = self.owner.entity
-        unsupported.purpose = "notes"
+        unsupported.is_active = False
         unsupported.save()
+        unsupported.purposes.set([EncryptionPurpose.objects.create(code="notes")])
         for row in [foreign, inactive, unsupported]:
             with self.subTest(configuration=str(row.pk)):
                 response = self.post(self.payload(row))
@@ -147,6 +150,27 @@ class DiaryEncryptionTests(TestCase):
             self.assertEqual(response.status_code, 200, response.data)
             self.assertIs(response.data["is_encrypted"], False)
             self.assertIs(response.data["is_private"], private)
+
+    def test_disabled_purpose_bypasses_legacy_lock_without_exposing_old_ciphertext(self):
+        encrypted = self.post(self.payload())
+        self.assertEqual(encrypted.status_code, 200, encrypted.data)
+        EncryptionPurpose.objects.filter(pk="diary").update(is_active=False)
+        response = self.post({"title": "While disabled", "content": "<p>Plaintext choice</p>",
+                              "entry_date": "2026-10-22", "is_private": True, "tags": [], "attachments": []})
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertFalse(response.data["is_encrypted"])
+        old = Entry.objects.get(pk=encrypted.data["id"])
+        self.assertTrue(old.is_encrypted)
+        self.assertEqual(old.title, encrypted.data["title"])
+
+    def test_disabled_purpose_blocks_new_encryption_and_existing_encrypted_edits(self):
+        encrypted = self.post(self.payload())
+        self.assertEqual(encrypted.status_code, 200, encrypted.data)
+        EncryptionPurpose.objects.filter(pk="diary").update(is_active=False)
+        self.assertEqual(self.post(self.payload()).status_code, 400)
+        entry = Entry.objects.get(pk=encrypted.data["id"])
+        serializer = EntrySerializer(entry, data={"title": entry.title, "content": entry.content}, partial=True)
+        self.assertFalse(serializer.is_valid())
 
     def test_capability_is_advertised_only_with_diary_backend_support(self):
         result = get_personal_configurations(self.owner)

@@ -2,9 +2,6 @@
 import base64
 import binascii
 import json
-from entity.models import EncryptionConfiguration
-
-PURPOSES = EncryptionConfiguration.PURPOSE_CHOICES
 # Consumer formats are advertised only after their storage/validation support
 # exists. Adding a purpose alone must not advertise encryption support for it.
 CONSUMER_CAPABILITIES = {"diary": {"format_version": 1}}
@@ -36,5 +33,5 @@ def decode_base64(value, minimum, maximum):
 def verification_aad(configuration):
     return canonical_json([
         "chatterloop.encryption.verification", configuration.format_version,
-        str(configuration.id), str(configuration.entity_id), str(configuration.user_id), configuration.purpose,
+        str(configuration.id), str(configuration.entity_id), str(configuration.user_id), configuration.verification_purpose,
     ])

@@ -66,7 +66,7 @@ def validate_entry_encryption(account, title, content, is_encrypted, is_private,
         if len(title) > 255:
             raise ValidationError({"title": "Use at most 255 characters."})
         if instance is None and not explicit_choice and EncryptionConfiguration.objects.filter(
-            user=account, entity_id=account.entity_id, purpose="diary", is_active=True,
+            user=account, entity_id=account.entity_id, purposes__code="diary", purposes__is_active=True, is_active=True,
         ).exists():
             raise ValidationError({"code": "diary_encryption_required", "message": "Choose whether to encrypt this entry. Update your client before saving."})
         return
@@ -85,7 +85,7 @@ def validate_entry_encryption(account, title, content, is_encrypted, is_private,
                 raise ValueError("The existing encryption identity must be retained.")
         configuration = EncryptionConfiguration.objects.filter(
             pk=title_envelope["configuration_id"], user=account,
-            entity_id=account.entity_id, purpose="diary", format_version=1,
+            entity_id=account.entity_id, purposes__code="diary", purposes__is_active=True, format_version=1,
         ).first()
         if configuration is None or (not configuration.is_active and not (instance and instance.is_encrypted)):
             raise ValueError("An active personal Diary configuration is required.")

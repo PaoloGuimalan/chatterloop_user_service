@@ -10,9 +10,9 @@ from django.db import IntegrityError, transaction
 from django.db.models import F
 from django.utils.timezone import now
 
-from entity.encryption_contract import CONSUMER_CAPABILITIES, PURPOSES, SUPPORTED_PROFILE, canonical_json, decode_base64
+from entity.encryption_contract import CONSUMER_CAPABILITIES, SUPPORTED_PROFILE, canonical_json, decode_base64
 from entity.encryption_serializers import EncryptionConfigurationSerializer
-from entity.models import EncryptionConfiguration
+from entity.models import EncryptionConfiguration, EncryptionPurpose
 from user.models import Account
 
 
@@ -33,12 +33,21 @@ def _owner(account, lock=False):
 
 
 def _rows(owner, purpose):
-    return list(EncryptionConfiguration.objects.filter(user=owner, entity_id=owner.entity_id, purpose=purpose).order_by("id"))
+    return list(EncryptionConfiguration.objects.filter(
+        user=owner, entity_id=owner.entity_id, purposes__code=purpose,
+    ).prefetch_related("purposes").order_by("id"))
 
 
-def _version(owner, purpose, rows):
-    snapshot = ["chatterloop.encryption.scope", 1, str(owner.entity_id), str(owner.pk), purpose,
-                [[str(row.pk), row.revision, row.is_active] for row in rows]]
+def _version(owner, purpose):
+    # Activation is configuration-wide, so a change in another purpose must
+    # invalidate stale confirmations too.
+    configurations = EncryptionConfiguration.objects.filter(
+        user=owner, entity_id=owner.entity_id,
+    ).only("id", "revision", "is_active").prefetch_related("purposes").order_by("id")
+    catalog = list(EncryptionPurpose.objects.order_by("code").values_list("code", "is_active"))
+    snapshot = ["chatterloop.encryption.scope", 2, str(owner.entity_id), str(owner.pk), purpose, catalog,
+                [[str(row.pk), row.revision, row.is_active,
+                  sorted(item.code for item in row.purposes.all())] for row in configurations]]
     return hashlib.sha256(canonical_json(snapshot).encode("utf-8")).hexdigest()
 
 
@@ -46,22 +55,33 @@ def _group(owner, purpose, rows=None):
     rows = _rows(owner, purpose) if rows is None else rows
     return {
         "purpose": purpose, "label": purpose,
+        "is_active": EncryptionPurpose.objects.get(pk=purpose).is_active,
         "configurations": EncryptionConfigurationSerializer(rows, many=True).data,
         "active_configuration_id": next((str(row.pk) for row in rows if row.is_active), None),
-        "scope_version": _version(owner, purpose, rows),
+        "scope_version": _version(owner, purpose),
     }
 
 
 def _check_version(owner, purpose, rows, data):
-    if data.get("expected_scope_version") != _version(owner, purpose, rows):
+    if data.get("expected_scope_version") != _version(owner, purpose):
         raise EncryptionError("stale_scope", "Configurations changed. Reload and confirm again.", 409)
 
 
 def _target(owner, configuration_id):
-    row = EncryptionConfiguration.objects.filter(pk=configuration_id, user=owner, entity_id=owner.entity_id).first()
-    if row is None or row.purpose not in PURPOSES:
+    row = EncryptionConfiguration.objects.filter(pk=configuration_id, user=owner, entity_id=owner.entity_id).prefetch_related("purposes").first()
+    if row is None or not row.purposes.all():
         raise EncryptionError("not_found", "Configuration not found.", 404)
     return row
+
+
+def _context(row, data, *, require_active=False):
+    memberships = sorted(item.code for item in row.purposes.all())
+    purpose = data.get("purpose") or (row.verification_purpose if row.verification_purpose in memberships else memberships[0])
+    if purpose not in memberships:
+        raise EncryptionError("unsupported_purpose", "Configuration is not available for this purpose.")
+    if require_active and not next(item for item in row.purposes.all() if item.code == purpose).is_active:
+        raise EncryptionError("purpose_inactive", "Encryption is temporarily disabled for this purpose.", 409)
+    return purpose
 
 
 def _check_proof(row, proof):
@@ -73,12 +93,15 @@ def _check_proof(row, proof):
         raise EncryptionError("unlock_failed", "Could not confirm the passphrase.", 403)
 
 
-def get_personal_configurations(account):
+def get_personal_configurations(account, purpose=None):
     owner = _owner(account)
+    if purpose is not None and not EncryptionPurpose.objects.filter(pk=purpose).exists():
+        raise EncryptionError("unsupported_purpose", "Unsupported purpose.")
+    purposes = list(EncryptionPurpose.objects.values_list("code", flat=True)) if purpose is None else [purpose]
     return {"owner": {"entity_id": str(owner.entity_id), "user_id": str(owner.pk)},
             "consumer_capabilities": deepcopy(CONSUMER_CAPABILITIES),
             "supported_profile": deepcopy(SUPPORTED_PROFILE),
-            "purposes": [_group(owner, purpose) for purpose in PURPOSES]}
+            "purposes": [_group(owner, item) for item in purposes]}
 
 
 @transaction.atomic
@@ -86,9 +109,14 @@ def register_configuration(account, validated_data):
     owner = _owner(account, lock=True)
     data = dict(validated_data)
     expected_version = data.pop("expected_scope_version", None)
-    purpose = data.get("purpose")
-    if purpose not in PURPOSES:
+    purpose = data.pop("purpose", None)
+    purposes = data.pop("purposes", [purpose])
+    catalog = {row.code: row for row in EncryptionPurpose.objects.filter(code__in=purposes)}
+    if not purposes or purpose not in purposes or len(set(purposes)) != len(purposes) or set(purposes) != set(catalog):
         raise EncryptionError("unsupported_purpose", "Unsupported purpose.")
+    if any(not row.is_active for row in catalog.values()):
+        raise EncryptionError("purpose_inactive", "Encryption is temporarily disabled for this purpose.", 409)
+    data["verification_purpose"] = purpose
     replaces_id = data.pop("replaces", None)
     data["replaces_id"] = replaces_id
     existing = EncryptionConfiguration.objects.filter(pk=data["id"]).first()
@@ -97,6 +125,7 @@ def register_configuration(account, validated_data):
         for field, value in data.items():
             stored = getattr(existing, field)
             identical = identical and (str(stored) == str(value) if field in ("id", "replaces_id") else stored == value)
+        identical = identical and set(existing.purposes.values_list("code", flat=True)) == set(purposes)
         if not identical:
             raise EncryptionError("configuration_conflict", "Configuration ID is unavailable.", 409)
         return _group(owner, purpose), False
@@ -107,7 +136,8 @@ def register_configuration(account, validated_data):
     try:
         # Savepoint keeps a cross-owner simultaneous UUID collision recoverable.
         with transaction.atomic():
-            EncryptionConfiguration.objects.create(entity_id=owner.entity_id, user=owner, **data)
+            configuration = EncryptionConfiguration.objects.create(entity_id=owner.entity_id, user=owner, **data)
+            configuration.purposes.set([catalog[item] for item in purposes])
     except IntegrityError:
         raise EncryptionError("configuration_conflict", "Configuration ID is unavailable.", 409) from None
     return _group(owner, purpose), True
@@ -117,20 +147,22 @@ def register_configuration(account, validated_data):
 def rename_configuration(account, configuration_id, validated_data):
     owner = _owner(account, lock=True)
     row = _target(owner, configuration_id)
-    _check_version(owner, row.purpose, _rows(owner, row.purpose), validated_data)
+    purpose = _context(row, validated_data)
+    _check_version(owner, purpose, _rows(owner, purpose), validated_data)
     row.name = validated_data["name"]
     row.revision += 1
     row.save(update_fields=["name", "revision", "updated_at"])
-    return _group(owner, row.purpose)
+    return _group(owner, purpose)
 
 
 @transaction.atomic
 def activate_configuration(account, configuration_id, validated_data):
     owner = _owner(account, lock=True)
     target = _target(owner, configuration_id)
-    rows = _rows(owner, target.purpose)
-    _check_version(owner, target.purpose, rows, validated_data)
-    current = next((row for row in rows if row.is_active), None)
+    purpose = _context(target, validated_data, require_active=True)
+    rows = _rows(owner, purpose)
+    _check_version(owner, purpose, rows, validated_data)
+    current = EncryptionConfiguration.objects.filter(user=owner, entity_id=owner.entity_id, is_active=True).first()
     if target.is_active:
         raise EncryptionError("already_active", "Configuration is already active.", 409)
     _check_proof(target, validated_data.get("target_verification_proof"))
@@ -146,14 +178,15 @@ def activate_configuration(account, configuration_id, validated_data):
     target.deactivated_at = None
     target.revision += 1
     target.save(update_fields=["is_active", "deactivated_at", "revision", "updated_at"])
-    return _group(owner, target.purpose)
+    return _group(owner, purpose)
 
 
 @transaction.atomic
 def deactivate_configuration(account, configuration_id, validated_data):
     owner = _owner(account, lock=True)
     target = _target(owner, configuration_id)
-    _check_version(owner, target.purpose, _rows(owner, target.purpose), validated_data)
+    purpose = _context(target, validated_data)
+    _check_version(owner, purpose, _rows(owner, purpose), validated_data)
     if not target.is_active:
         raise EncryptionError("not_active", "Configuration is not active.", 409)
     _check_proof(target, validated_data.get("active_verification_proof"))
@@ -161,7 +194,7 @@ def deactivate_configuration(account, configuration_id, validated_data):
     target.deactivated_at = now()
     target.revision += 1
     target.save(update_fields=["is_active", "deactivated_at", "revision", "updated_at"])
-    return _group(owner, target.purpose)
+    return _group(owner, purpose)
 
 
 @transaction.atomic

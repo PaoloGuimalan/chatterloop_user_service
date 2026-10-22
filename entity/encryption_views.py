@@ -51,7 +51,7 @@ class EncryptionView(APIView):
 
 class PersonalConfigurationsView(EncryptionView):
     def get(self, request):
-        return Response({"status": True, "result": encryption.get_personal_configurations(request.user)})
+        return Response({"status": True, "result": encryption.get_personal_configurations(request.user, request.query_params.get("purpose"))})
 
     def post(self, request):
         return self.mutate(CreateConfigurationSerializer, encryption.register_configuration)
