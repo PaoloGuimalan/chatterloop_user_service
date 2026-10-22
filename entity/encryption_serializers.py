@@ -119,6 +119,16 @@ class DeactivateConfigurationSerializer(ConfigurationContextSerializer):
     active_verification_proof = BinaryEnvelopeField(32, 32, write_only=True)
 
 
+class UpdateConfigurationUsesSerializer(ScopeSerializer):
+    purposes = serializers.ListField(child=PurposeCodeField(), allow_empty=True)
+    target_verification_proof = BinaryEnvelopeField(32, 32, write_only=True)
+
+    def validate_purposes(self, purposes):
+        if len(purposes) != len(set(purposes)):
+            raise serializers.ValidationError("Choose distinct purposes.")
+        return sorted(purposes)
+
+
 class EncryptionConfigurationSerializer(serializers.ModelSerializer):
     verification_aad = serializers.SerializerMethodField()
     # Keep v1 clients working during a staggered backend/client deployment.

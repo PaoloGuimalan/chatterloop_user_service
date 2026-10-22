@@ -69,13 +69,17 @@ def _check_version(owner, purpose, rows, data):
 
 def _target(owner, configuration_id):
     row = EncryptionConfiguration.objects.filter(pk=configuration_id, user=owner, entity_id=owner.entity_id).prefetch_related("purposes").first()
-    if row is None or not row.purposes.all():
+    if row is None:
         raise EncryptionError("not_found", "Configuration not found.", 404)
     return row
 
 
 def _context(row, data, *, require_active=False):
     memberships = sorted(item.code for item in row.purposes.all())
+    if not memberships:
+        if require_active or data.get("purpose") is not None:
+            raise EncryptionError("unsupported_purpose", "Choose a passphrase use before activating it.")
+        return None
     purpose = data.get("purpose") or (row.verification_purpose if row.verification_purpose in memberships else memberships[0])
     if purpose not in memberships:
         raise EncryptionError("unsupported_purpose", "Configuration is not available for this purpose.")
@@ -98,10 +102,52 @@ def get_personal_configurations(account, purpose=None):
     if purpose is not None and not EncryptionPurpose.objects.filter(pk=purpose).exists():
         raise EncryptionError("unsupported_purpose", "Unsupported purpose.")
     purposes = list(EncryptionPurpose.objects.values_list("code", flat=True)) if purpose is None else [purpose]
-    return {"owner": {"entity_id": str(owner.entity_id), "user_id": str(owner.pk)},
+    result = {"owner": {"entity_id": str(owner.entity_id), "user_id": str(owner.pk)},
             "consumer_capabilities": deepcopy(CONSUMER_CAPABILITIES),
             "supported_profile": deepcopy(SUPPORTED_PROFILE),
             "purposes": [_group(owner, item) for item in purposes]}
+    if purpose is None:
+        rows = EncryptionConfiguration.objects.filter(user=owner, entity_id=owner.entity_id).prefetch_related("purposes").order_by("id")
+        result["configurations"] = EncryptionConfigurationSerializer(rows, many=True).data
+        result["scope_version"] = _version(owner, None)
+    return result
+
+
+def get_personal_configuration(account, configuration_id, purpose):
+    owner = _owner(account)
+    row = _target(owner, configuration_id)
+    catalog = EncryptionPurpose.objects.filter(pk=purpose).first() if purpose is not None else None
+    if catalog is None:
+        raise EncryptionError("unsupported_purpose", "Specify an available encryption purpose.")
+    if not catalog.is_active:
+        raise EncryptionError("purpose_inactive", "Encryption is temporarily disabled for this purpose.", 409)
+    # Current memberships select future encryption. An owned historical entry
+    # can still resolve its original configuration after that use is removed.
+    return {"configuration": EncryptionConfigurationSerializer(row).data}
+
+
+def _mutation_result(owner, purpose):
+    return _group(owner, purpose) if purpose is not None else get_personal_configurations(owner)
+
+
+@transaction.atomic
+def update_configuration_uses(account, configuration_id, validated_data):
+    owner = _owner(account, lock=True)
+    row = _target(owner, configuration_id)
+    _check_version(owner, None, None, validated_data)
+    _check_proof(row, validated_data.get("target_verification_proof"))
+    purposes = validated_data["purposes"]
+    catalog = {item.code: item for item in EncryptionPurpose.objects.filter(code__in=purposes)}
+    if len(purposes) != len(set(purposes)) or set(purposes) != set(catalog):
+        raise EncryptionError("unsupported_purpose", "Unsupported purpose.")
+    previous = {item.code for item in row.purposes.all()}
+    if any(not catalog[code].is_active for code in set(purposes) - previous):
+        raise EncryptionError("purpose_inactive", "Encryption is temporarily disabled for this purpose.", 409)
+    if previous != set(purposes):
+        row.purposes.set([catalog[code] for code in purposes])
+        row.revision += 1
+        row.save(update_fields=["revision", "updated_at"])
+    return get_personal_configurations(owner)
 
 
 @transaction.atomic
@@ -152,7 +198,7 @@ def rename_configuration(account, configuration_id, validated_data):
     row.name = validated_data["name"]
     row.revision += 1
     row.save(update_fields=["name", "revision", "updated_at"])
-    return _group(owner, purpose)
+    return _mutation_result(owner, purpose)
 
 
 @transaction.atomic
@@ -178,7 +224,7 @@ def activate_configuration(account, configuration_id, validated_data):
     target.deactivated_at = None
     target.revision += 1
     target.save(update_fields=["is_active", "deactivated_at", "revision", "updated_at"])
-    return _group(owner, purpose)
+    return _mutation_result(owner, purpose)
 
 
 @transaction.atomic
@@ -194,7 +240,7 @@ def deactivate_configuration(account, configuration_id, validated_data):
     target.deactivated_at = now()
     target.revision += 1
     target.save(update_fields=["is_active", "deactivated_at", "revision", "updated_at"])
-    return _group(owner, purpose)
+    return _mutation_result(owner, purpose)
 
 
 @transaction.atomic

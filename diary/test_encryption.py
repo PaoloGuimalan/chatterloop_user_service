@@ -176,6 +176,19 @@ class DiaryEncryptionTests(TestCase):
         result = get_personal_configurations(self.owner)
         self.assertEqual(result.get("consumer_capabilities"), {"diary": {"format_version": 1}})
 
+    def test_removing_diary_use_blocks_new_encryption_but_keeps_existing_edits(self):
+        encrypted = self.post(self.payload())
+        self.assertEqual(encrypted.status_code, 200, encrypted.data)
+        entry = Entry.objects.get(pk=encrypted.data["id"])
+        self.configuration.purposes.clear()
+        self.assertEqual(self.post(self.payload()).status_code, 400)
+        serializer = EntrySerializer(entry, data={"title": entry.title, "content": entry.content}, partial=True)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        serializer.save()
+        EncryptionPurpose.objects.filter(pk="diary").update(is_active=False)
+        serializer = EntrySerializer(entry, data={"title": entry.title}, partial=True)
+        self.assertFalse(serializer.is_valid())
+
     def test_list_and_detail_are_not_cacheable(self):
         create = self.post(self.payload())
         self.assertEqual(create.status_code, 200, create.data)

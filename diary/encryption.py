@@ -5,7 +5,7 @@ import uuid
 from rest_framework.exceptions import ValidationError
 
 from entity.encryption_contract import CONSUMER_CAPABILITIES, decode_base64
-from entity.models import EncryptionConfiguration
+from entity.models import EncryptionConfiguration, EncryptionPurpose
 
 
 _FIELDS = {"v", "configuration_id", "entry_binding", "nonce", "ciphertext"}
@@ -58,8 +58,9 @@ def validate_entry_encryption(account, title, content, is_encrypted, is_private,
         raise ValidationError({"is_encrypted": "Use a boolean encryption marker."})
     if not isinstance(title, str) or not isinstance(content, str):
         raise ValidationError({"message": "Title and content must be text."})
+    historical = instance is not None and instance.is_encrypted
     if not is_encrypted:
-        if instance is not None and instance.is_encrypted:
+        if historical:
             raise ValidationError({"message": "An encrypted entry cannot be saved as plaintext."})
         if _looks_encrypted(title) or _looks_encrypted(content):
             raise ValidationError({"message": "Encrypted fields require the encryption marker."})
@@ -79,15 +80,20 @@ def validate_entry_encryption(account, title, content, is_encrypted, is_private,
             raise ValueError("Mismatched field identities.")
         if title_envelope["nonce"] == content_envelope["nonce"]:
             raise ValueError("Field nonces must be distinct.")
-        if instance is not None and instance.is_encrypted:
+        if historical:
             previous = _envelope(instance.title, 16 * 1024)
             if any(previous[key] != title_envelope[key] for key in ["configuration_id", "entry_binding"]):
                 raise ValueError("The existing encryption identity must be retained.")
-        configuration = EncryptionConfiguration.objects.filter(
+        if not EncryptionPurpose.objects.filter(pk="diary", is_active=True).exists():
+            raise ValueError("Diary encryption is temporarily disabled.")
+        configurations = EncryptionConfiguration.objects.filter(
             pk=title_envelope["configuration_id"], user=account,
-            entity_id=account.entity_id, purposes__code="diary", purposes__is_active=True, format_version=1,
-        ).first()
-        if configuration is None or (not configuration.is_active and not (instance and instance.is_encrypted)):
+            entity_id=account.entity_id, format_version=1,
+        )
+        if not historical:
+            configurations = configurations.filter(purposes__code="diary", is_active=True)
+        configuration = configurations.first()
+        if configuration is None:
             raise ValueError("An active personal Diary configuration is required.")
     except (ValueError, TypeError, KeyError, RecursionError):
         raise ValidationError({"message": "Invalid encrypted Diary fields or unavailable passphrase configuration."}) from None

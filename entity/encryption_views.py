@@ -5,7 +5,7 @@ from rest_framework.views import APIView
 
 from entity.encryption_serializers import (
     ActivateConfigurationSerializer, CreateConfigurationSerializer,
-    DeactivateConfigurationSerializer, RenameConfigurationSerializer,
+    DeactivateConfigurationSerializer, RenameConfigurationSerializer, UpdateConfigurationUsesSerializer,
 )
 from entity.encryption_throttles import AccountMutationThrottle, IPMutationThrottle
 from entity.services import encryption
@@ -58,6 +58,11 @@ class PersonalConfigurationsView(EncryptionView):
 
 
 class PersonalConfigurationDetailView(EncryptionView):
+    def get(self, request, configuration_id):
+        return Response({"status": True, "result": encryption.get_personal_configuration(
+            request.user, configuration_id, request.query_params.get("purpose"),
+        )})
+
     def patch(self, request, configuration_id):
         return self.mutate(RenameConfigurationSerializer, encryption.rename_configuration, configuration_id)
 
@@ -70,3 +75,8 @@ class ActivateConfigurationView(EncryptionView):
 class DeactivateConfigurationView(EncryptionView):
     def post(self, request, configuration_id):
         return self.mutate(DeactivateConfigurationSerializer, encryption.deactivate_configuration, configuration_id)
+
+
+class UpdateConfigurationUsesView(EncryptionView):
+    def post(self, request, configuration_id):
+        return self.mutate(UpdateConfigurationUsesSerializer, encryption.update_configuration_uses, configuration_id)
