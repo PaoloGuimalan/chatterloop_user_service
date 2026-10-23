@@ -44,8 +44,8 @@ class PolicyDocument(models.Model):
 class Variable(models.Model):
     """
     Platform settings that are tuned, not deployed: one row per key, the value
-    a JSON document. Editable in the admin; readers cache it briefly, so a
-    change takes effect within about a minute.
+    a JSON document. Editable in the admin. Upload readers cache briefly;
+    reserved profile paths are read at each validation and apply immediately.
 
     Read directly by the Node server too (server/reusables/media/config.js)
     as `core_variable`, Django's own name for it.
@@ -57,6 +57,8 @@ class Variable(models.Model):
                        accepts; clients fetch it on boot
       upload_transfer  {multipartThresholdMB, partSizeMB, concurrency} - how
                        clients send big files
+      reserved_profile_paths  {paths: [name, ...]} - profile link names
+                              reserved across web and native clients
     """
 
     key = models.CharField(max_length=100, primary_key=True)
@@ -66,6 +68,16 @@ class Variable(models.Model):
 
     def __str__(self):
         return self.key
+
+    def clean(self):
+        super().clean()
+        if self.key == "reserved_profile_paths":
+            from django.core.exceptions import ValidationError
+            from core.profile_paths import parse_reserved_profile_paths
+            try:
+                parse_reserved_profile_paths(self.value)
+            except ValueError as error:
+                raise ValidationError({"value": str(error)}) from error
 
 
 class Update(models.Model):

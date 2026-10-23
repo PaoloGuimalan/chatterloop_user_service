@@ -10,6 +10,7 @@ from user.models import Account
 from entity.models import Entity, Follow  # noqa: F401
 from entity.permissions import MemberRole
 from django.utils.timezone import now
+from core.profile_paths import clean_model_profile_path, validate_model_profile_path
 
 
 def generate_random_digit(digit):
@@ -99,10 +100,15 @@ class Realm(models.Model):
     ranking_score = models.FloatField(default=0.0, db_index=True)
 
     def save(self, *args, **kwargs):
+        validate_model_profile_path(self, "slug", kwargs.get("update_fields"))
         # Enforced unconditionally, not just "if blank" - id and realm_id
         # must always be the same value, full stop.
         self.realm_id = self.id
         super().save(*args, **kwargs)
+
+    def clean(self):
+        super().clean()
+        clean_model_profile_path(self, "slug")
 
 
 class Member(models.Model):

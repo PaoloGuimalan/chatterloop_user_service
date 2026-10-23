@@ -8,6 +8,7 @@ from django.utils.timezone import now
 from cassandra.cqlengine import columns
 from django_cassandra_engine.models import DjangoCassandraModel
 from core.models import PolicyDocument
+from core.profile_paths import clean_model_profile_path, validate_model_profile_path
 
 # Connection now lives in the entity app (it is an entity<->entity edge, not a
 # user-only one). Re-exported here because historical migration user/0003
@@ -106,6 +107,7 @@ class Account(models.Model):
     REQUIRED_FIELDS = ["email"]  # Email is required but not for login
 
     def save(self, *args, **kwargs):
+        validate_model_profile_path(self, "username", kwargs.get("update_fields"))
         if not self.username:
             prefix = self.first_name.split(" ")[0] + "_"
             prefix = prefix.lower()
@@ -115,6 +117,7 @@ class Account(models.Model):
                 listified_un = list(initial_un)
                 random.shuffle(listified_un)
                 self.username = "".join(listified_un)
+                validate_model_profile_path(self, "username", kwargs.get("update_fields"))
                 try:
                     super().save(*args, **kwargs)
                     break
@@ -130,6 +133,10 @@ class Account(models.Model):
 
     def __str__(self):
         return self.username
+
+    def clean(self):
+        super().clean()
+        clean_model_profile_path(self, "username")
 
 
 class Verification(models.Model):

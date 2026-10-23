@@ -43,6 +43,7 @@ from .services.mongohelpers import NotificationService, SessionService
 from core.models import TPAuthentication, Update
 from .utils.bcrypt_tools import hash_password
 from .utils.generators import generate_unique_username
+from core.profile_paths import ProfilePathError, validate_profile_path
 from .utils.external_requests import emailer
 from django.shortcuts import get_object_or_404
 from django.utils.timezone import localtime
@@ -1756,6 +1757,9 @@ class UserAccountManagement(APIView):
             # is gone.
             was_private = account.is_private
 
+            if "username" in data and data["username"] != account.username:
+                validate_profile_path(data["username"], "username")
+
             if "birthdate" in data and data["birthdate"]:
                 from django.utils.dateparse import parse_datetime
 
@@ -1815,6 +1819,8 @@ class UserAccountManagement(APIView):
                 status=status.HTTP_200_OK,
             )
 
+        except ProfilePathError as e:
+            return Response(e.payload, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logger.exception("UserAccountManagement.put failed")
             return Response(

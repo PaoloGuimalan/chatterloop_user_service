@@ -1,5 +1,6 @@
 from django.shortcuts import render
 from django.conf import settings
+from core.profile_paths import ProfilePathError, validate_profile_path
 from rest_framework.views import APIView
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
@@ -223,6 +224,8 @@ class MyRealms(APIView):
                 )
 
             if fields:
+                if "slug" in fields and fields["slug"] != realm.slug:
+                    validate_profile_path(fields["slug"], "slug")
                 Realm.objects.filter(realm_id=realm_id).update(**fields)
 
             return Response(
@@ -233,6 +236,8 @@ class MyRealms(APIView):
                 },
                 status=status.HTTP_200_OK,
             )
+        except ProfilePathError as e:
+            return Response(e.payload, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logger.exception("MyRealms.put failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)

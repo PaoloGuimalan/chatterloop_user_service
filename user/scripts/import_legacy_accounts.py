@@ -6,6 +6,7 @@ from dateutil import parser as dateutil_parser
 from django.db import transaction
 
 from entity.models import Entity
+from core.profile_paths import validate_profile_path
 from ..models import Account, Connection
 
 BACKUP_DIR = r"C:\Users\paulo\Documents\Backups\db_backups\postgres"
@@ -57,6 +58,8 @@ def import_accounts():
     account_map = {}
 
     for row in rows:
+        # bulk_create bypasses Account.save; reject before inserting any rows.
+        validate_profile_path(row["username"], "username")
         entity = Entity(
             id=str(uuid.uuid4()),
             type="user",

@@ -32,6 +32,7 @@ from django.utils.timezone import now
 
 from entity.models import Entity, EntityType
 from entity.permissions import MemberRole
+from core.profile_paths import clean_model_profile_path, validate_model_profile_path
 
 # The system moderator's entity id, FIXED so that every service can address it
 # without a lookup table or a config value that can drift between environments.
@@ -141,6 +142,14 @@ class Bot(models.Model):
 
     def __str__(self):
         return f"{self.name} (@{self.handle})"
+
+    def save(self, *args, **kwargs):
+        validate_model_profile_path(self, "handle", kwargs.get("update_fields"))
+        super().save(*args, **kwargs)
+
+    def clean(self):
+        super().clean()
+        clean_model_profile_path(self, "handle")
 
 
 def get_system_bot() -> Bot:
