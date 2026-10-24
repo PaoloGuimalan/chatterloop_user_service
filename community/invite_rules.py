@@ -13,6 +13,7 @@ Kept free of Django model imports so it can be unit tested without settings
 #   manage  - join a PAGE's team, as admin or moderator
 #   follow  - follow a PAGE
 PURPOSES_BY_REALM_TYPE = {
+    "community": ("join",),
     "group": ("join",),
     "server": ("join",),
     "conference": ("join",),
@@ -87,10 +88,13 @@ def invite_sentence(inviter_name, realm_name, realm_type, purpose, role=None):
     """The sentence an invitee reads - notification, push and email alike."""
     if purpose == "manage":
         article = "an" if role == "admin" else "a"
-        return f"{inviter_name} invited you to help run {realm_name} as {article} {role}."
+        return (
+            f"{inviter_name} invited you to help run {realm_name} as {article} {role}."
+        )
     if purpose == "follow":
         return f"{inviter_name} invited you to follow {realm_name}."
     noun = {
+        "community": "the community",
         "group": "the group",
         "server": "the server",
         "conference": "the conference",

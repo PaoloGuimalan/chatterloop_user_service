@@ -275,7 +275,7 @@ class EntitySearch(APIView):
                     realm_filter,
                     is_active=True,
                     is_private=False,
-                )
+                ).exclude(type="community")
                 if not include_all_realm_types and realm_types:
                     realm_qs = realm_qs.filter(type__in=realm_types)
 
@@ -302,9 +302,7 @@ class EntitySearch(APIView):
                 if query.startswith("@"):
                     bot_filter = Q(handle__icontains=query.split("@", 1)[1])
                 else:
-                    bot_filter = Q(name__icontains=query) | Q(
-                        handle__icontains=query
-                    )
+                    bot_filter = Q(name__icontains=query) | Q(handle__icontains=query)
 
                 bots = (
                     Bot.objects.filter(bot_filter, is_active=True)

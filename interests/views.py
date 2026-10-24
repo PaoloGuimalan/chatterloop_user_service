@@ -64,7 +64,9 @@ class InterestListView(APIView):
                 )
 
             paginator = self.pagination_class()
-            paginated_queryset = paginator.paginate_queryset(queryset, request, view=self)
+            paginated_queryset = paginator.paginate_queryset(
+                queryset, request, view=self
+            )
 
             results = [{"id": i.id, "name": i.name} for i in paginated_queryset]
             # Keyed on normalize_key, so spacing cannot make an existing
@@ -72,9 +74,9 @@ class InterestListView(APIView):
             # is_new=True against the key "newsandculture" - the row was found
             # correctly on save, but the picker had already told the user they
             # were creating something.
-            is_new = bool(key) and not Interest.objects.filter(
-                normalized_name=key
-            ).exists()
+            is_new = (
+                bool(key) and not Interest.objects.filter(normalized_name=key).exists()
+            )
 
             return paginator.get_paginated_response({"list": results, "is_new": is_new})
         except Exception as e:
@@ -91,7 +93,9 @@ class EntityInterestOverrideListView(APIView):
     def get(self, request):
         try:
             entity = request.entity
-            overrides = EntityInterest.objects.filter(entity=entity).select_related("interest")
+            overrides = EntityInterest.objects.filter(entity=entity).select_related(
+                "interest"
+            )
             data = [
                 {
                     "id": o.id,
@@ -142,7 +146,10 @@ class EntityInterestOverrideView(APIView):
                 interest, _ = Interest.objects.get_or_create_by_name(interest_name)
             else:
                 return Response(
-                    {"status": False, "message": "interest_id or interest_name is required"},
+                    {
+                        "status": False,
+                        "message": "interest_id or interest_name is required",
+                    },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -161,7 +168,11 @@ class EntityInterestOverrideView(APIView):
                 {
                     "status": True,
                     "message": "Interest preference saved",
-                    "data": {"id": override.id, "interest": interest.name, "effect": override.effect},
+                    "data": {
+                        "id": override.id,
+                        "interest": interest.name,
+                        "effect": override.effect,
+                    },
                 },
                 status=status.HTTP_200_OK,
             )
@@ -215,7 +226,10 @@ class MyTopInterestsView(APIView):
                 .order_by("-score")[:limit]
             )
             data = [
-                {"interest": {"id": a.interest.id, "name": a.interest.name}, "score": a.score}
+                {
+                    "interest": {"id": a.interest.id, "name": a.interest.name},
+                    "score": a.score,
+                }
                 for a in affinities
             ]
             return Response({"status": True, "data": data}, status=status.HTTP_200_OK)
@@ -238,11 +252,14 @@ class TrendingInterestsView(APIView):
     def get(self, request):
         try:
             limit = int(request.query_params.get("limit", 10))
-            trending = (
-                InterestTrendingScore.objects.select_related("interest").order_by("-score")[:limit]
-            )
+            trending = InterestTrendingScore.objects.select_related(
+                "interest"
+            ).order_by("-score")[:limit]
             data = [
-                {"interest": {"id": t.interest.id, "name": t.interest.name}, "score": t.score}
+                {
+                    "interest": {"id": t.interest.id, "name": t.interest.name},
+                    "score": t.score,
+                }
                 for t in trending
             ]
             return Response({"status": True, "data": data}, status=status.HTTP_200_OK)
@@ -313,9 +330,7 @@ class PopularTopicsView(APIView):
                 .order_by("-score", "interest__id")[: limit * self.CANDIDATE_MULTIPLE]
             )
             if not candidates:
-                return Response(
-                    {"status": True, "data": []}, status=status.HTTP_200_OK
-                )
+                return Response({"status": True, "data": []}, status=status.HTTP_200_OK)
 
             # Counts, faces and the empty-topic rule all come from
             # interests.services.topics, shared with the searchable directory
@@ -467,7 +482,7 @@ class TopicPostsView(APIView):
 
             paginator = self.pagination_class()
             page = paginator.paginate_queryset(queryset, request, view=self)
-            serializer = PostSerializer(page, many=True)
+            serializer = PostSerializer(page, many=True, context={"request": request})
 
             response = paginator.get_paginated_response(serializer.data)
             # The topic itself travels with the first page so the drill-down
@@ -476,9 +491,7 @@ class TopicPostsView(APIView):
                 "id": interest.id,
                 "name": interest.name,
                 "slug": interest.normalized_name,
-                "category": (
-                    interest.parent.name if interest.parent_id else "General"
-                ),
+                "category": (interest.parent.name if interest.parent_id else "General"),
             }
             return response
         except Exception as e:

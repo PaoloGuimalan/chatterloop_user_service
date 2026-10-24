@@ -117,7 +117,10 @@ def publish_post_activity(post_id, event_type, actor=None, **fields):
         **fields,
     }
 
-    if actor is not None:
+    if fields.get("is_anonymous"):
+        body["entity"] = None
+        body["actor"] = None
+    elif actor is not None:
         body["entity"] = actor
 
     try:
@@ -139,10 +142,12 @@ def publish_post_activity(post_id, event_type, actor=None, **fields):
     except Exception:
         # The activity itself already happened and is committed. Nobody's
         # comment should fail because the announcement did.
-        logger.exception("Failed to publish %s activity on post %s", event_type, post_id)
+        logger.exception(
+            "Failed to publish %s activity on post %s", event_type, post_id
+        )
 
 
-def publish_post_reaction(post_id, entity, action):
+def publish_post_reaction(post_id, entity, action, *, is_anonymous=False):
     """
     Somebody reacted to the POST itself.
 
@@ -160,13 +165,14 @@ def publish_post_reaction(post_id, entity, action):
     publish_post_activity(
         post_id,
         ACTIVITY_REACTION,
-        actor=_actor(entity),
+        actor=None if is_anonymous else _actor(entity),
+        **({"is_anonymous": True} if is_anonymous else {}),
         target_type=TARGET_POST,
         action=action,
     )
 
 
-def publish_comment_reaction(comment, entity, action):
+def publish_comment_reaction(comment, entity, action, *, is_anonymous=False):
     """
     Somebody reacted to one of the post's COMMENTS.
 
@@ -179,7 +185,8 @@ def publish_comment_reaction(comment, entity, action):
     publish_post_activity(
         comment.post_id,
         ACTIVITY_REACTION,
-        actor=_actor(entity),
+        actor=None if is_anonymous else _actor(entity),
+        **({"is_anonymous": True} if is_anonymous else {}),
         target_type=TARGET_COMMENT,
         comment_id=str(comment.comment_id),
         action=action,
@@ -200,7 +207,8 @@ def publish_comment_created(comment, entity):
     publish_post_activity(
         comment.post_id,
         ACTIVITY_COMMENT,
-        actor=_actor(entity),
+        actor=None if comment.is_anonymous else _actor(entity),
+        **({"is_anonymous": True} if comment.is_anonymous else {}),
         comment_id=str(comment.comment_id),
         parent_id=(
             str(comment.parent_comment_id) if comment.parent_comment_id else None

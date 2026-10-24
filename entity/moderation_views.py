@@ -38,6 +38,7 @@ from django.db.models.functions import Coalesce
 
 from newsfeed.models import Comment, Post, PostSave, Reaction
 from newsfeed.serializers import PostSerializer
+from community.posts import community_for_post, can_read_community
 from user.ext_models.mongomodels import ModerationRecord
 
 logger = logging.getLogger(__name__)
@@ -134,6 +135,11 @@ class ModerationDetailView(APIView):
             )
             if comment is None:
                 return None
+            community = community_for_post(comment.post)
+            if community is not None and not can_read_community(
+                community, getattr(request, "entity", None)
+            ):
+                return None
             return {
                 "owner_entity_id": comment.entity_id,
                 "payload": {
@@ -145,6 +151,7 @@ class ModerationDetailView(APIView):
                     "created_at": comment.created_at,
                     "deleted_at": comment.deleted_at,
                     "is_removed": comment.deleted_at is not None,
+                    "is_anonymous": comment.is_anonymous,
                 },
             }
 
@@ -183,7 +190,12 @@ class ModerationDetailView(APIView):
         if post is None:
             return None
 
-        payload = PostSerializer(post).data
+        community = community_for_post(post)
+        if community is not None and not can_read_community(
+            community, getattr(request, "entity", None)
+        ):
+            return None
+        payload = PostSerializer(post, context={"request": request}).data
         # Flags the client keys off, alongside the post's own fields.
         payload["type"] = "post"
         # WHICH attachment was judged, when the record is about one.

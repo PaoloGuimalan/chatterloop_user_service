@@ -37,6 +37,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from community.models import Follow
+from community.posts import community_for_post, community_metadata
+from community.post_policy import project_contribution
 from entity.models import Connection, Entity
 from entity.serializers import EntitySerializer
 from entity.services.blocking import get_blocked_account_ids
@@ -89,7 +91,9 @@ def _annotated_posts(viewer):
         Post.objects.select_related("entity", "score")
         .prefetch_related("tagging", "privacy_users", "references", "preview")
         .annotate(
-            is_saved=Exists(PostSave.objects.filter(post=OuterRef("pk"), entity=viewer)),
+            is_saved=Exists(
+                PostSave.objects.filter(post=OuterRef("pk"), entity=viewer)
+            ),
             entity_reaction=Coalesce(
                 Subquery(
                     Reaction.objects.filter(post=OuterRef("pk"), entity=viewer).values(
@@ -141,7 +145,10 @@ def _ranked_connections(viewer, limit=MAX_RAIL_SUGGESTIONS, exclude=()):
     not here, so this rank is the tie-break within online / offline.
     """
     scored = {}
-    for field, other in (("action_by", "involved_entity_id"), ("involved_entity", "action_by_id")):
+    for field, other in (
+        ("action_by", "involved_entity_id"),
+        ("involved_entity", "action_by_id"),
+    ):
         for eid, score in (
             Connection.objects.filter(**{field: viewer}, status=True)
             .order_by(
@@ -214,7 +221,10 @@ SHARED_POST_MEDIA = "shared_post"
 def _first_media(post):
     """A post's first photo/video reference (not a shared-post pointer)."""
     for ref in post.references.all():
-        if ref.reference_media_type and SHARED_POST_MEDIA not in ref.reference_media_type:
+        if (
+            ref.reference_media_type
+            and SHARED_POST_MEDIA not in ref.reference_media_type
+        ):
             return ref
     return None
 
@@ -249,7 +259,7 @@ def _shared_previews(viewer, moments):
         return {
             p.post_id: p
             for p in Post.objects.select_related("entity")
-            .prefetch_related("references", "privacy_users")
+            .prefetch_related("references", "privacy_users", "tagging__entity__realms")
             .filter(post_id__in=set(ids), deleted_at=None)
         }
 
@@ -271,12 +281,22 @@ def _shared_previews(viewer, moments):
         previews[moment_id] = {
             "post_id": shared_id,
             "available": True,
-            "author": EntitySerializer(post.entity).data,
+            "author": None if post.is_anonymous else EntitySerializer(post.entity).data,
             "caption": post.caption or "",
             "is_share": original is not None,
             "thumbnail": media.reference if media else None,
             "media_type": media.reference_media_type if media else None,
         }
+        community = community_for_post(post)
+        if community is not None or post.is_anonymous:
+            previews[moment_id] = project_contribution(
+                previews[moment_id],
+                is_anonymous=post.is_anonymous,
+                owner_id=post.entity_id,
+                viewer_id=getattr(viewer, "pk", None),
+            )
+            if community is not None:
+                previews[moment_id]["community"] = community_metadata(community, viewer)
     return previews
 
 
@@ -397,7 +417,9 @@ def _viewers_of(post):
     by target_id (the SAI index). The author's own views are never logged.
     """
     rows = (
-        UserEngagementLog.objects.filter(target_id=str(post.post_id), activity_type="view")
+        UserEngagementLog.objects.filter(
+            target_id=str(post.post_id), activity_type="view"
+        )
         .allow_filtering()
         .values_list("user_id", "activity_time")
     )
@@ -480,7 +502,9 @@ class MomentTrayView(APIView):
                 is_self = entity_id == str(viewer.id)
                 # Your own moments are never "unseen" to you: the worker does
                 # not log an author viewing their own post.
-                unseen = [] if is_self else [m for m in authored if m.post_id not in seen]
+                unseen = (
+                    [] if is_self else [m for m in authored if m.post_id not in seen]
+                )
                 newest = authored[-1]
                 tray.append(
                     {
@@ -593,7 +617,9 @@ class EntityMomentsView(APIView):
             )
 
             is_self = str(entity_id) == str(viewer.id)
-            seen = set() if is_self else _seen_post_ids(viewer, [p.post_id for p in posts])
+            seen = (
+                set() if is_self else _seen_post_ids(viewer, [p.post_id for p in posts])
+            )
 
             shared_previews = _shared_previews(viewer, posts)
             results = []
@@ -718,7 +744,9 @@ class _EphemeralViewersView(APIView):
                 str(entity_id): (emoji_id, glyph, created_at)
                 for entity_id, emoji_id, glyph, created_at in Reaction.objects.filter(
                     post=post
-                ).values_list("entity_id", "emoji_id", "emoji__emoji_content", "created_at")
+                ).values_list(
+                    "entity_id", "emoji_id", "emoji__emoji_content", "created_at"
+                )
             }
             repliers = _repliers_of(post)
 
@@ -767,7 +795,10 @@ class _EphemeralViewersView(APIView):
             elif wanted == "replied":
                 rows = [row for row in rows if row["replied"]]
 
-            rows.sort(key=lambda row: row["last_activity_at"] or post.date_posted, reverse=True)
+            rows.sort(
+                key=lambda row: row["last_activity_at"] or post.date_posted,
+                reverse=True,
+            )
 
             paginator = self.pagination_class()
             page = paginator.paginate_queryset(rows, request, view=self)
@@ -827,7 +858,8 @@ class MomentDetailView(APIView):
             post = _own_ephemeral(request, post_id, PostKind.MOMENT)
             if post is None:
                 return Response(
-                    {"message": "Moment not available"}, status=status.HTTP_404_NOT_FOUND
+                    {"message": "Moment not available"},
+                    status=status.HTTP_404_NOT_FOUND,
                 )
 
             fields = []
@@ -906,11 +938,10 @@ class ThoughtDetailView(APIView):
             post = _own_ephemeral(request, post_id, PostKind.THOUGHT)
             if post is None:
                 return Response(
-                    {"message": "Thought not available"}, status=status.HTTP_404_NOT_FOUND
+                    {"message": "Thought not available"},
+                    status=status.HTTP_404_NOT_FOUND,
                 )
-            return Response(
-                {**_thought_payload(post), "views": len(_viewers_of(post))}
-            )
+            return Response({**_thought_payload(post), "views": len(_viewers_of(post))})
         except Exception as e:
             logger.exception("ThoughtDetailView.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -920,7 +951,8 @@ class ThoughtDetailView(APIView):
             post = _own_ephemeral(request, post_id, PostKind.THOUGHT)
             if post is None or not is_live(post):
                 return Response(
-                    {"message": "Thought not available"}, status=status.HTTP_404_NOT_FOUND
+                    {"message": "Thought not available"},
+                    status=status.HTTP_404_NOT_FOUND,
                 )
 
             fields = []
@@ -934,7 +966,9 @@ class ThoughtDetailView(APIView):
                 # len() of a str counts code points - the composer's count.
                 if len(text) > THOUGHT_MAX_LENGTH:
                     return Response(
-                        {"message": f"A thought can be at most {THOUGHT_MAX_LENGTH} characters"},
+                        {
+                            "message": f"A thought can be at most {THOUGHT_MAX_LENGTH} characters"
+                        },
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 post.caption = text
@@ -1032,7 +1066,9 @@ class ThoughtsRailView(APIView):
             others = sorted(latest.values(), key=lambda t: t.date_posted, reverse=True)[
                 :MAX_RAIL_THOUGHTS
             ]
-            authors = _entities_by_id({str(t.entity_id) for t in others} | {str(viewer.id)})
+            authors = _entities_by_id(
+                {str(t.entity_id) for t in others} | {str(viewer.id)}
+            )
             reacted = _my_reactions(viewer, others)
 
             return Response(

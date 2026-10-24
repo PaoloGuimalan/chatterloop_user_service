@@ -76,10 +76,15 @@ def visible_posts_filter(viewer_entity):
     pair it with .distinct() where the surrounding query is not already
     de-duplicated by an id__in.
     """
-    if viewer_entity is None:
-        return Q(privacy_status="public")
+    from community.posts import community_audience
 
-    return (
+    is_community, community_visible = community_audience(viewer_entity)
+    if viewer_entity is None:
+        return (~is_community & Q(privacy_status="public")) | (
+            is_community & community_visible
+        )
+
+    ordinary = (
         Q(privacy_status="public")
         # Your own posts are always yours to read, at every level.
         | Q(entity=viewer_entity)
@@ -87,11 +92,9 @@ def visible_posts_filter(viewer_entity):
             Q(privacy_status="connections")
             & Q(Exists(_accepted_connection_subquery(viewer_entity)))
         )
-        | Q(
-            Q(privacy_status="custom")
-            & Q(privacy_users__allowed_entity=viewer_entity)
-        )
+        | Q(Q(privacy_status="custom") & Q(privacy_users__allowed_entity=viewer_entity))
     )
+    return (~is_community & ordinary) | (is_community & community_visible)
 
 
 def can_view_post(post, viewer_entity):
@@ -104,6 +107,12 @@ def can_view_post(post, viewer_entity):
     """
     if post is None:
         return False
+
+    from community.posts import community_for_post, can_read_community
+
+    community = community_for_post(post)
+    if community is not None:
+        return post.on_feed == "feed" and can_read_community(community, viewer_entity)
 
     privacy = post.privacy_status or "public"
 
@@ -149,8 +158,10 @@ def apply_profile_privacy_to_posts(entity):
     if entity is None:
         return 0
 
-    return Post.objects.filter(entity=entity, privacy_status="public").update(
-        privacy_status="connections"
+    return (
+        Post.objects.filter(entity=entity, privacy_status="public")
+        .exclude(tagging__entity__realms__type="community")
+        .update(privacy_status="connections")
     )
 
 

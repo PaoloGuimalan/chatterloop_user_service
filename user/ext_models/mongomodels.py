@@ -234,8 +234,8 @@ class UploadedFile(Document):
     purpose = StringField()
     ownerAccount = StringField()
     ownerEntity = StringField()
+    key = StringField()
     name = StringField()
     mime = StringField()
     fileDetails = DictField()
     attachedTo = ListField(DictField())
-

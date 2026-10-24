@@ -100,7 +100,11 @@ class TopRealms(APIView):
                     output_field=BooleanField(),
                 ),
                 is_member=ExpressionWrapper(
-                    Q(Exists(Member.objects.filter(realm=OuterRef("pk"), entity=entity)))
+                    Q(
+                        Exists(
+                            Member.objects.filter(realm=OuterRef("pk"), entity=entity)
+                        )
+                    )
                     | Q(entity=entity),
                     output_field=BooleanField(),
                 ),
@@ -172,7 +176,11 @@ class MyRealms(APIView):
                     output_field=BooleanField(),
                 ),
                 is_member=ExpressionWrapper(
-                    Q(Exists(Member.objects.filter(realm=OuterRef("pk"), entity=entity)))
+                    Q(
+                        Exists(
+                            Member.objects.filter(realm=OuterRef("pk"), entity=entity)
+                        )
+                    )
                     | Q(entity=entity),
                     output_field=BooleanField(),
                 ),
@@ -224,6 +232,41 @@ class MyRealms(APIView):
                 )
 
             if fields:
+                if realm.type == "community":
+                    allowed = {
+                        "name",
+                        "description",
+                        "slug",
+                        "is_private",
+                        "profile",
+                        "cover_photo",
+                        "is_active",
+                    }
+                    if not isinstance(fields, dict) or set(fields) - allowed:
+                        return Response(
+                            {
+                                "status": False,
+                                "message": "Unsupported community fields",
+                            },
+                            status=400,
+                        )
+                    for key in ("is_private", "is_active"):
+                        if key in fields and type(fields[key]) is not bool:
+                            return Response(
+                                {
+                                    "status": False,
+                                    "message": f"{key} must be true or false",
+                                },
+                                status=400,
+                            )
+                elif isinstance(fields, dict) and fields.get("type") == "community":
+                    return Response(
+                        {
+                            "status": False,
+                            "message": "Create a community using the community endpoint",
+                        },
+                        status=400,
+                    )
                 if "slug" in fields and fields["slug"] != realm.slug:
                     validate_profile_path(fields["slug"], "slug")
                 Realm.objects.filter(realm_id=realm_id).update(**fields)
@@ -258,13 +301,13 @@ class FollowRealmView(APIView):
             followed_realm_queryset = (
                 Realm.objects.annotate(
                     followers_count=Count(
-                    "entity__followers",
-                    # Accepted followers only - a pending follow request
-                    # is not a follower yet and must not inflate the
-                    # public count.
-                    filter=Q(entity__followers__status=True),
-                    distinct=True,
-                ),
+                        "entity__followers",
+                        # Accepted followers only - a pending follow request
+                        # is not a follower yet and must not inflate the
+                        # public count.
+                        filter=Q(entity__followers__status=True),
+                        distinct=True,
+                    ),
                     members=Count("member", distinct=True),
                     # See TopRealms.get() above: `Q(entity=entity)` covers
                     # acting as a page whose own entity can never be a
@@ -359,8 +402,7 @@ class FollowRealmView(APIView):
         try:
             if is_pending:
                 details = (
-                    f"{get_entity_display_username(follower)} "
-                    "requested to follow you."
+                    f"{get_entity_display_username(follower)} requested to follow you."
                 )
             else:
                 details = (
@@ -373,9 +415,7 @@ class FollowRealmView(APIView):
                 referenceStatus=not is_pending,
                 toUserID=followee.id,
                 fromUserID=follower.id,
-                content_headline=(
-                    "Follow Request" if is_pending else "New Follower"
-                ),
+                content_headline=("Follow Request" if is_pending else "New Follower"),
                 content_details=details,
                 type="follow_request" if is_pending else "follow",
                 isRead=False,
@@ -645,9 +685,7 @@ class FollowRealmView(APIView):
             # Mirrors the post path: whoever we just unfollowed (or withdrew a
             # request from) may have our profile open, where the follower
             # count and any pending-request row are now wrong.
-            publish_profile_relationship_update(
-                followee.id, entity.id, "unfollowed"
-            )
+            publish_profile_relationship_update(followee.id, entity.id, "unfollowed")
 
             return Response(
                 {"status": True, "message": f"Unfollowed {raw_target}"},
@@ -939,6 +977,12 @@ class InviteView(APIView):
     # client always pulls the full list from the REST endpoints, so realtime
     # never has to carry (and risk desyncing) the actual request/member rows.
     def _realm_admin_recipient_ids(self, realm):
+        if realm.type == "community":
+            return set(
+                Member.objects.filter(
+                    realm=realm, role__in=("owner", "admin", "moderator")
+                ).values_list("entity_id", flat=True)
+            )
         recipient_ids = set(
             Member.objects.filter(realm=realm, role="admin").values_list(
                 "entity__id", flat=True
@@ -951,7 +995,13 @@ class InviteView(APIView):
     def _notify_requests_changed(self, realm):
         message = {"status": True, "auth": True, "realm_id": realm.realm_id}
         for recipient_id in self._realm_admin_recipient_ids(realm):
-            self._publish_event(recipient_id, "conference_requests_changed", message)
+            self._publish_event(
+                recipient_id,
+                "community_requests_changed"
+                if realm.type == "community"
+                else "conference_requests_changed",
+                message,
+            )
 
     def _notify_members_changed(self, realm):
         recipient_ids = set(
@@ -961,14 +1011,26 @@ class InviteView(APIView):
             recipient_ids.add(realm.created_by_id)
         message = {"status": True, "auth": True, "realm_id": realm.realm_id}
         for recipient_id in recipient_ids:
-            self._publish_event(recipient_id, "conference_members_changed", message)
+            self._publish_event(
+                recipient_id,
+                "community_members_changed"
+                if realm.type == "community"
+                else "conference_members_changed",
+                message,
+            )
 
     def _notify_access_changed(self, entity_id, realm):
         # Targeted signal so a single requester refetches their room/access info.
         if not entity_id:
             return
         message = {"status": True, "auth": True, "realm_id": realm.realm_id}
-        self._publish_event(entity_id, "conference_access_changed", message)
+        self._publish_event(
+            entity_id,
+            "community_access_changed"
+            if realm.type == "community"
+            else "conference_access_changed",
+            message,
+        )
 
     def _add_member_if_missing(self, invite, actor):
         # For email invites target_entity is often unset (only target_email is
@@ -1077,7 +1139,10 @@ class InviteView(APIView):
                 created_by=entity,
             )
 
-        self._notify_requests_changed(realm)
+        if realm.type == "community":
+            transaction.on_commit(lambda: self._notify_requests_changed(realm))
+        else:
+            self._notify_requests_changed(realm)
         return Response(
             {
                 "status": True,

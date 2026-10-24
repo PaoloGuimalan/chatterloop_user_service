@@ -545,9 +545,7 @@ class SearchOverviewV2(APIView):
                 ]
             )
             bot_rows = list(
-                build_bots_queryset(entity, query, blocked_ids)[
-                    : self.BOTS_PREVIEW + 1
-                ]
+                build_bots_queryset(entity, query, blocked_ids)[: self.BOTS_PREVIEW + 1]
             )
             post_rows = list(
                 build_post_search_queryset(entity, query, blocked_ids)[
@@ -589,7 +587,7 @@ class SearchOverviewV2(APIView):
                         "posts": {
                             "has_more": len(post_rows) > self.POSTS_PREVIEW,
                             "results": [
-                                serialize_post_hit(post)
+                                serialize_post_hit(post, entity)
                                 for post in post_rows[: self.POSTS_PREVIEW]
                             ],
                         },

@@ -106,6 +106,14 @@ from entity.services.follows import get_profile_relationship_state
 from interests.services.hashtags import save_comment_hashtags
 from newsfeed.services.content_tagging import queue_comment
 from newsfeed.services.post_visibility import visible_posts_filter, can_view_post
+from community.post_access import CommunityPostAccessMixin
+from community.posts import (
+    community_for_post,
+    assert_anonymous_upload,
+    assert_removable_tag,
+    request_anonymity,
+)
+from community.notifications import notify_community_activity
 from newsfeed.services.post_kinds import (
     FEED_KINDS,
     TRENDING_KINDS,
@@ -130,7 +138,7 @@ class Pagination(PageNumberPagination):
     page_size_query_param = "page_size"
 
 
-class NewsfeedView(APIView):
+class NewsfeedView(CommunityPostAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
     pagination_class = Pagination
 
@@ -255,7 +263,7 @@ class NewsfeedView(APIView):
             hydrated_posts = (
                 Post.objects.select_related("entity", "score")
                 .prefetch_related(
-                    "tagging",
+                    "tagging__entity__realms",
                     "privacy_users",
                     "references",
                     "map_info",
@@ -316,7 +324,10 @@ class NewsfeedView(APIView):
             serialized_result = PostSerializer(
                 hydrated_posts,
                 many=True,
-                context={"feed_reasons": self._resolve_feed_reasons(feed_rows, entity)},
+                context={
+                    "request": request,
+                    "feed_reasons": self._resolve_feed_reasons(feed_rows, entity),
+                },
             )
 
             is_page_matched = len(serialized_result.data) == len(candidate_post_ids)
@@ -338,9 +349,12 @@ class NewsfeedView(APIView):
     def put(self, request):
         from .services.post_editing import post_patch, update_post
         from rest_framework.exceptions import ValidationError
+
         try:
             if not isinstance(request.data, dict):
-                raise ValidationError({"body": "Send an object with post_id and fields"})
+                raise ValidationError(
+                    {"body": "Send an object with post_id and fields"}
+                )
             post, changed = update_post(
                 request=request,
                 post_id=request.data.get("post_id"),
@@ -398,8 +412,7 @@ class NewsfeedView(APIView):
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class NewsfeedProfileView(APIView):
-
+class NewsfeedProfileView(CommunityPostAccessMixin, APIView):
     def get_permissions(self):
         if self.request.method in ["POST"]:
             return [AllowAny()]
@@ -441,6 +454,10 @@ class NewsfeedProfileView(APIView):
 
             realm_match = Realm.objects.filter(slug=username).first()
             target_account = Account.objects.filter(username=username).first()
+            if realm_match is None and target_account is None:
+                realm_match = Realm.objects.filter(
+                    realm_id=username, type="community"
+                ).first()
 
             # Profile privacy is a USER setting, so only a user profile is
             # gated here. A realm falls through: Realm.is_private means
@@ -483,13 +500,18 @@ class NewsfeedProfileView(APIView):
                 )
             )
 
+            if realm_match and realm_match.type == "community":
+                profile_filter = Q(tagging__entity_id=realm_match.entity_id)
+            else:
+                profile_filter &= Q(is_anonymous=False)
+
             if archive:
                 profile_filter = Q(entity=entity)
 
             queryset = (
                 Post.objects.select_related("entity", "score")
                 .prefetch_related(
-                    "tagging",
+                    "tagging__entity__realms",
                     "privacy_users",
                     "references",
                     "map_info",
@@ -526,7 +548,9 @@ class NewsfeedProfileView(APIView):
                 queryset, request, view=self
             )
 
-            serialized_result = PostSerializer(paginated_queryset, many=True)
+            serialized_result = PostSerializer(
+                paginated_queryset, many=True, context={"request": request}
+            )
             data = paginator.get_paginated_response(serialized_result.data)
 
             return data
@@ -535,8 +559,7 @@ class NewsfeedProfileView(APIView):
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-class NewsfeedPostPreviewView(APIView):
-
+class NewsfeedPostPreviewView(CommunityPostAccessMixin, APIView):
     def get_permissions(self):
         if self.request.method in ["GET"]:
             return [AllowAny()]
@@ -566,7 +589,7 @@ class NewsfeedPostPreviewView(APIView):
             queryset = (
                 Post.objects.select_related("entity", "score")
                 .prefetch_related(
-                    "tagging",
+                    "tagging__entity__realms",
                     "privacy_users",
                     "references",
                     "map_info",
@@ -597,9 +620,7 @@ class NewsfeedPostPreviewView(APIView):
             # own posts open whatever the kind and however old, which is how the
             # moment archive shows an expired moment. Same 404 as above, for the
             # same reason.
-            is_author = entity is not None and str(queryset.entity_id) == str(
-                entity.id
-            )
+            is_author = entity is not None and str(queryset.entity_id) == str(entity.id)
             if not is_author and not (
                 queryset.on_feed in PREVIEW_KINDS and is_live(queryset)
             ):
@@ -608,7 +629,7 @@ class NewsfeedPostPreviewView(APIView):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            serialized_result = PostSerializer(queryset)
+            serialized_result = PostSerializer(queryset, context={"request": request})
 
             if (
                 serialized_result.data["deleted_at"]
@@ -626,7 +647,6 @@ class NewsfeedPostPreviewView(APIView):
 
 
 class EmojisView(APIView):
-
     def get_permissions(self):
         if self.request.method in ["GET"]:
             return [AllowAny()]
@@ -744,7 +764,7 @@ def _ephemeral_reaction_refusal(post, entity):
     return None
 
 
-class PostReactionsView(APIView):
+class PostReactionsView(CommunityPostAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
@@ -764,11 +784,12 @@ class PostReactionsView(APIView):
             new_reaction_id = str(uuid.uuid4())
 
             with transaction.atomic():
-                Reaction.objects.create(
+                reaction = Reaction.objects.create(
                     reaction_id=new_reaction_id,
                     post=post,
                     entity=entity,
                     emoji=emoji,
+                    is_anonymous=request_anonymity(request, post),
                 )
 
                 # Created on first use rather than pre-seeded for every
@@ -788,7 +809,9 @@ class PostReactionsView(APIView):
                 # Distinct from the author notification further down: that one
                 # is addressed to the post's owner wherever they are, this
                 # reaches whoever happens to have the post open.
-                publish_post_reaction(post_id, entity, "added")
+                publish_post_reaction(
+                    post_id, entity, "added", is_anonymous=reaction.is_anonymous
+                )
 
                 # likes_count is NOT incremented here any more. The worker's
                 # UpdateRankingScore adjusts the counter itself as part of
@@ -835,7 +858,16 @@ class PostReactionsView(APIView):
                     },
                 )
 
-                if post.entity.id != entity.id:
+                handled_community = notify_community_activity(
+                    post,
+                    entity,
+                    new_reaction_id,
+                    [post.entity_id],
+                    is_anonymous=reaction.is_anonymous,
+                    verb="reacted to a post",
+                    notification_type="post_reaction",
+                )
+                if not handled_community and post.entity.id != entity.id:
                     # "post" / "moment" / "thought" - a reaction to a moment
                     # or thought notifies as one, and opens it rather than a
                     # post page (the notification's target type says which).
@@ -925,6 +957,9 @@ class PostReactionsView(APIView):
                 reaction = Reaction.objects.get(post_id=post, entity=entity)
                 old_emoji = reaction.emoji
                 reaction.emoji = new_emoji
+                reaction.is_anonymous = request_anonymity(
+                    request, post, default=reaction.is_anonymous
+                )
                 reaction.save()
 
                 # Decrement side is tolerant of a missing row: with rows
@@ -945,9 +980,20 @@ class PostReactionsView(APIView):
 
                 # A swap moves TWO tallies, which is exactly why the event
                 # carries no counts and the client refetches instead.
-                publish_post_reaction(post_id, entity, "updated")
+                publish_post_reaction(
+                    post_id, entity, "updated", is_anonymous=reaction.is_anonymous
+                )
 
-                if post.entity.id != entity.id:
+                handled_community = notify_community_activity(
+                    post,
+                    entity,
+                    reaction.reaction_id,
+                    [post.entity_id],
+                    is_anonymous=reaction.is_anonymous,
+                    verb="changed a reaction",
+                    notification_type="post_reaction",
+                )
+                if not handled_community and post.entity.id != entity.id:
                     # Worded by kind like the add path - a hardcoded "post"
                     # here renamed a moment/thought reaction on every swap.
                     noun = _reaction_noun(post)
@@ -1044,7 +1090,9 @@ class PostReactionsView(APIView):
                     preview_count.count = max(preview_count.count - 1, 0)
                     preview_count.save()
 
-                publish_post_reaction(post_id, entity, "removed")
+                publish_post_reaction(
+                    post_id, entity, "removed", is_anonymous=reaction.is_anonymous
+                )
 
                 return Response(
                     {"message": "Reaction has been deleted"}, status=status.HTTP_200_OK
@@ -1054,7 +1102,7 @@ class PostReactionsView(APIView):
             return Response({"error": str(e)}, status=500)
 
 
-class ReactionsCountView(APIView):
+class ReactionsCountView(CommunityPostAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, post_id):
@@ -1070,7 +1118,7 @@ class ReactionsCountView(APIView):
             return Response({"error": str(e)}, status=500)
 
 
-class CommentReactionsView(APIView):
+class CommentReactionsView(CommunityPostAccessMixin, APIView):
     """
     Reactions on a comment - PostReactionsView one level down, same verbs and
     same payload keys (`emoji_id` plus `comment_id` where the post view takes
@@ -1102,6 +1150,17 @@ class CommentReactionsView(APIView):
         one; the reference id stays the reaction's, so update_content() can
         rewrite the same notification instead of stacking a second.
         """
+        if notify_community_activity(
+            comment.post,
+            entity,
+            reaction_id,
+            [comment.entity_id],
+            is_anonymous=CommentReaction.objects.get(pk=reaction_id).is_anonymous,
+            verb="reacted to a comment",
+            notification_type="comment_reaction",
+            anchor=str(comment.pk),
+        ):
+            return
         if comment.entity_id == entity.id:
             return
 
@@ -1161,11 +1220,12 @@ class CommentReactionsView(APIView):
             new_reaction_id = str(uuid.uuid4())
 
             with transaction.atomic():
-                CommentReaction.objects.create(
+                reaction = CommentReaction.objects.create(
                     reaction_id=new_reaction_id,
                     comment=comment,
                     entity=entity,
                     emoji=emoji,
+                    is_anonymous=request_anonymity(request, comment.post),
                 )
 
                 preview_count_obj, _ = CommentPreviewCount.objects.get_or_create(
@@ -1176,7 +1236,9 @@ class CommentReactionsView(APIView):
 
                 # Published to the POST's channel, like every other activity
                 # event - the reader subscribed to a post, not to a comment.
-                publish_comment_reaction(comment, entity, "added")
+                publish_comment_reaction(
+                    comment, entity, "added", is_anonymous=reaction.is_anonymous
+                )
 
                 # The reactor is engaging with the comment's AUTHOR, so the
                 # interaction bump is between those two entities - not the
@@ -1219,6 +1281,9 @@ class CommentReactionsView(APIView):
                 reaction = CommentReaction.objects.get(comment=comment, entity=entity)
                 old_emoji = reaction.emoji
                 reaction.emoji = new_emoji
+                reaction.is_anonymous = request_anonymity(
+                    request, comment.post, default=reaction.is_anonymous
+                )
                 reaction.save()
 
                 old_preview = CommentPreviewCount.objects.filter(
@@ -1234,7 +1299,9 @@ class CommentReactionsView(APIView):
                 new_preview.count += 1
                 new_preview.save()
 
-                publish_comment_reaction(comment, entity, "updated")
+                publish_comment_reaction(
+                    comment, entity, "updated", is_anonymous=reaction.is_anonymous
+                )
 
                 self._notify_comment_author(
                     comment, entity, new_emoji, reaction.reaction_id, "updated"
@@ -1284,7 +1351,9 @@ class CommentReactionsView(APIView):
                     preview_count.count = max(preview_count.count - 1, 0)
                     preview_count.save()
 
-                publish_comment_reaction(comment, entity, "removed")
+                publish_comment_reaction(
+                    comment, entity, "removed", is_anonymous=reaction.is_anonymous
+                )
 
             return Response(
                 {"message": "Reaction has been deleted"}, status=status.HTTP_200_OK
@@ -1294,7 +1363,7 @@ class CommentReactionsView(APIView):
             return Response({"error": str(e)}, status=500)
 
 
-class CommentReactionsCountView(APIView):
+class CommentReactionsCountView(CommunityPostAccessMixin, APIView):
     """ReactionsCountView for a comment - the tallies behind its reaction row."""
 
     permission_classes = [IsAuthenticated]
@@ -1312,7 +1381,7 @@ class CommentReactionsCountView(APIView):
             return Response({"error": str(e)}, status=500)
 
 
-class ActivityCountView(APIView):
+class ActivityCountView(CommunityPostAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -1332,7 +1401,7 @@ class ActivityCountView(APIView):
             return Response({"error": str(e)}, status=500)
 
 
-class CommentsView(APIView):
+class CommentsView(CommunityPostAccessMixin, APIView):
     # permission_classes = [IsAuthenticated]
     pagination_class = Pagination
 
@@ -1425,7 +1494,9 @@ class CommentsView(APIView):
                     queryset, request, view=self
                 )
 
-                serialized_result = CommentSerializer(paginated_queryset, many=True)
+                serialized_result = CommentSerializer(
+                    paginated_queryset, many=True, context={"request": request}
+                )
                 data = paginator.get_paginated_response(serialized_result.data)
 
                 return data
@@ -1454,14 +1525,17 @@ class CommentsView(APIView):
                             filter=Q(replies__deleted_at__isnull=True),
                             distinct=True,
                         )
-                    ).order_by("created_at")
+                    )
+                    .order_by("created_at")
                 )
                 paginator = self.pagination_class()
                 paginated_queryset = paginator.paginate_queryset(
                     queryset, request, view=self
                 )
 
-                serialized_result = CommentSerializer(paginated_queryset, many=True)
+                serialized_result = CommentSerializer(
+                    paginated_queryset, many=True, context={"request": request}
+                )
                 data = paginator.get_paginated_response(serialized_result.data)
 
                 return data
@@ -1521,6 +1595,9 @@ class CommentsView(APIView):
             # upload. Only the attachment - links in the text are untouched.
             try:
                 own_upload = resolve_comment_upload(new_attachment, user.id)
+                assert_anonymous_upload(
+                    own_upload, post, is_anonymous=request_anonymity(request, post)
+                )
             except UploadRejected as rejected:
                 return Response({"error": str(rejected)}, status=400)
 
@@ -1533,6 +1610,7 @@ class CommentsView(APIView):
                     text=new_comment,
                     attachment=new_attachment,
                     entity=entity,
+                    is_anonymous=request_anonymity(request, post),
                 )
                 transaction.on_commit(
                     lambda: attach_upload(own_upload, "comment", new_comment_id)
@@ -1593,6 +1671,28 @@ class CommentsView(APIView):
                 # Entities already pinged for THIS comment, so a mention does
                 # not arrive as a second notification for the same event.
                 notified_ids = []
+
+                community_notice = notify_community_activity(
+                    post,
+                    entity,
+                    new_comment_id,
+                    [replied_to.entity_id if replied_to else post.entity_id],
+                    is_anonymous=comment.is_anonymous,
+                    verb="replied to a comment"
+                    if replied_to
+                    else "commented on a post",
+                    anchor=str(comment.pk),
+                    notification_type="post_comment",
+                    headline="Replied Comment" if replied_to else "Post Comment",
+                )
+                if community_notice:
+                    notify_comment_mentions(
+                        comment,
+                        entity,
+                        mention_entities,
+                        [replied_to.entity_id if replied_to else post.entity_id],
+                    )
+                    return Response("OK", status=status.HTTP_200_OK)
 
                 if replied_to is not None:
                     # `or ""` guards an attachment-only parent, whose text is
@@ -1715,6 +1815,8 @@ class CommentsView(APIView):
 
             return Response("OK", status=status.HTTP_200_OK)
         except Exception as e:
+            if isinstance(e, APIException):
+                raise
             logger.exception("CommentsView.post failed")
             return Response({"error": str(e)}, status=500)
 
@@ -1856,7 +1958,7 @@ class CommentsView(APIView):
             return Response({"error": str(e)}, status=500)
 
 
-class PostSaveView(APIView):
+class PostSaveView(CommunityPostAccessMixin, APIView):
     permission_classes = [IsAuthenticated]
     pagination_class = Pagination
 
@@ -1869,6 +1971,9 @@ class PostSaveView(APIView):
                 PostSave.objects.select_related("post")
                 .filter(
                     live_kinds_filter(SAVED_KINDS, prefix="post__"),
+                    post_id__in=Post.objects.filter(
+                        visible_posts_filter(entity)
+                    ).values("pk"),
                     entity=entity,
                     post__deleted_at=None,
                 )
@@ -1880,7 +1985,9 @@ class PostSaveView(APIView):
                 post_save_query, request, view=self
             )
 
-            serialized_result = PostSaveSerializer(paginated_queryset, many=True)
+            serialized_result = PostSaveSerializer(
+                paginated_queryset, many=True, context={"request": request}
+            )
             data = paginator.get_paginated_response(serialized_result.data)
 
             return data
@@ -1927,7 +2034,7 @@ class PostSaveView(APIView):
             return Response({"error": str(e)}, status=500)
 
 
-class PostTagView(APIView):
+class PostTagView(CommunityPostAccessMixin, APIView):
     """
     DELETE {post_id, entity_id} - takes one tag off a post.
 
@@ -1961,6 +2068,7 @@ class PostTagView(APIView):
                 )
 
             with transaction.atomic():
+                assert_removable_tag(post, tagged_id)
                 PostTag.objects.filter(post=post, entity_id=tagged_id).delete()
                 remaining = PostTag.objects.filter(post=post).select_related("entity")
                 # is_tagged is what the worker and the feed read; a post with
@@ -1977,7 +2085,7 @@ class PostTagView(APIView):
                 },
                 status=status.HTTP_200_OK,
             )
-        except (PermissionDenied, Http404):
+        except (APIException, Http404):
             raise
         except Exception as e:
             logger.exception("PostTagView.delete failed")
@@ -2126,7 +2234,7 @@ class NewsfeedPostSearchView(APIView):
             paginator = self.pagination_class()
             page = paginator.paginate_queryset(queryset, request, view=self)
             return paginator.get_paginated_response(
-                [serialize_post_hit(post) for post in page]
+                [serialize_post_hit(post, entity) for post in page]
             )
         except Exception as e:
             logger.exception("NewsfeedPostSearchView.get failed")

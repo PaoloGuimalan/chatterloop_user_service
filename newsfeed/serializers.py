@@ -18,6 +18,31 @@ from user.serializers import AccountPreviewSerializer
 from entity.serializers import EntitySerializer
 from community.models import Realm
 from .services.link_preview import extract_first_url, get_preview
+from community.posts import community_for_post, community_metadata
+from community.post_policy import project_contribution
+
+
+class CommunityContributionMixin:
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        viewer = getattr(self.context.get("request"), "entity", None)
+        post = instance if isinstance(instance, Post) else instance.post
+        community = community_for_post(post)
+        if community is None and not instance.is_anonymous:
+            data.pop("is_anonymous", None)
+            return data
+        data = project_contribution(
+            data,
+            is_anonymous=instance.is_anonymous,
+            owner_id=instance.entity_id,
+            viewer_id=getattr(viewer, "pk", None),
+        )
+        # A comment fanout row can predate the anonymity setting. Community
+        # cards rely on destination metadata rather than social actor captions.
+        if isinstance(instance, Post) and community is not None:
+            data["feed_reason"] = None
+            data["community"] = community_metadata(community, viewer)
+        return data
 
 
 class PostTagSerializer(serializers.ModelSerializer):
@@ -97,7 +122,7 @@ class RealmPreviewSerializer(serializers.ModelSerializer):
         ]
 
 
-class PostSerializer(serializers.ModelSerializer):
+class PostSerializer(CommunityContributionMixin, serializers.ModelSerializer):
     tagging = PostTagSerializer(many=True, read_only=True)
     privacy_entity = PostPrivacySerializer(many=True, read_only=True)
     references = PostReferenceSerializer(many=True, read_only=True)
@@ -157,7 +182,7 @@ class CommentPreviewCountSerializer(serializers.ModelSerializer):
         fields = ["count", "emoji"]
 
 
-class CommentSerializer(serializers.ModelSerializer):
+class CommentSerializer(CommunityContributionMixin, serializers.ModelSerializer):
     entity = EntitySerializer(read_only=True)
     link_preview = serializers.SerializerMethodField()
     reply_count = serializers.SerializerMethodField()
@@ -190,7 +215,7 @@ class CommentSerializer(serializers.ModelSerializer):
         read_only_fields = ["is_edited"]
 
 
-class PostBasicSerializer(serializers.ModelSerializer):
+class PostBasicSerializer(CommunityContributionMixin, serializers.ModelSerializer):
     entity = EntitySerializer(read_only=True)
     is_edited = serializers.BooleanField(read_only=True)
 

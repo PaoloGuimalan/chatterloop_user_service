@@ -139,9 +139,9 @@ def resolve_mentioned_entities(text, author_entity):
         .distinct()
     )
 
-    return [
-        entity for entity in resolved if str(entity.id) not in blocked_ids
-    ][:MAX_MENTIONS_PER_COMMENT]
+    return [entity for entity in resolved if str(entity.id) not in blocked_ids][
+        :MAX_MENTIONS_PER_COMMENT
+    ]
 
 
 def comment_push_route(post_id, comment_id):
@@ -163,6 +163,22 @@ def notify_comment_mentions(comment, author_entity, entities, already_notified_i
     comment being replied to). Without it, being mentioned in a reply to your
     own comment arrives twice for one event.
     """
+    from community.notifications import notify_community_activity
+
+    skipped = {str(item) for item in already_notified_ids if item}
+    if notify_community_activity(
+        comment.post,
+        author_entity,
+        comment.pk,
+        [item.pk for item in entities if str(item.pk) not in skipped],
+        is_anonymous=comment.is_anonymous,
+        verb="mentioned you in a comment",
+        notification_type="comment_mention",
+        headline="Comment Mention",
+        anchor=str(comment.pk),
+    ):
+        return []
+
     skip = {str(entity_id) for entity_id in already_notified_ids if entity_id}
     skip.add(str(author_entity.id))
 

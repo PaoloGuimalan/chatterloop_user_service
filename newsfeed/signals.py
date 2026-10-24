@@ -42,6 +42,9 @@ def create_post_score_for_new_post(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender=Comment)
 def log_comment_action(sender, instance, created, **kwargs):
+    if instance.is_anonymous:
+        # Anonymous comments never create actor-follow fanout or social scores.
+        return
     if created:
         # EngagementLog.objects.create(
         #     post=instance.post,
@@ -115,6 +118,7 @@ def log_comment_action(sender, instance, created, **kwargs):
                         "author_id": instance.post.entity_id,
                     },
                     "type": "comment",
+                    "comment_id": str(instance.comment_id),
                 },
             )
 

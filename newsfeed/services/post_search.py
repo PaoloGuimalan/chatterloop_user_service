@@ -60,6 +60,7 @@ def build_post_search_queryset(entity, query, blocked_ids):
         .exclude(entity_id__in=blocked_ids)
         .distinct()
         .select_related("entity", "entity__users", "entity__realms", "score")
+        .prefetch_related("tagging__entity__realms")
         .annotate(
             rank=Coalesce("score__ranking_score", Value(0.0), output_field=FloatField())
         )
@@ -67,7 +68,7 @@ def build_post_search_queryset(entity, query, blocked_ids):
     )
 
 
-def serialize_post_hit(post):
+def serialize_post_hit(post, viewer=None):
     """
     Lightweight card shape for a search hit - deliberately NOT the full
     PostSerializer: the Content cards only render author/time/caption and
@@ -113,7 +114,7 @@ def serialize_post_hit(post):
 
     score = getattr(post, "score", None)
 
-    return {
+    data = {
         "post_id": post.post_id,
         "caption": post.caption or "",
         "content_type": post.content_type,
@@ -123,6 +124,20 @@ def serialize_post_hit(post):
         "comments_count": score.comments_count if score else 0,
         "author": author,
     }
+    from community.posts import community_for_post, community_metadata
+    from community.post_policy import project_contribution
+
+    realm = community_for_post(post)
+    if realm is not None or post.is_anonymous:
+        data = project_contribution(
+            data,
+            is_anonymous=post.is_anonymous,
+            owner_id=post.entity_id,
+            viewer_id=getattr(viewer, "pk", None),
+        )
+        if realm is not None:
+            data["community"] = community_metadata(realm, viewer)
+    return data
 
 
 def _clean_profile(profile):

@@ -8,6 +8,7 @@ from ..utils.generators import generate_random_digit
 from datetime import datetime
 from ..ext_models.mongomodels import Session
 import uuid
+import json
 
 
 # Audience selectors, mirroring server/routes/users/index.js. A toUserID that
@@ -123,6 +124,72 @@ class NotificationService:
         notif.save()
         return notif
 
+    def upsert_community_reaction(
+        self,
+        *,
+        referenceID,
+        toUserID,
+        fromUserID,
+        content_headline,
+        content_details,
+        type,
+        target_type,
+        target_id,
+        target_anchor=None,
+    ):
+        """Replace one community reaction projection, including legacy duplicates.
+
+        A unique deterministic notificationID makes concurrent first delivery
+        and reaction edits address the same row. Active notices retain their
+        read state; reactivated notices become unread again.
+        """
+        scope = {
+            "referenceID": str(referenceID),
+            "toUserID": str(toUserID),
+            "fromUserID": str(fromUserID),
+            "type": type,
+        }
+        notification_id = "NTF_community_" + str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                json.dumps(
+                    [scope["fromUserID"], scope["referenceID"], scope["toUserID"], type]
+                ),
+            )
+        )
+        existing = list(Notification.objects(**scope))
+        active = [row for row in existing if row.referenceStatus]
+        is_read = bool(active) and all(row.isRead for row in active)
+        date = (
+            existing[0].date
+            if existing
+            else DateInfo(date=str(datetime.now().astimezone()), time=None)
+        )
+        Notification.objects(
+            notificationID=notification_id, referenceStatus=False
+        ).update(set__isRead=False)
+        Notification.objects(notificationID=notification_id).update_one(
+            upsert=True,
+            set__referenceID=scope["referenceID"],
+            set__toUserID=scope["toUserID"],
+            set__type=type,
+            set__referenceStatus=True,
+            set__fromUserID=str(fromUserID),
+            set__content=Content(headline=content_headline, details=content_details),
+            set__target=NotificationTarget(
+                type=target_type,
+                supportingID=str(target_id),
+                anchor=str(target_anchor) if target_anchor is not None else None,
+            ),
+            set_on_insert__date=date,
+            set_on_insert__isRead=is_read,
+        )
+        # Never delete by reference alone: mentions and other recipients may
+        # share it. All surviving content is the current safe projection.
+        Notification.objects(**scope).filter(
+            notificationID__ne=notification_id
+        ).delete()
+
     def update_reference_status(self, connection_id, new_status):
         result = Notification.objects(referenceID=connection_id).update(
             set__referenceStatus=new_status, multi=True
@@ -166,9 +233,9 @@ class NotificationService:
         would leave Accept on an invite already accepted. The stored buttons
         go with it, and the row falls back to its destination only.
         """
-        result = Notification.objects(
-            referenceID=reference_id, type=notif_type
-        ).update(set__referenceStatus=True, unset__actions=True, multi=True)
+        result = Notification.objects(referenceID=reference_id, type=notif_type).update(
+            set__referenceStatus=True, unset__actions=True, multi=True
+        )
         return result > 0
 
     def update_content(self, reaction_id, new_content):

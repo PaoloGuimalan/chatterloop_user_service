@@ -103,7 +103,9 @@ def assert_can_invite(entity, realm, purpose, role):
         raise InviteError("You are not allowed to invite people here", 403)
 
     if purpose == "manage" and role == "admin":
-        if not (_acts_as_realm(entity, realm) or _member_role(entity, realm) == "owner"):
+        if not (
+            _acts_as_realm(entity, realm) or _member_role(entity, realm) == "owner"
+        ):
             raise InviteError("Only the owner can invite another admin", 403)
 
 
@@ -154,9 +156,10 @@ def resolve_target(raw_target=None, target_email=None, target_entity_id=None):
             raise InviteError("That person couldn't be found", 404)
         if entity.type == "bot":
             raise InviteError("Bots can't accept invites", 400)
-        if entity.type == "user" and not Account.objects.filter(
-            entity_id=entity.id, is_active=True
-        ).exists():
+        if (
+            entity.type == "user"
+            and not Account.objects.filter(entity_id=entity.id, is_active=True).exists()
+        ):
             raise InviteError("That person couldn't be found", 404)
         return entity, None
 
@@ -234,6 +237,8 @@ def create_invite(
     target_entity, email = resolve_target(raw_target, target_email, target_entity_id)
 
     if target_entity is not None:
+        if Realm.objects.filter(entity=target_entity, type="community").exists():
+            raise InviteError("Communities cannot join or manage other realms", 400)
         if str(target_entity.id) == str(inviter.id):
             raise InviteError("You can't invite yourself")
         if is_blocked(inviter, target_entity):

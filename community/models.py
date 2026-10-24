@@ -2,6 +2,7 @@ import uuid
 import random
 import secrets
 from django.db import models
+from django.core.exceptions import ValidationError
 from user.models import Account
 
 # Follow (formerly RealmFollow) now lives in the entity app - the follower is
@@ -34,8 +35,8 @@ def generate_realm_uid():
 
 
 class Realm(models.Model):
-
     REALM_TYPE_CHOICES = [
+        ("community", "Community"),
         ("page", "Page"),
         ("server", "Server"),
         ("group", "Group"),
@@ -142,9 +143,24 @@ class Member(models.Model):
     class Meta:
         unique_together = ("entity", "realm")
 
+    def clean(self):
+        super().clean()
+        if (
+            self.entity_id
+            and Realm.objects.filter(
+                entity_id=self.entity_id, type="community"
+            ).exists()
+        ):
+            raise ValidationError(
+                {"entity": "Communities cannot be members of any realm"}
+            )
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        return super().save(*args, **kwargs)
+
 
 class Invite(models.Model):
-
     INVITE_KIND_CHOICES = [
         ("invite", "Invite"),
         ("request", "Request"),

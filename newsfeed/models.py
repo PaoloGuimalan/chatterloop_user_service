@@ -75,6 +75,7 @@ def allows_replies(post):
 
 
 class Post(models.Model):
+    is_anonymous = models.BooleanField(default=False)
     # "connections" is the audience a private profile writes with: visible
     # to the author's accepted contacts, nobody else. It is a distinct
     # level from "private" (author only) and from "custom" (an explicit
@@ -241,6 +242,7 @@ class Emoji(models.Model):
 
 
 class Reaction(models.Model):
+    is_anonymous = models.BooleanField(default=False)
     reaction_id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
     post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name="reactions")
     entity = models.ForeignKey(Entity, on_delete=models.DO_NOTHING)
@@ -252,6 +254,7 @@ class Reaction(models.Model):
 
 
 class Comment(models.Model):
+    is_anonymous = models.BooleanField(default=False)
     comment_id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
     parent_comment = models.ForeignKey(
         "self",
@@ -297,6 +300,7 @@ class CommentReaction(models.Model):
     filtering `comment__isnull=True`.
     """
 
+    is_anonymous = models.BooleanField(default=False)
     reaction_id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
     comment = models.ForeignKey(
         Comment, on_delete=models.CASCADE, related_name="reactions"
