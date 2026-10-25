@@ -1,6 +1,6 @@
 """Community destinations, current audience and safe contribution projections."""
 
-from django.db.models import Count, Exists, OuterRef, Q
+from django.db.models import BooleanField, Count, Exists, OuterRef, Q, Subquery, Value
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 
 from community.models import Member, Realm
@@ -22,6 +22,43 @@ def community_for_post(post):
         raise NotFound("Post not available")
     post._community_destination = communities[0] if communities else None
     return post._community_destination
+
+
+def viewer_reaction_identity_annotations(viewer, *, comment=False):
+    """Nullable identity of only the viewing user/page's own reaction."""
+    from newsfeed.models import CommentReaction, Reaction
+
+    if viewer is None:
+        identity = Value(None, output_field=BooleanField())
+    else:
+        model, target = (CommentReaction, "comment") if comment else (Reaction, "post")
+        identity = Subquery(
+            model.objects.filter(**{target: OuterRef("pk"), "entity": viewer}).values(
+                "is_anonymous"
+            )[:1],
+            output_field=BooleanField(),
+        )
+    return {"entity_reaction_is_anonymous": identity}
+
+
+def viewer_reaction_identity(instance, viewer):
+    """Use the list annotation, with a scoped fallback for direct/saved reads."""
+    from newsfeed.models import CommentReaction, Post, Reaction
+
+    if viewer is None:
+        return None
+    if hasattr(instance, "entity_reaction_is_anonymous"):
+        return instance.entity_reaction_is_anonymous
+    model, target = (
+        (Reaction, "post")
+        if isinstance(instance, Post)
+        else (CommentReaction, "comment")
+    )
+    return (
+        model.objects.filter(**{target: instance, "entity": viewer})
+        .values_list("is_anonymous", flat=True)
+        .first()
+    )
 
 
 def is_member(realm, entity):
@@ -125,6 +162,7 @@ def community_metadata(realm, viewer):
         "name": realm.name,
         "slug": realm.slug,
         "profile": realm.profile,
+        "is_verified": realm.is_verified,
         "is_private": realm.is_private,
         "is_member": realm.joined
         if hasattr(realm, "joined")

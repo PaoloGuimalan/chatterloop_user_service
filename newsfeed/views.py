@@ -112,6 +112,7 @@ from community.posts import (
     assert_anonymous_upload,
     assert_removable_tag,
     request_anonymity,
+    viewer_reaction_identity_annotations,
 )
 from community.notifications import notify_community_activity
 from newsfeed.services.post_kinds import (
@@ -287,6 +288,7 @@ class NewsfeedView(CommunityPostAccessMixin, APIView):
                     is_saved=Exists(
                         PostSave.objects.filter(post=OuterRef("pk"), entity=entity)
                     ),
+                    **viewer_reaction_identity_annotations(entity),
                     entity_reaction=Coalesce(
                         Subquery(
                             Reaction.objects.filter(
@@ -522,6 +524,7 @@ class NewsfeedProfileView(CommunityPostAccessMixin, APIView):
                     is_saved=Exists(
                         PostSave.objects.filter(post=OuterRef("pk"), entity=entity)
                     ),
+                    **viewer_reaction_identity_annotations(entity),
                     entity_reaction=Coalesce(
                         Subquery(user_reaction_subquery), Value(None)
                     ),
@@ -599,6 +602,7 @@ class NewsfeedPostPreviewView(CommunityPostAccessMixin, APIView):
                     is_saved=Exists(
                         PostSave.objects.filter(post=OuterRef("pk"), entity=entity)
                     ),
+                    **viewer_reaction_identity_annotations(entity),
                     entity_reaction=Coalesce(
                         Subquery(user_reaction_subquery), Value(None)
                     ),
@@ -1443,6 +1447,7 @@ class CommentsView(CommunityPostAccessMixin, APIView):
             return queryset
 
         return queryset.annotate(
+            **viewer_reaction_identity_annotations(entity, comment=True),
             entity_reaction=Coalesce(
                 Subquery(
                     CommentReaction.objects.filter(
@@ -1456,7 +1461,7 @@ class CommentsView(CommunityPostAccessMixin, APIView):
                 # ("mixed types: ForeignKey, CharField"). Emoji's pk IS a
                 # CharField, so naming it here is just making that explicit.
                 output_field=CharField(),
-            )
+            ),
         )
 
     def get(self, request):

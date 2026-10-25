@@ -38,7 +38,11 @@ from django.db.models.functions import Coalesce
 
 from newsfeed.models import Comment, Post, PostSave, Reaction
 from newsfeed.serializers import PostSerializer
-from community.posts import community_for_post, can_read_community
+from community.posts import (
+    community_for_post,
+    can_read_community,
+    viewer_reaction_identity_annotations,
+)
 from user.ext_models.mongomodels import ModerationRecord
 
 logger = logging.getLogger(__name__)
@@ -175,6 +179,7 @@ class ModerationDetailView(APIView):
                 is_saved=Exists(
                     PostSave.objects.filter(post=OuterRef("pk"), entity=viewer)
                 ),
+                **viewer_reaction_identity_annotations(viewer),
                 entity_reaction=Coalesce(
                     Subquery(
                         Reaction.objects.filter(

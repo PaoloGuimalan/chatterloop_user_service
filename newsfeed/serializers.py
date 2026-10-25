@@ -18,7 +18,11 @@ from user.serializers import AccountPreviewSerializer
 from entity.serializers import EntitySerializer
 from community.models import Realm
 from .services.link_preview import extract_first_url, get_preview
-from community.posts import community_for_post, community_metadata
+from community.posts import (
+    community_for_post,
+    community_metadata,
+    viewer_reaction_identity,
+)
 from community.post_policy import project_contribution
 
 
@@ -37,6 +41,16 @@ class CommunityContributionMixin:
             owner_id=instance.entity_id,
             viewer_id=getattr(viewer, "pk", None),
         )
+        if community is not None:
+            request = self.context.get("request")
+            reaction_viewer = (
+                viewer
+                if getattr(getattr(request, "user", None), "is_authenticated", False)
+                else None
+            )
+            data["entity_reaction_is_anonymous"] = viewer_reaction_identity(
+                instance, reaction_viewer
+            )
         # A comment fanout row can predate the anonymity setting. Community
         # cards rely on destination metadata rather than social actor captions.
         if isinstance(instance, Post) and community is not None:

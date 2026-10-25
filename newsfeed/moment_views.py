@@ -37,7 +37,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from community.models import Follow
-from community.posts import community_for_post, community_metadata
+from community.posts import (
+    community_for_post,
+    community_metadata,
+    viewer_reaction_identity_annotations,
+)
 from community.post_policy import project_contribution
 from entity.models import Connection, Entity
 from entity.serializers import EntitySerializer
@@ -94,6 +98,7 @@ def _annotated_posts(viewer):
             is_saved=Exists(
                 PostSave.objects.filter(post=OuterRef("pk"), entity=viewer)
             ),
+            **viewer_reaction_identity_annotations(viewer),
             entity_reaction=Coalesce(
                 Subquery(
                     Reaction.objects.filter(post=OuterRef("pk"), entity=viewer).values(

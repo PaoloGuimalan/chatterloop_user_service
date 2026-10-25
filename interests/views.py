@@ -20,6 +20,7 @@ from .services.topics import build_topic_queryset, serialize_topics
 from entity.permissions import PermissionEffect
 from newsfeed.models import Post, PostSave, Reaction
 from newsfeed.serializers import PostSerializer
+from community.posts import viewer_reaction_identity_annotations
 from newsfeed.services.post_visibility import visible_posts_filter
 from newsfeed.services.post_kinds import TOPIC_KINDS, live_kinds_filter
 import logging
@@ -453,6 +454,7 @@ class TopicPostsView(APIView):
                     is_saved=Exists(
                         PostSave.objects.filter(post=OuterRef("pk"), entity=entity)
                     ),
+                    **viewer_reaction_identity_annotations(entity),
                     entity_reaction=Coalesce(
                         Subquery(
                             Reaction.objects.filter(
