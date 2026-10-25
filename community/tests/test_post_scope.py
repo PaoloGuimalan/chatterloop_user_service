@@ -20,6 +20,45 @@ from newsfeed.services.post_visibility import can_view_post, visible_posts_filte
 
 
 class CommunityScopeTests(unittest.TestCase):
+    def test_only_profile_owner_can_list_their_own_anonymous_posts(self):
+        from community import posts
+
+        predicate = getattr(posts, "profile_anonymity_filter", None)
+        self.assertTrue(callable(predicate))
+        with sqlite3.connect(":memory:") as db:
+            db.execute(
+                "CREATE TABLE newsfeed_post (post_id TEXT, entity_id TEXT, is_anonymous BOOLEAN)"
+            )
+            db.executemany(
+                "INSERT INTO newsfeed_post VALUES (?, ?, ?)",
+                [
+                    ("named", "owner", False),
+                    ("own-anonymous", "owner", True),
+                    ("other-anonymous-tag", "other", True),
+                ],
+            )
+            for viewer in ("owner", "friend", "connection", "stranger", None):
+                with self.subTest(viewer=viewer):
+                    query = Post.objects.filter(predicate(viewer, "owner")).values_list(
+                        "post_id", flat=True
+                    )
+                    sql, params = query.query.sql_with_params()
+                    visible = {
+                        row[0] for row in db.execute(sql.replace("%s", "?"), params)
+                    }
+                    self.assertEqual(
+                        visible,
+                        {"named", "own-anonymous"} if viewer == "owner" else {"named"},
+                    )
+            query = Post.objects.filter(predicate("owner", "other")).values_list(
+                "post_id", flat=True
+            )
+            sql, params = query.query.sql_with_params()
+            self.assertEqual(
+                {row[0] for row in db.execute(sql.replace("%s", "?"), params)},
+                {"named"},
+            )
+
     def test_comment_count_url_requires_current_private_membership(self):
         from newsfeed import views
         from rest_framework.test import APIRequestFactory, force_authenticate

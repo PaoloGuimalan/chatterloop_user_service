@@ -113,6 +113,7 @@ from community.posts import (
     assert_removable_tag,
     request_anonymity,
     viewer_reaction_identity_annotations,
+    profile_anonymity_filter,
 )
 from community.notifications import notify_community_activity
 from newsfeed.services.post_kinds import (
@@ -505,7 +506,16 @@ class NewsfeedProfileView(CommunityPostAccessMixin, APIView):
             if realm_match and realm_match.type == "community":
                 profile_filter = Q(tagging__entity_id=realm_match.entity_id)
             else:
-                profile_filter &= Q(is_anonymous=False)
+                profile_owner_id = (
+                    target_account.entity_id
+                    if target_account
+                    else realm_match.entity_id
+                    if realm_match
+                    else None
+                )
+                profile_filter &= profile_anonymity_filter(
+                    getattr(entity, "pk", None), profile_owner_id
+                )
 
             if archive:
                 profile_filter = Q(entity=entity)

@@ -68,6 +68,14 @@ def is_member(realm, entity):
     )
 
 
+def profile_anonymity_filter(viewer_id, profile_owner_id):
+    """Anonymous authorship belongs on a profile only in its owner's view."""
+    visible = Q(is_anonymous=False)
+    if viewer_id and str(viewer_id) == str(profile_owner_id):
+        visible |= Q(entity_id=viewer_id)
+    return visible
+
+
 def community_audience(viewer):
     """(has community destination, readable community destination), for Post Qs.
 
