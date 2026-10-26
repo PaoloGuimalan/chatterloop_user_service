@@ -116,7 +116,18 @@ class TopRealms(APIView):
                     )
                 ),
                 my_role=my_role_annotation(entity),
-            ).filter(type=type, is_private=False)
+                request_pending=Exists(
+                    Invite.objects.filter(
+                        realm=OuterRef("pk"),
+                        target_entity=entity,
+                        kind="request",
+                        status="pending",
+                    )
+                ),
+            ).filter(type=type, is_active=True)
+
+            if type != "server" or not (search and search.strip()):
+                top_realm_queryset = top_realm_queryset.filter(is_private=False)
 
             if search:
                 top_realm_queryset = top_realm_queryset.filter(
@@ -993,7 +1004,7 @@ class InviteView(APIView):
                 ).values_list("entity_id", flat=True)
             )
         recipient_ids = set(
-            Member.objects.filter(realm=realm, role="admin").values_list(
+            Member.objects.filter(realm=realm, role__in=("owner", "admin")).values_list(
                 "entity__id", flat=True
             )
         )
@@ -1002,12 +1013,19 @@ class InviteView(APIView):
         return recipient_ids
 
     def _notify_requests_changed(self, realm):
-        message = {"status": True, "auth": True, "realm_id": realm.realm_id}
+        message = {
+            "status": True,
+            "auth": True,
+            "realm_id": realm.realm_id,
+            "realm_type": realm.type,
+        }
         for recipient_id in self._realm_admin_recipient_ids(realm):
             self._publish_event(
                 recipient_id,
                 "community_requests_changed"
                 if realm.type == "community"
+                else "realm_requests_changed"
+                if realm.type == "server"
                 else "conference_requests_changed",
                 message,
             )
@@ -1018,12 +1036,19 @@ class InviteView(APIView):
         )
         if realm.created_by_id:
             recipient_ids.add(realm.created_by_id)
-        message = {"status": True, "auth": True, "realm_id": realm.realm_id}
+        message = {
+            "status": True,
+            "auth": True,
+            "realm_id": realm.realm_id,
+            "realm_type": realm.type,
+        }
         for recipient_id in recipient_ids:
             self._publish_event(
                 recipient_id,
                 "community_members_changed"
                 if realm.type == "community"
+                else "realm_members_changed"
+                if realm.type == "server"
                 else "conference_members_changed",
                 message,
             )
@@ -1037,6 +1062,8 @@ class InviteView(APIView):
             entity_id,
             "community_access_changed"
             if realm.type == "community"
+            else "realm_access_changed"
+            if realm.type == "server"
             else "conference_access_changed",
             message,
         )
@@ -1120,11 +1147,21 @@ class InviteView(APIView):
 
     def _request_access(self, realm, user, entity):
         """
-        A conference participant asking to be let in. The requester is the
+        A realm participant asking to be let in. The requester is the
         caller - whichever entity is acting, a page included - and it used to
         be looked up by the email in the body, which crashed (None.entity)
         whenever no account matched it.
         """
+        if Realm.objects.filter(entity=entity, type="community").exists():
+            return Response(
+                {
+                    "status": False,
+                    "message": "Communities cannot become members of a realm.",
+                },
+                status=403,
+            )
+        if Member.objects.filter(realm=realm, entity=entity).exists():
+            return Response({"status": True, "is_member": True})
         email = acting_email(entity, user) or None
         pending = (
             Invite.objects.filter(
@@ -1394,7 +1431,9 @@ class InviteView(APIView):
                 invite.save()
 
                 if normalized_status == "accepted":
-                    if invite.kind == "request" or invite.realm.type == "conference":
+                    if invite.realm.type == "server":
+                        accept_side_effects(invite, invite.target_entity or entity)
+                    elif invite.kind == "request" or invite.realm.type == "conference":
                         # Unchanged: a conference member row, as it always was.
                         self._add_member_if_missing(invite, entity)
                     else:
@@ -1408,17 +1447,26 @@ class InviteView(APIView):
                 settle_invite_notifications(invite)
 
             # Accepting into a conference adds a participant.
-            if normalized_status == "accepted" and invite.realm.type == "conference":
-                self._notify_members_changed(invite.realm)
+            if normalized_status == "accepted":
+                transaction.on_commit(
+                    lambda: self._notify_members_changed(invite.realm)
+                )
 
             # A resolved join request changes the host's pending list, and the
             # requester needs to refetch their access/room info either way.
             if invite.kind == "request" and normalized_status in {
                 "accepted",
                 "declined",
+                "revoked",
             }:
-                self._notify_requests_changed(invite.realm)
-                self._notify_access_changed(invite.target_entity_id, invite.realm)
+                transaction.on_commit(
+                    lambda: self._notify_requests_changed(invite.realm)
+                )
+                transaction.on_commit(
+                    lambda: self._notify_access_changed(
+                        invite.target_entity_id, invite.realm
+                    )
+                )
 
             return Response(
                 {

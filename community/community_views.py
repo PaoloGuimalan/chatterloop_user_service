@@ -77,6 +77,21 @@ class CommunitiesView(APIView):
             )
         if request.query_params.get("joined") == "true":
             queryset = queryset.filter(joined=True)
+        tagged_entities = {
+            value.strip()
+            for value in request.query_params.get("tagged_entities", "").split(",")
+            if value.strip()
+        }
+        if tagged_entities:
+            matching_members = (
+                Member.objects.filter(
+                    realm=OuterRef("pk"), entity_id__in=tagged_entities
+                )
+                .values("realm_id")
+                .annotate(total=Count("entity_id", distinct=True))
+                .filter(total=len(tagged_entities))
+            )
+            queryset = queryset.filter(Exists(matching_members))
         paginator = Pagination()
         page = paginator.paginate_queryset(
             queryset.order_by("-created_at"), request, view=self
@@ -186,10 +201,16 @@ class CommunityLeaveView(APIView):
             if member is not None:
                 member.delete()
                 _notify_membership_changed(realm, request.entity)
-            Invite.objects.filter(
+            cancelled = Invite.objects.filter(
                 realm=realm,
                 target_entity=request.entity,
                 kind="request",
                 status="pending",
             ).update(status="revoked", resolved_at=now())
+            if cancelled:
+                from community.views import InviteView
+
+                transaction.on_commit(
+                    lambda: InviteView()._notify_requests_changed(realm)
+                )
         return Response({"status": True, "is_member": False})

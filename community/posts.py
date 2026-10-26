@@ -192,7 +192,16 @@ def assert_anonymous_upload(upload, post, *, is_anonymous):
         )
 
 
-def community_metadata(realm, viewer):
+def community_metadata(realm, viewer, *, membership_cache=None):
+    if hasattr(realm, "joined"):
+        joined = realm.joined
+    elif membership_cache is None:
+        joined = is_member(realm, viewer)
+    else:
+        key = (str(realm.pk), str(getattr(viewer, "pk", None)))
+        if key not in membership_cache:
+            membership_cache[key] = is_member(realm, viewer)
+        joined = membership_cache[key]
     return {
         "realm_id": str(realm.pk),
         "entity_id": str(realm.entity_id),
@@ -201,7 +210,5 @@ def community_metadata(realm, viewer):
         "profile": realm.profile,
         "is_verified": realm.is_verified,
         "is_private": realm.is_private,
-        "is_member": realm.joined
-        if hasattr(realm, "joined")
-        else is_member(realm, viewer),
+        "is_member": joined,
     }

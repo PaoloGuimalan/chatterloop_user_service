@@ -64,7 +64,11 @@ class CommunityContributionMixin:
                 and str(reason.get("entity", {}).get("id")) != str(instance.entity_id)
             ):
                 data["feed_reason"] = reason
-            data["community"] = community_metadata(community, viewer)
+            data["community"] = community_metadata(
+                community,
+                viewer,
+                membership_cache=self.context.setdefault("community_memberships", {}),
+            )
         return data
 
 

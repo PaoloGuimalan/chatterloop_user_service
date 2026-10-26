@@ -9,7 +9,7 @@ from entity.services.allowed_modules import resolve_allowed_modules_and_context
 from entity.models import Connection
 from user.models import Account
 from user.utils.blocking import get_blocked_account_ids
-from community.models import Realm
+from community.models import Member, Realm
 import logging
 
 logger = logging.getLogger(__name__)
@@ -196,6 +196,23 @@ class EntitySearch(APIView):
             # Per-kind cap so one kind can't crowd the other out before we merge.
             per_kind_limit = 25
             results = []
+            community_id = request.query_params.get("community_entity_id")
+            tag_members = None
+            if community_id:
+                community = Realm.objects.filter(
+                    entity_id=community_id, type="community", is_active=True
+                ).first()
+                if (
+                    community is None
+                    or not Member.objects.filter(
+                        realm=community, entity=entity
+                    ).exists()
+                ):
+                    return Response(
+                        {"message": "Join this community before tagging its members."},
+                        status=403,
+                    )
+                tag_members = Member.objects.filter(realm=community).values("entity_id")
 
             if "user" in kinds:
                 if query.startswith("@"):
@@ -218,6 +235,8 @@ class EntitySearch(APIView):
                     ~Q(action_by=F("involved_entity")),
                 )
 
+                if tag_members is not None:
+                    user_filter &= Q(entity_id__in=Subquery(tag_members))
                 accounts = (
                     Account.objects.filter(
                         user_filter,
@@ -271,6 +290,8 @@ class EntitySearch(APIView):
                 else:
                     realm_filter = Q(name__icontains=query) | Q(slug__icontains=query)
 
+                if tag_members is not None:
+                    realm_filter &= Q(entity_id__in=Subquery(tag_members))
                 realm_qs = Realm.objects.filter(
                     realm_filter,
                     is_active=True,
@@ -304,6 +325,8 @@ class EntitySearch(APIView):
                 else:
                     bot_filter = Q(name__icontains=query) | Q(handle__icontains=query)
 
+                if tag_members is not None:
+                    bot_filter &= Q(entity_id__in=Subquery(tag_members))
                 bots = (
                     Bot.objects.filter(bot_filter, is_active=True)
                     # Platform machinery, not a taggable entity. A user has no

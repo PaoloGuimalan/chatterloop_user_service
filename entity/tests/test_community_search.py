@@ -16,7 +16,9 @@ django.setup()
 from django.db import connection
 from rest_framework.test import APIRequestFactory, force_authenticate
 
-from community.models import Member, Realm
+from community.models import Invite, Member, Realm
+from community.community_views import CommunitiesView
+from community.views import TopRealms
 from entity.models import Entity, Follow
 from entity.search_views import (
     SearchOverviewV2,
@@ -31,7 +33,7 @@ class CommunitySearchTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.models = (Entity, Realm, Member, Follow)
+        cls.models = (Entity, Realm, Member, Follow, Invite)
         with connection.schema_editor() as editor:
             for model in cls.models:
                 editor.create_model(model)
@@ -53,6 +55,7 @@ class CommunitySearchTests(unittest.TestCase):
         for kind in ("page", "server", "group", "channel", "conference", "voice"):
             self.add_realm(kind, kind)
         self.add_realm("private-page", "page", private=True, joined=True)
+        self.add_realm("private-server", "server", private=True)
 
     def tearDown(self):
         # QuerySet.delete follows unrelated model relations, whose tables are
@@ -93,11 +96,11 @@ class CommunitySearchTests(unittest.TestCase):
         rows = list(build_realms_queryset(self.viewer, "garden", [], ["all"]))
         self.assertEqual(
             {row["id"] for row in rows},
-            {"public", "joined", "page", "server", "group"},
+            {"public", "joined", "hidden", "page", "server", "private-server", "group"},
         )
         self.assertTrue(next(row for row in rows if row["id"] == "joined")["is_member"])
         Member.objects.filter(realm_id="joined").delete()
-        self.assertNotIn(
+        self.assertIn(
             "joined",
             {
                 row["id"]
@@ -107,9 +110,12 @@ class CommunitySearchTests(unittest.TestCase):
 
     def test_type_handle_and_block_filters_preserve_other_realm_kinds(self):
         for kinds, expected in (
-            (["community"], {"public", "joined"}),
-            (["page", "community"], {"public", "joined", "page"}),
-            (["page", "server", "group"], {"page", "server", "group"}),
+            (["community"], {"public", "joined", "hidden"}),
+            (["page", "community"], {"public", "joined", "hidden", "page"}),
+            (
+                ["page", "server", "group"],
+                {"page", "server", "private-server", "group"},
+            ),
             (["channel", "voice", "conference"], set()),
         ):
             with self.subTest(kinds=kinds):
@@ -132,6 +138,8 @@ class CommunitySearchTests(unittest.TestCase):
                 "entity_id": "public",
                 "type": "realm",
                 "realm_type": "community",
+                "is_private": False,
+                "request_pending": False,
                 "display_name": "Garden public",
                 "handle": "garden-public",
                 "profile": None,
@@ -150,9 +158,10 @@ class CommunitySearchTests(unittest.TestCase):
             realm_types="community",
         )
         self.assertEqual(detail.status_code, 200)
-        self.assertEqual(detail.data["count"], 2)
+        self.assertEqual(detail.data["count"], 3)
         self.assertEqual(
-            {row["id"] for row in detail.data["results"]}, {"public", "joined"}
+            {row["id"] for row in detail.data["results"]},
+            {"public", "joined", "hidden"},
         )
         with (
             patch("entity.search_views.build_people_queryset", return_value=[]),
@@ -170,8 +179,69 @@ class CommunitySearchTests(unittest.TestCase):
         self.assertEqual(overview.status_code, 200)
         self.assertEqual(
             {row["id"] for row in overview.data["result"]["realms"]["results"]},
-            {"public", "joined", "page", "server", "group"},
+            {"public", "joined", "hidden", "page", "private-server", "group"},
         )
+
+    def test_server_search_includes_private_metadata_but_top_does_not(self):
+        for query, expected in (
+            ("garden", {"server", "private-server"}),
+            ("", {"server"}),
+        ):
+            request = self.factory.get(
+                "/api/realm/top", {"type": "server", "search": query}
+            )
+            request.entity = self.viewer
+            force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+            with patch(
+                "community.views.RealmSerializer",
+                side_effect=lambda rows, many: SimpleNamespace(
+                    data=[{"id": row.id} for row in rows]
+                ),
+            ):
+                response = TopRealms.as_view()(request)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual({row["id"] for row in response.data["results"]}, expected)
+
+    def test_tag_picker_only_returns_members_of_the_destination(self):
+        Member.objects.bulk_create(
+            [
+                Member(entity=self.viewer, realm_id="public", added_by=self.viewer),
+                Member(entity_id="page", realm_id="public", added_by=self.viewer),
+            ]
+        )
+        request = self.factory.get(
+            "/api/entity/search/garden/",
+            {
+                "types": "realm",
+                "realm_types": "page",
+                "community_entity_id": "public",
+            },
+        )
+        request.entity = self.viewer
+        force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+        with patch("entity.views.get_blocked_account_ids", return_value=[]):
+            response = EntitySearch.as_view()(request, query="garden")
+        self.assertEqual(
+            {row["entity_id"] for row in response.data["results"]}, {"page"}
+        )
+
+    def test_destinations_require_all_selected_tags_to_be_members(self):
+        Member.objects.bulk_create(
+            [Member(entity_id="page", realm_id="public", added_by=self.viewer)]
+        )
+        for tags, expected in (("page", {"public"}), ("page,server", set())):
+            request = self.factory.get(
+                "/api/realm/communities", {"tagged_entities": tags}
+            )
+            request.entity = self.viewer
+            force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+            with patch(
+                "community.community_views._community_card",
+                side_effect=lambda realm, viewer: {"id": realm.id},
+            ):
+                response = CommunitiesView.as_view()(request)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual({row["id"] for row in response.data["results"]}, expected)
 
     def test_flat_entity_picker_still_excludes_communities_even_when_requested(self):
         for realm_types in ("all", "community", "page,community"):

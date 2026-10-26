@@ -81,13 +81,13 @@ class InviteSerializer(serializers.ModelSerializer):
 
 
 class BasicRealmSerializer(serializers.ModelSerializer):
-
     class Meta:
         model = Realm
         fields = "__all__"
 
 
 class RealmSerializer(serializers.ModelSerializer):
+    request_pending = serializers.BooleanField(read_only=True, default=False)
     followers_count = serializers.IntegerField(read_only=True)
     members = serializers.IntegerField(read_only=True)
     is_member = serializers.BooleanField(read_only=True)

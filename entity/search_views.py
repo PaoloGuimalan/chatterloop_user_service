@@ -48,7 +48,7 @@ from django.db.models import (
 from django.db.models.functions import Coalesce
 
 from bot.models import Bot
-from community.models import Realm, Member
+from community.models import Invite, Realm, Member
 from entity.models import Connection, Follow
 from entity.utils import mutual_count_subquery
 from user.models import Account
@@ -224,8 +224,8 @@ def normalize_person(row, acting_entity_id):
 
 def build_realms_queryset(entity, query, blocked_ids, realm_types):
     """
-    Public pages, servers, groups and communities, plus joined private
-    communities. Channel, conference and voice never surface in search.
+    Public profile realms and private server/community metadata. Private
+    content and rosters retain their separate access checks.
     Annotated with the reach counters the cards
     show and the viewer's own standing (is_follower / is_member) so the
     action button can render Follow/Following vs Open without a second
@@ -247,13 +247,7 @@ def build_realms_queryset(entity, query, blocked_ids, realm_types):
 
     qs = Realm.objects.filter(
         realm_filter,
-        # Match the community directory's audience. Knowing a private profile
-        # URL permits its metadata lookup, but does not make it discoverable.
-        Q(is_private=False)
-        | (
-            Q(type="community")
-            & Q(Exists(Member.objects.filter(realm=OuterRef("pk"), entity=entity)))
-        ),
+        Q(is_private=False) | Q(type__in=("community", "server")),
         is_active=True,
         type__in=effective_types,
     )
@@ -263,6 +257,14 @@ def build_realms_queryset(entity, query, blocked_ids, realm_types):
         .exclude(entity_id__in=blocked_ids)
         .annotate(
             members_count=Count("member", distinct=True),
+            request_pending=Exists(
+                Invite.objects.filter(
+                    realm=OuterRef("pk"),
+                    target_entity=entity,
+                    kind="request",
+                    status="pending",
+                )
+            ),
             followers_count=Count(
                 "entity__followers",
                 filter=Q(entity__followers__status=True),
@@ -301,6 +303,8 @@ def build_realms_queryset(entity, query, blocked_ids, realm_types):
             "profile",
             "is_verified",
             "type",
+            "is_private",
+            "request_pending",
             "members_count",
             "followers_count",
             "is_follower",
@@ -318,6 +322,8 @@ def normalize_realm(row):
         "profile": _clean_profile(row.get("profile")),
         "is_verified": bool(row.get("is_verified")),
         "realm_type": row.get("type"),
+        "is_private": bool(row.get("is_private")),
+        "request_pending": bool(row.get("request_pending")),
         "members_count": row.get("members_count") or 0,
         "followers_count": row.get("followers_count") or 0,
         "is_follower": bool(row.get("is_follower")),

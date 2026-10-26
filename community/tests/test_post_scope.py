@@ -20,6 +20,30 @@ from newsfeed.services.post_visibility import can_view_post, visible_posts_filte
 
 
 class CommunityScopeTests(unittest.TestCase):
+    def test_serialization_reuses_membership_only_within_the_same_request(self):
+        from community.posts import community_metadata
+
+        realm = Realm(id="club", entity_id="club-entity", name="Club")
+        viewer = Entity(id="viewer", type="user")
+        other = Entity(id="other", type="user")
+        cache = {}
+        with patch(
+            "community.posts.is_member", side_effect=[True, False, False]
+        ) as check:
+            self.assertTrue(
+                community_metadata(realm, viewer, membership_cache=cache)["is_member"]
+            )
+            self.assertTrue(
+                community_metadata(realm, viewer, membership_cache=cache)["is_member"]
+            )
+            self.assertFalse(
+                community_metadata(realm, other, membership_cache=cache)["is_member"]
+            )
+            self.assertFalse(
+                community_metadata(realm, viewer, membership_cache={})["is_member"]
+            )
+        self.assertEqual(check.call_count, 3)
+
     def test_own_community_home_posts_require_named_connection_activity(self):
         from community.posts import community_home_filter
 
@@ -370,9 +394,12 @@ class CommunityScopeTests(unittest.TestCase):
             patch("community.posts.community_for_post", return_value=realm),
             patch("community.posts.is_member", return_value=False),
         ):
-            self.assertIs(assert_post_access(
-                Post(), SimpleNamespace(entity=Entity(id="viewer")), contribute=True
-            ), realm)
+            self.assertIs(
+                assert_post_access(
+                    Post(), SimpleNamespace(entity=Entity(id="viewer")), contribute=True
+                ),
+                realm,
+            )
 
     def test_audience_sql_uses_membership_and_community_tag(self):
         sql = str(Post.objects.filter(visible_posts_filter(Entity(id="viewer"))).query)
@@ -433,7 +460,9 @@ class CommunityScopeTests(unittest.TestCase):
 
 
 class CommunityReactionNotificationTests(unittest.TestCase):
-    def test_named_actor_avatar_and_community_identity_survive_anonymous_round_trip(self):
+    def test_named_actor_avatar_and_community_identity_survive_anonymous_round_trip(
+        self,
+    ):
         self.queue_notice("post_reaction")
         self.callbacks.pop()()
         notice = self.store.rows[0]
