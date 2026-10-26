@@ -20,6 +20,65 @@ from newsfeed.services.post_visibility import can_view_post, visible_posts_filte
 
 
 class CommunityScopeTests(unittest.TestCase):
+    def test_own_community_home_posts_require_named_connection_activity(self):
+        from community.posts import community_home_filter
+
+        with sqlite3.connect(":memory:") as db:
+            db.executescript("""
+                CREATE TABLE newsfeed_post (post_id TEXT, entity_id TEXT);
+                CREATE TABLE entity_entity (id TEXT);
+                INSERT INTO entity_entity VALUES ('community');
+                CREATE TABLE newsfeed_posttag (id TEXT, post_id TEXT, entity_id TEXT);
+                CREATE TABLE community_realm (id TEXT, entity_id TEXT, type TEXT);
+                CREATE TABLE newsfeed_comment (
+                    comment_id TEXT, post_id TEXT, entity_id TEXT,
+                    is_anonymous BOOLEAN, deleted_at TEXT
+                );
+                CREATE TABLE newsfeed_reaction (
+                    reaction_id TEXT, post_id TEXT, entity_id TEXT, is_anonymous BOOLEAN
+                );
+                INSERT INTO newsfeed_post VALUES
+                    ('own-community', 'owner'), ('own-timeline', 'owner'),
+                    ('other-community', 'other');
+                INSERT INTO community_realm VALUES ('realm', 'community', 'community');
+                INSERT INTO newsfeed_posttag VALUES
+                    ('tag1', 'own-community', 'community'),
+                    ('tag2', 'other-community', 'community');
+            """)
+            for table, actor, anonymous, deleted, visible in (
+                (None, None, False, None, False),
+                ("comment", "friend", False, None, True),
+                ("reaction", "friend", False, None, True),
+                ("comment", "stranger", False, None, False),
+                ("comment", "friend", True, None, False),
+                ("reaction", "friend", True, None, False),
+                ("comment", "friend", False, "deleted", False),
+            ):
+                with self.subTest(
+                    table=table, actor=actor, anonymous=anonymous, deleted=deleted
+                ):
+                    db.execute("DELETE FROM newsfeed_comment")
+                    db.execute("DELETE FROM newsfeed_reaction")
+                    if table == "comment":
+                        db.execute(
+                            "INSERT INTO newsfeed_comment VALUES (?, ?, ?, ?, ?)",
+                            ("activity", "own-community", actor, anonymous, deleted),
+                        )
+                    elif table == "reaction":
+                        db.execute(
+                            "INSERT INTO newsfeed_reaction VALUES (?, ?, ?, ?)",
+                            ("activity", "own-community", actor, anonymous),
+                        )
+                    query = Post.objects.filter(
+                        community_home_filter("owner", ["friend"])
+                    ).values_list("post_id", flat=True)
+                    sql, params = query.query.sql_with_params()
+                    result = {
+                        row[0] for row in db.execute(sql.replace("%s", "?"), params)
+                    }
+                    self.assertEqual("own-community" in result, visible)
+                    self.assertTrue({"own-timeline", "other-community"} <= result)
+
     def test_only_profile_owner_can_list_their_own_anonymous_posts(self):
         from community import posts
 
@@ -264,14 +323,18 @@ class CommunityScopeTests(unittest.TestCase):
         from community.api_serializers import CommunityCreateSerializer
 
         self.assertFalse(
-            CommunityCreateSerializer(data={"name": "", "is_private": False}).is_valid()
+            CommunityCreateSerializer(
+                data={"name": "", "slug": "readers", "is_private": False}
+            ).is_valid()
         )
         self.assertFalse(
             CommunityCreateSerializer(
-                data={"name": "Readers", "is_private": "false"}
+                data={"name": "Readers", "slug": "readers", "is_private": "false"}
             ).is_valid()
         )
-        valid = CommunityCreateSerializer(data={"name": "Readers", "is_private": True})
+        valid = CommunityCreateSerializer(
+            data={"name": "Readers", "slug": "readers", "is_private": True}
+        )
         self.assertTrue(valid.is_valid())
         self.assertTrue(valid.validated_data["is_private"])
 

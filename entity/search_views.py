@@ -63,11 +63,11 @@ class Pagination(PageNumberPagination):
     page_size_query_param = "page_size"
 
 
-# The only realm kinds search ever surfaces. Channels, conferences and voice
-# rooms are conversation-infrastructure realms, not discoverable communities -
+# The only realm kinds general search surfaces. Channels, conferences and voice
+# rooms are conversation infrastructure rather than directory destinations -
 # they must never leak into search no matter what realm_types a client asks
 # for (the filter below INTERSECTS with this set rather than trusting input).
-PUBLIC_REALM_TYPES = ("page", "server", "group")
+DISCOVERABLE_REALM_TYPES = ("page", "server", "group", "community")
 
 
 def _clean_profile(profile):
@@ -224,8 +224,9 @@ def normalize_person(row, acting_entity_id):
 
 def build_realms_queryset(entity, query, blocked_ids, realm_types):
     """
-    Public realms (page / server / group only - channel, conference and
-    voice never surface in search), annotated with the reach counters the cards
+    Public pages, servers, groups and communities, plus joined private
+    communities. Channel, conference and voice never surface in search.
+    Annotated with the reach counters the cards
     show and the viewer's own standing (is_follower / is_member) so the
     action button can render Follow/Following vs Open without a second
     call. Annotation patterns match TopRealms / FollowRealmView.
@@ -238,17 +239,22 @@ def build_realms_queryset(entity, query, blocked_ids, realm_types):
     else:
         realm_filter = Q(name__icontains=term) | Q(slug__icontains=term)
 
-    # "all" means "all PUBLIC kinds"; explicit lists are intersected with the
-    # public set so channel/conference/voice can't be requested into results.
+    # Explicit lists cannot request conversation infrastructure into results.
     if not realm_types or "all" in realm_types:
-        effective_types = list(PUBLIC_REALM_TYPES)
+        effective_types = list(DISCOVERABLE_REALM_TYPES)
     else:
-        effective_types = [t for t in realm_types if t in PUBLIC_REALM_TYPES]
+        effective_types = [t for t in realm_types if t in DISCOVERABLE_REALM_TYPES]
 
     qs = Realm.objects.filter(
         realm_filter,
+        # Match the community directory's audience. Knowing a private profile
+        # URL permits its metadata lookup, but does not make it discoverable.
+        Q(is_private=False)
+        | (
+            Q(type="community")
+            & Q(Exists(Member.objects.filter(realm=OuterRef("pk"), entity=entity)))
+        ),
         is_active=True,
-        is_private=False,
         type__in=effective_types,
     )
 
@@ -438,7 +444,7 @@ class SearchRealmsV2(APIView):
     GET /api/entity/search/v2/realms/<query>/?page=&page_size=&realm_types=all
     Paginated - drives the Realms "See all" infinite scroll. realm_types is
     a comma list of Realm.type values, or "all" (the default - the redesign
-    surfaces servers, groups and pages alike).
+    surfaces communities, servers, groups and pages alike).
     """
 
     permission_classes = [IsAuthenticated]

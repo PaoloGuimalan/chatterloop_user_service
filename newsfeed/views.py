@@ -108,6 +108,7 @@ from newsfeed.services.content_tagging import queue_comment
 from newsfeed.services.post_visibility import visible_posts_filter, can_view_post
 from community.post_access import CommunityPostAccessMixin
 from community.posts import (
+    community_home_filter,
     community_for_post,
     assert_anonymous_upload,
     assert_removable_tag,
@@ -301,6 +302,7 @@ class NewsfeedView(CommunityPostAccessMixin, APIView):
                 )
                 .filter(
                     visible_posts_filter(entity),
+                    community_home_filter(entity.id, connections_list),
                     # Moments and thoughts fan out into the same buckets; the
                     # kind list is what decides whether this feed serves them.
                     live_kinds_filter(

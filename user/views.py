@@ -381,7 +381,9 @@ class UserAuthentication(APIView):
             if transaction_type and transaction_type == "manage":
                 query_filter = Q(realm_id=username)
             else:
-                query_filter = Q(slug=username)
+                # A community may have no slug; its canonical profile then
+                # uses the realm ID. Other realm kinds keep their slug route.
+                query_filter = Q(slug=username) | Q(type="community", realm_id=username)
 
             realm_queryset = get_object_or_404(
                 Realm.objects.annotate(

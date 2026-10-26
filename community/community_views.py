@@ -92,12 +92,11 @@ class CommunitiesView(APIView):
         serializer = CommunityCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         fields = dict(serializer.validated_data)
-        slug = fields.pop("slug", None) or None
-        if slug:
-            try:
-                validate_profile_path(slug, "slug")
-            except ProfilePathError as exc:
-                return Response(exc.payload, status=400)
+        slug = fields.pop("slug")
+        try:
+            validate_profile_path(slug, "slug")
+        except ProfilePathError as exc:
+            return Response(exc.payload, status=400)
         with transaction.atomic():
             destination = Entity.objects.create(type="realm")
             realm = Realm.objects.create(
