@@ -48,6 +48,8 @@ class NotificationService:
         target_anchor=None,
         redirects=None,
         actions=None,
+        community_entity_id=None,
+        is_anonymous=None,
     ):
         """
         ``target_*`` describe where the CLIENT should go when the row is tapped,
@@ -112,6 +114,8 @@ class NotificationService:
             referenceStatus=referenceStatus,
             toUserID=toUserID,
             fromUserID=fromUserID,
+            community_entity_id=community_entity_id,
+            is_anonymous=is_anonymous,
             content=content,
             date=date,
             type=type,
@@ -136,6 +140,8 @@ class NotificationService:
         target_type,
         target_id,
         target_anchor=None,
+        community_entity_id=None,
+        is_anonymous=None,
     ):
         """Replace one community reaction projection, including legacy duplicates.
 
@@ -146,18 +152,22 @@ class NotificationService:
         scope = {
             "referenceID": str(referenceID),
             "toUserID": str(toUserID),
-            "fromUserID": str(fromUserID),
             "type": type,
         }
+        community_id = str(community_entity_id or fromUserID)
         notification_id = "NTF_community_" + str(
             uuid.uuid5(
                 uuid.NAMESPACE_URL,
                 json.dumps(
-                    [scope["fromUserID"], scope["referenceID"], scope["toUserID"], type]
+                    [community_id, scope["referenceID"], scope["toUserID"], type]
                 ),
             )
         )
-        existing = list(Notification.objects(**scope))
+        existing = [
+            row for row in Notification.objects(**scope)
+            if row.community_entity_id == community_id
+            or (not row.community_entity_id and row.fromUserID in {community_id, str(fromUserID)})
+        ]
         active = [row for row in existing if row.referenceStatus]
         is_read = bool(active) and all(row.isRead for row in active)
         date = (
@@ -175,6 +185,8 @@ class NotificationService:
             set__type=type,
             set__referenceStatus=True,
             set__fromUserID=str(fromUserID),
+            set__community_entity_id=community_id,
+            set__is_anonymous=is_anonymous,
             set__content=Content(headline=content_headline, details=content_details),
             set__target=NotificationTarget(
                 type=target_type,
@@ -186,9 +198,9 @@ class NotificationService:
         )
         # Never delete by reference alone: mentions and other recipients may
         # share it. All surviving content is the current safe projection.
-        Notification.objects(**scope).filter(
-            notificationID__ne=notification_id
-        ).delete()
+        for row in existing:
+            if row.notificationID != notification_id:
+                Notification.objects(notificationID=row.notificationID).delete()
 
     def update_reference_status(self, connection_id, new_status):
         result = Notification.objects(referenceID=connection_id).update(

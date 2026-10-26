@@ -141,6 +141,10 @@ class Notification(Document):
     referenceStatus = BooleanField(default=False)
     toUserID = StringField(required=True)
     fromUserID = StringField(required=True)
+    # Community identity is independent of the named sender. Anonymous notices
+    # store only the community as sender, never a private actor id.
+    community_entity_id = StringField(default=None)
+    is_anonymous = BooleanField(default=None)
     content = EmbeddedDocumentField(Content, required=True)
     date = EmbeddedDocumentField(DateInfo, required=True)
     type = StringField(required=True)

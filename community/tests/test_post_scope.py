@@ -421,6 +421,29 @@ class CommunityScopeTests(unittest.TestCase):
 
 
 class CommunityReactionNotificationTests(unittest.TestCase):
+    def test_named_actor_avatar_and_community_identity_survive_anonymous_round_trip(self):
+        self.queue_notice("post_reaction")
+        self.callbacks.pop()()
+        notice = self.store.rows[0]
+        original_id = notice.notificationID
+        self.assertEqual(notice.fromUserID, "actor")
+        self.assertEqual(notice.community_entity_id, "community")
+        self.assertFalse(notice.is_anonymous)
+        notice.isRead = True
+        self.reaction.is_anonymous = True
+        self.queue_notice("post_reaction", is_anonymous=True)
+        self.callbacks.pop()()
+        self.assertEqual(len(self.store.rows), 1)
+        self.assertEqual(self.store.rows[0].fromUserID, "community")
+        self.assertTrue(self.store.rows[0].is_anonymous)
+        self.reaction.is_anonymous = False
+        self.queue_notice("post_reaction")
+        self.callbacks.pop()()
+        self.assertEqual(len(self.store.rows), 1)
+        self.assertEqual(self.store.rows[0].notificationID, original_id)
+        self.assertEqual(self.store.rows[0].fromUserID, "actor")
+        self.assertTrue(self.store.rows[0].isRead)
+
     def setUp(self):
         from community.notifications import notify_community_activity
         from community.tests.notification_memory import NotificationMemory

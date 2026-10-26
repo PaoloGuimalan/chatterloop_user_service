@@ -115,6 +115,7 @@ from community.posts import (
     request_anonymity,
     viewer_reaction_identity_annotations,
     profile_anonymity_filter,
+    can_read_community,
 )
 from community.notifications import notify_community_activity
 from newsfeed.services.post_kinds import (
@@ -146,7 +147,7 @@ class NewsfeedView(CommunityPostAccessMixin, APIView):
     pagination_class = Pagination
 
     @staticmethod
-    def _resolve_feed_reasons(feed_rows, viewer_entity):
+    def _resolve_feed_reasons(feed_rows, viewer_entity, *, posts=None, connection_ids=None):
         """
         Turn the raw Cassandra rows into the `feed_reason` each post carries.
 
@@ -180,6 +181,46 @@ class NewsfeedView(CommunityPostAccessMixin, APIView):
             and str(triggered_by) != str(viewer_entity.id)
         }
 
+        if not wanted:
+            return {}
+
+        # Cassandra reasons outlive comment edits/deletes and membership
+        # changes. Validate the caption against current stored activity before
+        # resolving an actor's identity. Reuse the already authorized Home page.
+        if posts is None:
+            posts = Post.objects.filter(
+                visible_posts_filter(viewer_entity), post_id__in=wanted,
+                deleted_at=None,
+            ).prefetch_related("tagging__entity__realms")
+        post_map = {str(post.pk): post for post in posts}
+        if connection_ids is None:
+            connection_ids = ConnectionHelpers(viewer_entity).get_connections()
+        connections = {str(entity_id) for entity_id in connection_ids}
+        named_comments = {
+            (str(post_id), str(actor_id))
+            for post_id, actor_id in Comment.objects.filter(
+                post_id__in=[pid for pid, (kind, _) in wanted.items() if kind == "comment"],
+                entity_id__in=[actor for kind, actor in wanted.values() if kind == "comment"],
+                is_anonymous=False, deleted_at=None,
+            ).values_list("post_id", "entity_id")
+        }
+        safe = {}
+        for post_id, reason in wanted.items():
+            post = post_map.get(str(post_id))
+            if post is None:
+                continue
+            row_type, actor_id = reason
+            if row_type == "comment" and (str(post_id), actor_id) not in named_comments:
+                continue
+            community = community_for_post(post)
+            if community is not None and (
+                row_type != "comment"
+                or actor_id not in connections
+                or not can_read_community(community, viewer_entity)
+            ):
+                continue
+            safe[post_id] = reason
+        wanted = safe
         if not wanted:
             return {}
 
@@ -326,12 +367,17 @@ class NewsfeedView(CommunityPostAccessMixin, APIView):
                 )
             )
 
+            feed_reasons = self._resolve_feed_reasons(
+                feed_rows, entity, posts=hydrated_posts,
+                connection_ids=connections_list,
+            )
             serialized_result = PostSerializer(
                 hydrated_posts,
                 many=True,
                 context={
                     "request": request,
-                    "feed_reasons": self._resolve_feed_reasons(feed_rows, entity),
+                    "feed_reasons": feed_reasons,
+                    "validated_community_comment_reasons": feed_reasons,
                 },
             )
 

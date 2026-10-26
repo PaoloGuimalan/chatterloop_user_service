@@ -51,10 +51,19 @@ class CommunityContributionMixin:
             data["entity_reaction_is_anonymous"] = viewer_reaction_identity(
                 instance, reaction_viewer
             )
-        # A comment fanout row can predate the anonymity setting. Community
-        # cards rely on destination metadata rather than social actor captions.
+        # NewsfeedView revalidates named social reasons against current
+        # comments and connections. Destination metadata is independent.
         if isinstance(instance, Post) and community is not None:
-            data["feed_reason"] = None
+            # Anonymous post authors stay masked. A separately named commenter
+            # may still explain the card, only after current activity checks.
+            reason = self.context.get("validated_community_comment_reasons", {}).get(str(instance.pk))
+            if (
+                instance.is_anonymous
+                and reason
+                and reason.get("type") == "comment"
+                and str(reason.get("entity", {}).get("id")) != str(instance.entity_id)
+            ):
+                data["feed_reason"] = reason
             data["community"] = community_metadata(community, viewer)
         return data
 

@@ -13,12 +13,15 @@ logger = logging.getLogger(__name__)
 
 
 def notification_description(
-    *, community_entity_id, actor_name, is_anonymous, verb, post_id, anchor=None
+    *, community_entity_id, actor_name, is_anonymous, verb, post_id, anchor=None,
+    actor_entity_id=None,
 ):
     """Public notification data; ownership is deliberately absent."""
     subject = "An anonymous member" if is_anonymous else actor_name
     return {
-        "fromUserID": str(community_entity_id),
+        "fromUserID": str(community_entity_id if is_anonymous or not actor_entity_id else actor_entity_id),
+        "community_entity_id": str(community_entity_id),
+        "is_anonymous": bool(is_anonymous),
         "content_details": f"{subject} {verb} in your community.",
         "target_type": "post",
         "target_id": str(post_id),
@@ -89,6 +92,7 @@ def notify_community_activity(
             description = notification_description(
                 community_entity_id=realm.entity_id,
                 actor_name=actor_name,
+                actor_entity_id=actor.pk,
                 is_anonymous=anonymous,
                 verb=verb,
                 post_id=post_id,

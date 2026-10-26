@@ -233,13 +233,22 @@ class MyRealms(APIView):
 
             if fields:
                 if realm.type == "community":
+                    if (
+                        isinstance(fields, dict)
+                        and {"profile", "cover_photo"} & fields.keys()
+                    ):
+                        return Response(
+                            {
+                                "status": False,
+                                "message": "Use media upload to update community photos",
+                            },
+                            status=400,
+                        )
                     allowed = {
                         "name",
                         "description",
                         "slug",
                         "is_private",
-                        "profile",
-                        "cover_photo",
                         "is_active",
                     }
                     if not isinstance(fields, dict) or set(fields) - allowed:
