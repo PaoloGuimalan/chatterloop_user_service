@@ -3,8 +3,8 @@
 from django.db.models import BooleanField, Count, Exists, OuterRef, Q, Subquery, Value
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 
-from community.models import Member, Realm
-from community.post_policy import can_contribute, can_read, validate_anonymity
+from community.models import Member
+from community.post_policy import can_interact, can_read, validate_anonymity
 
 
 def community_for_post(post):
@@ -148,8 +148,13 @@ def assert_post_access(post, request, *, contribute=False):
     if (
         realm is not None
         and contribute
-        and not can_contribute(
-            is_member=is_member(realm, viewer), is_active=realm.is_active
+        and (
+            viewer is None
+            or not can_interact(
+                is_private=realm.is_private,
+                is_member=is_member(realm, viewer),
+                is_active=realm.is_active,
+            )
         )
     ):
         raise PermissionDenied("Join this community before contributing")

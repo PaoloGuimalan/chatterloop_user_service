@@ -30,6 +30,15 @@ class CommunityPolicyTests(unittest.TestCase):
         self.assertTrue(policy.can_contribute(is_member=True))
         self.assertFalse(policy.can_contribute(is_member=True, is_active=False))
 
+    def test_public_nonmembers_can_interact_but_not_publish(self):
+        self.assertTrue(policy.can_interact(is_private=False, is_member=False))
+        self.assertFalse(policy.can_contribute(is_member=False))
+        self.assertFalse(policy.can_interact(is_private=True, is_member=False))
+        self.assertTrue(policy.can_interact(is_private=True, is_member=True))
+        self.assertFalse(
+            policy.can_interact(is_private=False, is_member=True, is_active=False)
+        )
+
     def test_anonymity_rejects_strings_numbers_and_null(self):
         self.assertTrue(callable(getattr(policy, "validate_anonymity", None)))
         for value in ("true", "false", 0, 1, None, [], {}):

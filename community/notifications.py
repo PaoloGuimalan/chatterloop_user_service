@@ -13,16 +13,33 @@ logger = logging.getLogger(__name__)
 
 
 def notification_description(
-    *, community_entity_id, actor_name, is_anonymous, verb, post_id, anchor=None,
+    *,
+    community_entity_id,
+    actor_name,
+    is_anonymous,
+    verb,
+    post_id,
+    anchor=None,
     actor_entity_id=None,
+    post_author_id=None,
+    recipient_id=None,
 ):
     """Public notification data; ownership is deliberately absent."""
     subject = "An anonymous member" if is_anonymous else actor_name
+    post_label = (
+        "your post"
+        if recipient_id is None or str(recipient_id) == str(post_author_id)
+        else "a post"
+    )
     return {
-        "fromUserID": str(community_entity_id if is_anonymous or not actor_entity_id else actor_entity_id),
+        "fromUserID": str(
+            community_entity_id
+            if is_anonymous or not actor_entity_id
+            else actor_entity_id
+        ),
         "community_entity_id": str(community_entity_id),
         "is_anonymous": bool(is_anonymous),
-        "content_details": f"{subject} {verb} in your community.",
+        "content_details": f"{subject} {verb} on {post_label} in the community.",
         "target_type": "post",
         "target_id": str(post_id),
         "target_anchor": anchor,
@@ -89,16 +106,18 @@ def notify_community_activity(
                 "community_entity_id": str(realm.entity_id),
                 "is_anonymous": bool(anonymous),
             }
-            description = notification_description(
-                community_entity_id=realm.entity_id,
-                actor_name=actor_name,
-                actor_entity_id=actor.pk,
-                is_anonymous=anonymous,
-                verb=verb,
-                post_id=post_id,
-                anchor=anchor,
-            )
             for recipient_id in set(map(str, members)):
+                description = notification_description(
+                    community_entity_id=realm.entity_id,
+                    actor_name=actor_name,
+                    actor_entity_id=actor.pk,
+                    is_anonymous=anonymous,
+                    verb=verb,
+                    post_id=post_id,
+                    anchor=anchor,
+                    post_author_id=current.entity_id,
+                    recipient_id=recipient_id,
+                )
                 service = NotificationService()
                 notification = dict(
                     referenceID=str(reference_id),

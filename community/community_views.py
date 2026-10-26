@@ -5,7 +5,7 @@ from django.db.models import Count, Exists, OuterRef, Q, Subquery
 from django.shortcuts import get_object_or_404
 from django.utils.timezone import now
 from rest_framework.exceptions import PermissionDenied, ValidationError
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -69,7 +69,7 @@ class CommunitiesView(APIView):
         from community.views import Pagination
 
         viewer = request.entity
-        queryset = _communities_for(viewer).filter(Q(is_private=False) | Q(joined=True))
+        queryset = _communities_for(viewer)
         query = request.query_params.get("search", "").strip()
         if query:
             queryset = queryset.filter(
@@ -125,18 +125,22 @@ class CommunitiesView(APIView):
 
 
 class CommunityDetailView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
+
+    def get_authenticators(self):
+        if not self.request.headers.get("x-access-token"):
+            return []
+        return super().get_authenticators()
 
     def get(self, request, realm_id):
         # Private metadata supports the join-request screen. Content and the
         # member roster retain their independent audience checks.
+        viewer = getattr(request, "entity", None)
         realm = get_object_or_404(
-            _communities_for(request.entity),
+            _communities_for(viewer),
             Q(pk=realm_id) | Q(slug=realm_id) | Q(entity_id=realm_id),
         )
-        return Response(
-            {"status": True, "result": _community_card(realm, request.entity)}
-        )
+        return Response({"status": True, "result": _community_card(realm, viewer)})
 
 
 class CommunityJoinView(APIView):
@@ -177,7 +181,7 @@ class CommunityLeaveView(APIView):
             member = Member.objects.filter(realm=realm, entity=request.entity).first()
             if member is not None and member.role == MemberRole.OWNER:
                 raise ValidationError(
-                    {"realm_id": "Transfer ownership before leaving this community"}
+                    "Transfer ownership before leaving this community."
                 )
             if member is not None:
                 member.delete()

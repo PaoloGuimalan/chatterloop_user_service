@@ -351,7 +351,7 @@ class CommunityScopeTests(unittest.TestCase):
     def test_private_contribution_without_membership_is_denied(self):
         from community.posts import assert_post_access
 
-        realm = Realm(id="realm", type="community", is_private=False)
+        realm = Realm(id="realm", type="community", is_private=True)
         with (
             patch("community.posts.community_for_post", return_value=realm),
             patch("community.posts.is_member", return_value=False),
@@ -360,7 +360,19 @@ class CommunityScopeTests(unittest.TestCase):
                 assert_post_access(
                     Post(), SimpleNamespace(entity=Entity(id="viewer")), contribute=True
                 )
-            self.assertEqual(error.exception.status_code, 403)
+            self.assertEqual(error.exception.status_code, 404)
+
+    def test_public_nonmember_can_comment_or_react(self):
+        from community.posts import assert_post_access
+
+        realm = Realm(id="realm", type="community", is_private=False)
+        with (
+            patch("community.posts.community_for_post", return_value=realm),
+            patch("community.posts.is_member", return_value=False),
+        ):
+            self.assertIs(assert_post_access(
+                Post(), SimpleNamespace(entity=Entity(id="viewer")), contribute=True
+            ), realm)
 
     def test_audience_sql_uses_membership_and_community_tag(self):
         sql = str(Post.objects.filter(visible_posts_filter(Entity(id="viewer"))).query)
@@ -549,7 +561,7 @@ class CommunityReactionNotificationTests(unittest.TestCase):
                 self.assertEqual(notice.notificationID, original_id)
                 self.assertEqual(
                     notice.content.details,
-                    "An anonymous member reacted in your community.",
+                    "An anonymous member reacted on your post in the community.",
                 )
                 self.assertEqual(notice.fromUserID, "community")
                 self.assertEqual(notice.isRead, already_read)

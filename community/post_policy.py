@@ -9,6 +9,11 @@ def can_contribute(*, is_member, is_active=True):
     return bool(is_active and is_member)
 
 
+def can_interact(*, is_private, is_member, is_active=True):
+    """Public readers may comment/react; publishing still requires membership."""
+    return bool(is_active and (not is_private or is_member))
+
+
 def validate_anonymity(value, *, is_community):
     if type(value) is not bool:
         raise ValueError("is_anonymous must be true or false")
