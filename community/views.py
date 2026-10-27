@@ -1187,6 +1187,10 @@ class InviteView(APIView):
 
         if realm.type == "community":
             transaction.on_commit(lambda: self._notify_requests_changed(realm))
+            if pending is None:
+                from community.admin_notifications import notify_join_request
+
+                transaction.on_commit(lambda: notify_join_request(invite))
         else:
             self._notify_requests_changed(realm)
         return Response(
@@ -1486,6 +1490,12 @@ class InviteView(APIView):
                 "declined",
                 "revoked",
             }:
+                if invite.realm.type == "community":
+                    from community.admin_notifications import settle_join_requests
+
+                    transaction.on_commit(
+                        lambda: settle_join_requests([str(invite.pk)])
+                    )
                 transaction.on_commit(
                     lambda: self._notify_requests_changed(invite.realm)
                 )

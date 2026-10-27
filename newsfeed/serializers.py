@@ -165,7 +165,12 @@ class PostSerializer(CommunityContributionMixin, serializers.ModelSerializer):
 
     def get_link_preview(self, obj):
         url = extract_first_url(obj.caption or "")
-        return get_preview(url) if url else None
+        if not url:
+            return None
+        previews = self.context.setdefault("post_link_previews", {})
+        if url not in previews:
+            previews[url] = get_preview(url)
+        return previews[url]
 
     def get_feed_reason(self, obj):
         """

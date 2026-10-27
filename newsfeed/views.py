@@ -57,6 +57,7 @@ from user.services.connections import ConnectionHelpers
 from user.services.mongohelpers import NotificationService
 from .drf_permissions import AllowsInternalService
 from .services.link_preview import extract_first_url, get_preview, fetch_image
+from .services.post_cards import load_post_cards
 from .services.comment_mentions import (
     comment_push_route,
     extract_mention_handles,
@@ -305,14 +306,7 @@ class NewsfeedView(CommunityPostAccessMixin, APIView):
                     RedisPubSubClient.update_feed_mode(entity.id, current_mode)
 
             hydrated_posts = (
-                Post.objects.select_related("entity", "score")
-                .prefetch_related(
-                    "tagging__entity__realms",
-                    "privacy_users",
-                    "references",
-                    "map_info",
-                    "preview",
-                )
+                load_post_cards(Post.objects.all())
                 .annotate(
                     is_friend=Case(
                         When(
@@ -381,8 +375,9 @@ class NewsfeedView(CommunityPostAccessMixin, APIView):
                 },
             )
 
-            is_page_matched = len(serialized_result.data) == len(candidate_post_ids)
-            will_still_paginate = len(serialized_result.data) == int(page_size)
+            results = serialized_result.data
+            is_page_matched = len(results) == len(candidate_post_ids)
+            will_still_paginate = len(results) == int(page_size)
             is_next = will_still_paginate if is_page_matched else None
 
             return Response(
@@ -390,7 +385,7 @@ class NewsfeedView(CommunityPostAccessMixin, APIView):
                     "count": len(candidate_post_ids),
                     "next": is_next,
                     "previous": None,
-                    "results": serialized_result.data,
+                    "results": results,
                 }
             )
         except Exception as e:
@@ -569,14 +564,7 @@ class NewsfeedProfileView(CommunityPostAccessMixin, APIView):
                 profile_filter = Q(entity=entity)
 
             queryset = (
-                Post.objects.select_related("entity", "score")
-                .prefetch_related(
-                    "tagging__entity__realms",
-                    "privacy_users",
-                    "references",
-                    "map_info",
-                    "preview",
-                )
+                load_post_cards(Post.objects.all())
                 .filter(profile_filter)
                 .annotate(
                     is_saved=Exists(
@@ -648,14 +636,7 @@ class NewsfeedPostPreviewView(CommunityPostAccessMixin, APIView):
             ).values("emoji_id")[:1]
 
             queryset = (
-                Post.objects.select_related("entity", "score")
-                .prefetch_related(
-                    "tagging__entity__realms",
-                    "privacy_users",
-                    "references",
-                    "map_info",
-                    "preview",
-                )
+                load_post_cards(Post.objects.all())
                 .annotate(
                     is_saved=Exists(
                         PostSave.objects.filter(post=OuterRef("pk"), entity=entity)
@@ -692,17 +673,15 @@ class NewsfeedPostPreviewView(CommunityPostAccessMixin, APIView):
                 )
 
             serialized_result = PostSerializer(queryset, context={"request": request})
+            result = serialized_result.data
 
-            if (
-                serialized_result.data["deleted_at"]
-                or serialized_result.data["is_archived"]
-            ):
+            if result["deleted_at"] or result["is_archived"]:
                 return Response(
-                    {**serialized_result.data, "caption": "", "references": []},
+                    {**result, "caption": "", "references": []},
                     status=status.HTTP_200_OK,
                 )
             else:
-                return Response(serialized_result.data, status=status.HTTP_200_OK)
+                return Response(result, status=status.HTTP_200_OK)
         except Exception as e:
             logger.exception("NewsfeedPostPreviewView.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)

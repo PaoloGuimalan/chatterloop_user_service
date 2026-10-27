@@ -145,6 +145,8 @@ class Notification(Document):
     # store only the community as sender, never a private actor id.
     community_entity_id = StringField(default=None)
     is_anonymous = BooleanField(default=None)
+    activity_count = IntField(default=0, min_value=0)
+    activity_revision = IntField(default=0, min_value=0)
     content = EmbeddedDocumentField(Content, required=True)
     date = EmbeddedDocumentField(DateInfo, required=True)
     type = StringField(required=True)

@@ -2,6 +2,7 @@
 
 from user.ext_models.mongomodels import Notification
 from mongoengine.queryset import transform
+from types import SimpleNamespace
 
 
 class NotificationMemory:
@@ -23,16 +24,52 @@ class NotificationQuery:
     def __init__(self, store, query):
         self.store = store
         self.query = query
+        self.ordering = ()
+        self.offset = 0
+        self.maximum = None
 
     def __iter__(self):
-        for row in list(self.store.rows):
-            if all(
-                (getattr(row, key[:-4]) != value)
-                if key.endswith("__ne")
-                else getattr(row, key) == value
-                for key, value in self.query.items()
-            ):
-                yield row
+        rows = [
+            row
+            for row in list(self.store.rows)
+            if all(self.matches(row, key, value) for key, value in self.query.items())
+        ]
+        for field in reversed(self.ordering):
+            rows.sort(
+                key=lambda row: str(self.field(row, field.lstrip("-")) or ""),
+                reverse=field.startswith("-"),
+            )
+        stop = None if self.maximum is None else self.offset + self.maximum
+        yield from rows[self.offset : stop]
+
+    @staticmethod
+    def field(row, path):
+        for key in path.split("__"):
+            row = getattr(row, key, None)
+        return row
+
+    @classmethod
+    def matches(cls, row, key, value):
+        if key.endswith("__ne"):
+            return cls.field(row, key[:-4]) != value
+        if key.endswith("__in"):
+            return cls.field(row, key[:-4]) in value
+        return cls.field(row, key) == value
+
+    def order_by(self, *fields):
+        self.ordering = fields
+        return self
+
+    def skip(self, count):
+        self.offset = count
+        return self
+
+    def limit(self, count):
+        self.maximum = count
+        return self
+
+    def count(self):
+        return len(list(self))
 
     def first(self):
         return next(iter(self), None)
@@ -40,7 +77,7 @@ class NotificationQuery:
     def filter(self, **query):
         return NotificationQuery(self.store, {**self.query, **query})
 
-    def update_one(self, upsert=False, **updates):
+    def update_one(self, upsert=False, full_result=False, **updates):
         row = self.first()
         inserted = row is None
         if inserted:
@@ -49,7 +86,11 @@ class NotificationQuery:
             row = Notification(**self.query)
             self.store.rows.append(row)
         self._update(row, updates, inserted)
-        return 1
+        return (
+            SimpleNamespace(upserted_id="inserted" if inserted else None)
+            if full_result
+            else 1
+        )
 
     def update(self, **updates):
         rows = list(self)
@@ -60,6 +101,16 @@ class NotificationQuery:
     @staticmethod
     def _update(row, updates, inserted):
         # Validate the real field/operator serialization without a Mongo client.
+        if "__raw__" in updates:
+            for stage in updates["__raw__"]:
+                transform.update(Notification, __raw__=stage)
+                values = {
+                    key: NotificationQuery.expression(row, value)
+                    for key, value in stage["$set"].items()
+                }
+                for key, value in values.items():
+                    setattr(row, key, Notification._fields[key].to_python(value))
+            return
         transform.update(Notification, **updates)
         for operation, value in updates.items():
             kind, field = operation.split("__", 1)
@@ -68,6 +119,26 @@ class NotificationQuery:
             else:
                 if kind != "set_on_insert":
                     raise AssertionError(f"Unsupported update: {operation}")
+
+    @classmethod
+    def expression(cls, row, value):
+        if isinstance(value, str) and value.startswith("$"):
+            return getattr(row, value[1:], None)
+        if not isinstance(value, dict):
+            return value
+        if "$literal" in value:
+            return value["$literal"]
+        operation, arguments = next(iter(value.items()))
+        args = [cls.expression(row, item) for item in arguments]
+        if operation == "$ifNull":
+            return args[0] if args[0] is not None else args[1]
+        if operation == "$add":
+            return sum(args)
+        if operation == "$eq":
+            return args[0] == args[1]
+        if operation == "$cond":
+            return args[1] if args[0] else args[2]
+        raise AssertionError(f"Unsupported expression: {operation}")
 
     def delete(self):
         rows = list(self)

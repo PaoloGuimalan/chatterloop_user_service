@@ -98,6 +98,39 @@ def notify_community_activity(
                     return
                 anonymous = reaction.is_anonymous
             actor_name = "" if anonymous else get_entity_display_username(actor)
+            if (
+                str(current.entity_id) == str(realm.entity_id)
+                and current.from_system
+                and (current.details or {}).get("community_media_update") is True
+                and notification_type in {"post_comment", "post_reaction", "comment_reaction"}
+            ):
+                from community.admin_notifications import record_admin_activity
+
+                # Community-authored posts have a management inbox rather than
+                # a switchable author account. Store the safe projection once;
+                # personal managers receive only its coalesced activity count.
+                description = notification_description(
+                    community_entity_id=realm.entity_id,
+                    actor_name=actor_name,
+                    actor_entity_id=actor.pk,
+                    is_anonymous=anonymous,
+                    verb=verb,
+                    post_id=post_id,
+                    anchor=anchor,
+                    post_author_id=current.entity_id,
+                    recipient_id=realm.entity_id,
+                )
+                record_admin_activity(
+                    realm,
+                    dict(
+                        referenceID=str(reference_id),
+                        toUserID=str(realm.entity_id),
+                        content_headline=headline,
+                        type=notification_type,
+                        **description,
+                    ),
+                    actor_id=actor.pk,
+                )
             members = Member.objects.filter(
                 realm=realm, entity_id__in=recipient_ids
             ).values_list("entity_id", flat=True)

@@ -206,15 +206,19 @@ class CommunityLeaveView(APIView):
             if not cancel_only and member is not None:
                 member.delete()
                 _notify_membership_changed(realm, request.entity)
-            cancelled = Invite.objects.filter(
+            pending_requests = Invite.objects.filter(
                 realm=realm,
                 target_entity=request.entity,
                 kind="request",
                 status="pending",
-            ).update(status="revoked", resolved_at=now())
+            )
+            request_ids = list(pending_requests.values_list("pk", flat=True))
+            cancelled = pending_requests.update(status="revoked", resolved_at=now())
             if cancelled:
                 from community.views import InviteView
+                from community.admin_notifications import settle_join_requests
 
+                transaction.on_commit(lambda: settle_join_requests(request_ids))
                 transaction.on_commit(
                     lambda: InviteView()._notify_requests_changed(realm)
                 )

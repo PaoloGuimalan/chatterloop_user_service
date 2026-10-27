@@ -98,6 +98,7 @@ class MembershipRefreshTests(unittest.TestCase):
                 entity = Entity(id="requester", type="user")
                 realm = SimpleNamespace(type="community", realm_id="club")
                 invite = SimpleNamespace(
+                    pk="request",
                     kind="request",
                     status="pending",
                     realm=realm,
@@ -126,8 +127,12 @@ class MembershipRefreshTests(unittest.TestCase):
                     patch.object(InviteView, "_notify_requests_changed") as requests,
                     patch.object(InviteView, "_notify_members_changed") as members,
                     patch.object(InviteView, "_notify_access_changed"),
+                    patch(
+                        "community.admin_notifications.settle_join_requests"
+                    ) as settle,
                 ):
                     response = InviteView.as_view()(request)
                 self.assertEqual(response.status_code, 200)
                 requests.assert_called_once_with(realm)
                 self.assertEqual(members.call_count, 1 if status == "accepted" else 0)
+                settle.assert_called_once_with(["request"])

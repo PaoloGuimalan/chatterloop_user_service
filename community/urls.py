@@ -3,6 +3,7 @@ from django.urls import re_path, path
 from rest_framework import routers
 
 from community import views
+from community.admin_notifications import CommunityNotificationsView
 from community.community_views import (
     CommunitiesView,
     CommunityDetailView,
@@ -16,6 +17,16 @@ app_name = "community"
 
 urlpatterns = [
     path("communities", CommunitiesView.as_view(), name="communities"),
+    path(
+        "communities/<str:realm_id>/notifications",
+        CommunityNotificationsView.as_view(),
+        name="community-notifications",
+    ),
+    path(
+        "communities/<str:realm_id>/notifications/read",
+        CommunityNotificationsView.as_view(),
+        name="community-notifications-read",
+    ),
     path(
         "communities/<str:realm_id>",
         CommunityDetailView.as_view(),
