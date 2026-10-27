@@ -53,6 +53,8 @@ class NotificationQuery:
     def matches(cls, row, key, value):
         if key.endswith("__ne"):
             return cls.field(row, key[:-4]) != value
+        if key.endswith("__lte"):
+            return cls.field(row, key[:-5]) <= value
         if key.endswith("__in"):
             return cls.field(row, key[:-4]) in value
         return cls.field(row, key) == value

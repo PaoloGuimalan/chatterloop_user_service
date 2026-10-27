@@ -2,7 +2,7 @@
 
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
@@ -14,14 +14,13 @@ from rest_framework.views import APIView
 from rest_framework.utils.urls import replace_query_param
 
 from community.models import Invite, Member, Realm
+from entity.models import Entity
 from entity.permissions import Permission
 from entity.serializers import EntitySerializer
 from entity.services.permission_resolver import has_permission
 from entity.utils import get_entity_display_username, get_entity_name
 from newsfeed.models import Comment, CommentReaction, Post, Reaction
 from user.ext_models.mongomodels import (
-    CommunityAdminDelivery,
-    CommunityAdminReceipt,
     Content,
     DateInfo,
     Notification,
@@ -32,6 +31,9 @@ from user_service.services.redis import RedisPubSubClient
 logger = logging.getLogger(__name__)
 JOIN_REQUEST = "community_join_request"
 ADMIN_ACTIVITY = "community_admin_activity"
+ADMIN_INBOX = "community_admin_inbox"
+PREVIEW_HEADLINE = "Community activity preview"
+PREVIEW_COOLDOWN_SECONDS = 5 * 60
 INBOX_TYPES = (JOIN_REQUEST, "post_comment", "post_reaction", "comment_reaction")
 MANAGER_ROLES = ("owner", "admin", "moderator")
 
@@ -118,8 +120,8 @@ def _upsert_notice(**notice):
     )
     updates = {f"set__{key}": value for key, value in fields.items()}
     updates.update(
-        set_on_insert__date=DateInfo(date=datetime.now().astimezone().isoformat()),
-        set_on_insert__isRead=False,
+        set_on_insert__date=DateInfo(date=_timestamp()),
+        set_on_insert__isRead=notice.get("isRead", False),
     )
     try:
         result = Notification.objects(notificationID=notification_id).update_one(
@@ -128,50 +130,83 @@ def _upsert_notice(**notice):
         return result.upserted_id is not None
     except NotUniqueError:
         # A competing first delivery won the unique notificationID. Refresh
-        # its safe projection, but do not increment the summary a second time.
+        # its safe projection, but do not create a second inbox entry.
         Notification.objects(notificationID=notification_id).update_one(**updates)
         return False
 
 
-def _queue_receipt(realm, recipient, notification_id):
-    receipt_id = _notice_id(notification_id, recipient, "receipt")
-    CommunityAdminReceipt.objects(id=receipt_id).update_one(
-        upsert=True,
-        set_on_insert__notification_id=notification_id,
-        set_on_insert__realm_id=str(realm.pk),
-        set_on_insert__community_entity_id=str(realm.entity_id),
-        set_on_insert__admin_entity_id=str(recipient),
-        set_on_insert__delivery_id=_notice_id(realm.entity_id, recipient, "delivery"),
-        set_on_insert__is_read=False,
-        set_on_insert__scheduled=False,
-        set_on_insert__created_at=datetime.utcnow(),
+def _timestamp():
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
     )
-    receipt = CommunityAdminReceipt.objects(id=receipt_id).first()
-    if receipt.is_read or receipt.scheduled:
+
+
+def _admin_inbox(realm, recipient):
+    return Notification.objects(
+        type=ADMIN_INBOX,
+        toUserID=str(recipient),
+        community_entity_id=str(realm.entity_id),
+    )
+
+
+def _save_preview(realm, recipient):
+    """Use the existing Redis limiter; save the unread number as normal text."""
+    manager = Entity.objects.get(pk=recipient)
+    if not has_permission(manager, Permission.REALM_REQUEST_APPROVE, realm=realm):
         return
-    # The single update preserves the original deadline under continuous
-    # traffic. A receipt left unscheduled by a transient failure can be retried.
-    due = datetime.utcnow() + timedelta(minutes=5)
-    batch_id = str(uuid.uuid4())
-    fields = {
-        "realm_id": {"$literal": str(realm.pk)},
-        "community_entity_id": {"$literal": str(realm.entity_id)},
-        "admin_entity_id": {"$literal": str(recipient)},
-        "revision": {"$add": [{"$ifNull": ["$revision", 0]}, 1]},
-        "due_at": {"$ifNull": ["$due_at", due]},
-        "batch_id": {"$ifNull": ["$batch_id", batch_id]},
-        "generation": {
-            "$cond": [
-                {"$eq": [{"$ifNull": ["$due_at", None]}, None]},
-                {"$add": [{"$ifNull": ["$generation", 0]}, 1]},
-                "$generation",
-            ]
-        },
-    }
-    CommunityAdminDelivery.objects(
-        id=_notice_id(realm.entity_id, recipient, "delivery")
-    ).update_one(upsert=True, __raw__=[{"$set": fields}])
-    CommunityAdminReceipt.objects(id=receipt_id).update_one(set__scheduled=True)
+    cutoff = _timestamp()
+    unread = _admin_inbox(realm, recipient).filter(isRead=False, date__date__lte=cutoff)
+    if not unread.first():
+        return
+    key = f"community_admin_preview:{realm.entity_id}:{recipient}"
+    if not RedisPubSubClient.acquire_push_cooldown(key, PREVIEW_COOLDOWN_SECONDS):
+        return
+    count = unread.count()
+    if not count:
+        return
+    noun = "activity" if count == 1 else "activities"
+    preview = Notification(
+        notificationID="NTF_community_preview_" + str(uuid.uuid4()),
+        referenceID=str(realm.entity_id),
+        referenceStatus=True,
+        toUserID=str(recipient),
+        fromUserID=str(realm.entity_id),
+        community_entity_id=str(realm.entity_id),
+        is_anonymous=False,
+        type=ADMIN_ACTIVITY,
+        content=Content(
+            headline=PREVIEW_HEADLINE,
+            details=f"{count} new {noun} in your community. Check them out.",
+        ),
+        date=DateInfo(date=cutoff),
+        target=NotificationTarget(
+            type="community_notifications", supportingID=str(realm.pk)
+        ),
+        redirects=_redirects(realm),
+        isRead=False,
+    )
+    # Save first so a failed insert preserves the previous preview. Redis
+    # serializes this community/admin pair for the five-minute cooldown.
+    preview.save()
+    Notification.objects(
+        type=ADMIN_ACTIVITY,
+        toUserID=str(recipient),
+        community_entity_id=str(realm.entity_id),
+        notificationID__ne=preview.notificationID,
+    ).delete()
+    _reconcile_previews(realm, recipient)
+    unread_preview = Notification.objects(
+        notificationID=preview.notificationID, isRead=False
+    ).first()
+    _publish_event(
+        realm,
+        recipient,
+        "notifications" if unread_preview else "notifications_reload",
+        personal=True,
+    )
+    _publish_event(realm, recipient, "community_admin_preview_changed", personal=True)
 
 
 def notify_join_request(invite):
@@ -217,18 +252,10 @@ def notify_join_request(invite):
 
 def _reconcile_previews(realm, recipient):
     for preview in _summary(realm, recipient).filter(isRead=False):
-        if not preview.activity_delivery_id:
-            continue
-        if not CommunityAdminReceipt.objects(
-            community_entity_id=str(realm.entity_id),
-            admin_entity_id=str(recipient),
-            is_read=False,
-            preview_id=preview.activity_delivery_id,
+        if not _admin_inbox(realm, recipient).filter(
+            isRead=False, date__date__lte=preview.date.date
         ).first():
-            # Keep the saved count and sentence immutable, including after read.
-            Notification.objects(notificationID=preview.notificationID).update_one(
-                set__isRead=True
-            )
+            Notification.objects(notificationID=preview.notificationID).update_one(set__isRead=True)
 
 
 def settle_join_requests(reference_ids):
@@ -240,7 +267,9 @@ def settle_join_requests(reference_ids):
         )
         ids = [row.notificationID for row in notices]
         notices.update(set__referenceStatus=True, set__isRead=True)
-        CommunityAdminReceipt.objects(notification_id__in=ids).update(set__is_read=True)
+        Notification.objects(type=ADMIN_INBOX, referenceID__in=ids).update(
+            set__referenceStatus=True, set__isRead=True
+        )
         realms = {
             invite.realm_id: invite.realm
             for invite in Invite.objects.select_related("realm").filter(
@@ -258,20 +287,35 @@ def settle_join_requests(reference_ids):
 
 
 def record_admin_activity(realm, notice, *, actor_id=None):
-    """Idempotent inbox delivery and independent administrator read receipts."""
-    _upsert_notice(**notice)
-    notification_id = _notice_id(notice["referenceID"], notice["toUserID"], notice["type"])
+    """Store immediate inbox rows and cooldown-limited personal previews."""
+    canonical_id = _notice_id(notice["referenceID"], notice["toUserID"], notice["type"])
     managers = [
         recipient for recipient in _managers(realm) if str(recipient) != str(actor_id)
     ]
+    inserted = []
     for recipient in managers:
-        _queue_receipt(realm, recipient, notification_id)
+        # The existing isRead field gives each administrator independent read
+        # state. Create these rows before exposing the shared inbox item.
+        if _upsert_notice(**{
+            **notice,
+            "type": ADMIN_INBOX,
+            "referenceID": canonical_id,
+            "toUserID": str(recipient),
+        }):
+            inserted.append(recipient)
+    _upsert_notice(**notice)
     _event(realm, managers)
+    for recipient in inserted:
+        try:
+            _save_preview(realm, recipient)
+        except Exception:
+            logger.exception("Failed to save community preview for %s", recipient)
 
 
 def _summary(realm, viewer):
     return Notification.objects(
         type=ADMIN_ACTIVITY,
+        content__headline=PREVIEW_HEADLINE,
         community_entity_id=str(realm.entity_id),
         toUserID=str(viewer.pk if hasattr(viewer, "pk") else viewer),
     )
@@ -287,9 +331,9 @@ def acknowledge_activity(realm, viewer, revision, notification_ids=None):
     """Only acknowledge rows the client actually loaded, never newer arrivals."""
     if not notification_ids:
         return False
-    # Persist read intent even if the writer has exposed the canonical row but
-    # has not created this administrator's receipt yet. Scope supplied IDs to
-    # this inbox before allowing them to create a receipt.
+    # An older shared inbox item may not have a per-admin row yet. Persist its
+    # read state here so replay cannot turn already-viewed activity unread.
+    # Supplied IDs must belong to this community inbox.
     notices = Notification.objects(
         notificationID__in=notification_ids,
         toUserID=str(realm.entity_id),
@@ -298,19 +342,22 @@ def acknowledge_activity(realm, viewer, revision, notification_ids=None):
     )
     changed = False
     for notice in notices:
-        result = CommunityAdminReceipt.objects(
-            id=_notice_id(notice.notificationID, viewer.pk, "receipt")
+        result = Notification.objects(
+            notificationID=_notice_id(notice.notificationID, viewer.pk, ADMIN_INBOX)
         ).update_one(
             upsert=True,
             full_result=True,
-            set__is_read=True,
-            set_on_insert__notification_id=notice.notificationID,
-            set_on_insert__realm_id=str(realm.pk),
+            set__isRead=True,
+            set_on_insert__type=ADMIN_INBOX,
+            set_on_insert__referenceID=notice.notificationID,
+            set_on_insert__toUserID=str(viewer.pk),
+            set_on_insert__fromUserID=notice.fromUserID,
             set_on_insert__community_entity_id=str(realm.entity_id),
-            set_on_insert__admin_entity_id=str(viewer.pk),
-            set_on_insert__delivery_id=_notice_id(realm.entity_id, viewer.pk, "delivery"),
-            set_on_insert__scheduled=True,
-            set_on_insert__created_at=datetime.utcnow(),
+            set_on_insert__is_anonymous=notice.is_anonymous,
+            set_on_insert__content=notice.content,
+            set_on_insert__target=notice.target,
+            set_on_insert__date=notice.date,
+            set_on_insert__referenceStatus=notice.referenceStatus,
         )
         changed = changed or result.upserted_id is not None or result.modified_count > 0
     _reconcile_previews(realm, viewer.pk)
@@ -452,11 +499,6 @@ class CommunityNotificationsView(APIView):
             size = max(1, min(50, int(request.query_params.get("page_size", 20))))
         except (TypeError, ValueError) as exc:
             raise ValidationError("Invalid notification pagination") from exc
-        delivery = CommunityAdminDelivery.objects(
-            community_entity_id=str(realm.entity_id),
-            admin_entity_id=str(request.entity.pk),
-        ).first()
-        revision = delivery.revision if delivery else 0
         query = Notification.objects(
             toUserID=str(realm.entity_id),
             community_entity_id=str(realm.entity_id),
@@ -478,7 +520,7 @@ class CommunityNotificationsView(APIView):
                 "previous": replace_query_param(url, "page", page - 1)
                 if page > 1
                 else None,
-                "activity_revision": revision,
+                "activity_revision": 0,
                 "results": _project_notices(realm, rows),
             }
         )
