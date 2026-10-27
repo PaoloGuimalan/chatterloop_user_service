@@ -147,6 +147,10 @@ class Notification(Document):
     is_anonymous = BooleanField(default=None)
     activity_count = IntField(default=0, min_value=0)
     activity_revision = IntField(default=0, min_value=0)
+    activity_snapshot_version = IntField(default=None)
+    activity_delivery_id = StringField(default=None)
+    activity_delivery_version = IntField(default=None)
+    preview_key = StringField()
     content = EmbeddedDocumentField(Content, required=True)
     date = EmbeddedDocumentField(DateInfo, required=True)
     type = StringField(required=True)
@@ -166,7 +170,63 @@ class Notification(Document):
     actions = ListField(DictField(), default=None)
     __v = IntField(db_field="__v")
 
-    meta = {"collection": "notifications"}
+    meta = {
+        "collection": "notifications",
+        "indexes": [
+            {"fields": ["preview_key"], "unique": True, "sparse": True},
+            ("toUserID", "community_entity_id", "type"),
+        ],
+    }
+
+
+class CommunityAdminReceipt(Document):
+    """An administrator's read state for one canonical community inbox event."""
+
+    id = StringField(primary_key=True)
+    notification_id = StringField(required=True)
+    realm_id = StringField(required=True)
+    community_entity_id = StringField(required=True)
+    admin_entity_id = StringField(required=True)
+    delivery_id = StringField(required=True)
+    is_read = BooleanField(default=False)
+    scheduled = BooleanField(default=False)
+    preview_id = StringField(default=None)
+    preview_version = IntField(default=0)
+    created_at = DateTimeField(default=datetime.utcnow)
+
+    meta = {
+        "collection": "community_admin_receipts",
+        "indexes": [
+            ("admin_entity_id", "community_entity_id", "is_read", "preview_id"),
+            "notification_id",
+            "scheduled",
+        ],
+    }
+
+
+class CommunityAdminDelivery(Document):
+    """Durable five-minute delivery window, shared with the Node dispatcher."""
+
+    id = StringField(primary_key=True)
+    realm_id = StringField(required=True)
+    community_entity_id = StringField(required=True)
+    admin_entity_id = StringField(required=True)
+    revision = IntField(default=0)
+    generation = IntField(default=0)
+    due_at = DateTimeField(default=None)
+    batch_id = StringField(default=None)
+    snapshot_id = StringField(default=None)
+    snapshot_size = IntField(default=0)
+    snapshot_revision = IntField(default=None)
+    last_batch_id = StringField(default=None)
+    last_sent_at = DateTimeField(default=None)
+    lease_until = DateTimeField(default=None)
+    lease_token = StringField(default=None)
+
+    meta = {
+        "collection": "community_admin_deliveries",
+        "indexes": [("due_at", "lease_until")],
+    }
 
 
 class ModerationRecord(Document):

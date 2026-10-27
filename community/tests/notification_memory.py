@@ -6,7 +6,8 @@ from types import SimpleNamespace
 
 
 class NotificationMemory:
-    def __init__(self):
+    def __init__(self, model=Notification):
+        self.model = model
         self.rows = []
         # A plain function retains descriptor binding when installed on Document.
         self.save_document = lambda document, *args, **kwargs: self.save(document)
@@ -83,11 +84,15 @@ class NotificationQuery:
         if inserted:
             if not upsert:
                 return 0
-            row = Notification(**self.query)
+            row = self.store.model(**self.query)
             self.store.rows.append(row)
+        before = row.to_mongo().to_dict()
         self._update(row, updates, inserted)
         return (
-            SimpleNamespace(upserted_id="inserted" if inserted else None)
+            SimpleNamespace(
+                upserted_id="inserted" if inserted else None,
+                modified_count=int(not inserted and before != row.to_mongo().to_dict()),
+            )
             if full_result
             else 1
         )
@@ -98,24 +103,25 @@ class NotificationQuery:
             self._update(row, updates, False)
         return len(rows)
 
-    @staticmethod
-    def _update(row, updates, inserted):
+    def _update(self, row, updates, inserted):
         # Validate the real field/operator serialization without a Mongo client.
         if "__raw__" in updates:
             for stage in updates["__raw__"]:
-                transform.update(Notification, __raw__=stage)
+                transform.update(self.store.model, __raw__=stage)
                 values = {
                     key: NotificationQuery.expression(row, value)
                     for key, value in stage["$set"].items()
                 }
                 for key, value in values.items():
-                    setattr(row, key, Notification._fields[key].to_python(value))
+                    setattr(row, key, self.store.model._fields[key].to_python(value))
             return
-        transform.update(Notification, **updates)
+        transform.update(self.store.model, **updates)
         for operation, value in updates.items():
             kind, field = operation.split("__", 1)
             if kind == "set" or (kind == "set_on_insert" and inserted):
                 setattr(row, field, value)
+            elif kind == "inc":
+                setattr(row, field, (getattr(row, field, None) or 0) + value)
             else:
                 if kind != "set_on_insert":
                     raise AssertionError(f"Unsupported update: {operation}")
