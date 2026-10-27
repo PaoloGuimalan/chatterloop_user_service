@@ -424,6 +424,18 @@ class UserAuthentication(APIView):
                         )
                     ),
                     my_role=my_role_annotation(entity),
+                    request_pending=(
+                        Exists(
+                            Invite.objects.filter(
+                                realm=OuterRef("pk"),
+                                target_entity=entity,
+                                kind="request",
+                                status="pending",
+                            )
+                        )
+                        if entity is not None
+                        else Value(False, output_field=BooleanField())
+                    ),
                 ),
                 query_filter,
             )

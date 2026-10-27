@@ -16,16 +16,67 @@ django.setup()
 from django.db import connection
 from rest_framework.test import APIRequestFactory, force_authenticate
 
-from community.models import Member, Realm
+from community.models import Invite, Member, Realm
+from community.views import InviteView
+from community.community_views import CommunityLeaveView
 from entity.models import Entity, Follow
 from user.views import UserAuthentication
 
 
 class CommunityProfilePathTests(unittest.TestCase):
+    def test_cancelling_a_community_request_never_removes_an_approved_member(self):
+        Member.objects.create(realm=self.realm, entity=self.viewer, added_by=self.viewer, role="member")
+        request = APIRequestFactory().post("/api/realm/communities/club/leave", {"cancel_request": True}, format="json")
+        request.entity = self.viewer
+        force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+        response = CommunityLeaveView.as_view()(request, realm_id=self.realm.pk)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["is_member"])
+        self.assertTrue(Member.objects.filter(realm=self.realm, entity=self.viewer).exists())
+
+    def test_server_request_cancellation_only_revokes_the_callers_pending_request(self):
+        Realm.objects.filter(pk=self.realm.pk).update(type="server")
+        other = Entity.objects.create(id="other", type="user")
+        own = Invite.objects.create(
+            realm=self.realm,
+            target_entity=self.viewer,
+            created_by=self.viewer,
+            kind="request",
+            status="pending",
+        )
+        theirs = Invite.objects.create(
+            realm=self.realm,
+            target_entity=other,
+            created_by=other,
+            kind="request",
+            status="pending",
+        )
+        request = APIRequestFactory().patch(
+            "/api/realm/invites",
+            {
+                "realm_id": self.realm.realm_id,
+                "status": "revoked",
+                "target_entity_id": other.pk,
+            },
+        )
+        request.entity = self.viewer
+        force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+        with (
+            patch.object(InviteView, "_notify_requests_changed") as notify,
+            patch.object(InviteView, "_notify_access_changed"),
+        ):
+            response = InviteView.as_view()(request)
+        self.assertEqual(response.status_code, 200)
+        own.refresh_from_db()
+        theirs.refresh_from_db()
+        self.assertEqual(own.status, "revoked")
+        self.assertEqual(theirs.status, "pending")
+        notify.assert_called_once()
+
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.models = (Entity, Realm, Member, Follow)
+        cls.models = (Entity, Realm, Member, Follow, Invite)
         with connection.schema_editor() as editor:
             for model in cls.models:
                 editor.create_model(model)
@@ -115,3 +166,25 @@ class CommunityProfilePathTests(unittest.TestCase):
         self.assertEqual(managed.status_code, 200)
         self.assertFalse(managed.data["data"]["is_admin"])
         self.assertFalse(managed.data["data"]["is_member"])
+
+    def test_private_server_profile_reports_only_the_viewers_pending_request(self):
+        Realm.objects.filter(pk=self.realm.pk).update(type="server")
+        invite = Invite.objects.create(
+            realm=self.realm,
+            target_entity=self.viewer,
+            created_by=self.viewer,
+            kind="request",
+            status="pending",
+        )
+        self.assertTrue(
+            self.get_profile(self.realm.realm_id, type="manage").data["data"][
+                "request_pending"
+            ]
+        )
+        invite.status = "revoked"
+        invite.save(update_fields=["status"])
+        self.assertFalse(
+            self.get_profile(self.realm.realm_id, type="manage").data["data"][
+                "request_pending"
+            ]
+        )

@@ -77,12 +77,9 @@ def profile_anonymity_filter(viewer_id, profile_owner_id):
 
 
 def community_home_filter(viewer_id, connection_ids):
-    """Own community posts surface at Home only after a connection interacts."""
-    from newsfeed.models import Comment, PostTag, Reaction
+    """Own posts and shares surface at Home only after a connection interacts."""
+    from newsfeed.models import Comment, Reaction
 
-    destination = PostTag.objects.filter(
-        post_id=OuterRef("pk"), entity__realms__type="community"
-    )
     comments = Comment.objects.filter(
         post_id=OuterRef("pk"),
         entity_id__in=connection_ids,
@@ -92,12 +89,7 @@ def community_home_filter(viewer_id, connection_ids):
     reactions = Reaction.objects.filter(
         post_id=OuterRef("pk"), entity_id__in=connection_ids, is_anonymous=False
     )
-    return (
-        ~Q(entity_id=viewer_id)
-        | ~Q(Exists(destination))
-        | Q(Exists(comments))
-        | Q(Exists(reactions))
-    )
+    return ~Q(entity_id=viewer_id) | Q(Exists(comments)) | Q(Exists(reactions))
 
 
 def community_audience(viewer):

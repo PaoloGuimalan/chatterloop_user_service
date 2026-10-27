@@ -194,11 +194,16 @@ class CommunityLeaveView(APIView):
                 Realm.objects.select_for_update(), pk=realm_id, type="community"
             )
             member = Member.objects.filter(realm=realm, entity=request.entity).first()
-            if member is not None and member.role == MemberRole.OWNER:
+            cancel_only = request.data.get("cancel_request") is True
+            if (
+                not cancel_only
+                and member is not None
+                and member.role == MemberRole.OWNER
+            ):
                 raise ValidationError(
                     "Transfer ownership before leaving this community."
                 )
-            if member is not None:
+            if not cancel_only and member is not None:
                 member.delete()
                 _notify_membership_changed(realm, request.entity)
             cancelled = Invite.objects.filter(
@@ -213,4 +218,10 @@ class CommunityLeaveView(APIView):
                 transaction.on_commit(
                     lambda: InviteView()._notify_requests_changed(realm)
                 )
-        return Response({"status": True, "is_member": False})
+        return Response(
+            {
+                "status": True,
+                "is_member": cancel_only and member is not None,
+                "request_pending": False,
+            }
+        )

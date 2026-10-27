@@ -1310,6 +1310,33 @@ class InviteView(APIView):
             invite_token = request.data.get("invite_token")
             status_value = request.data.get("status")
 
+            # A requester need not know an invitation token to withdraw their
+            # own server request. Never accept a target entity from the body.
+            realm_id = request.data.get("realm_id")
+            if not invite_token and realm_id and status_value == "revoked":
+                realm = Realm.objects.filter(
+                    realm_id=realm_id, type="server", is_active=True
+                ).first()
+                if realm is None:
+                    return Response(
+                        {"status": False, "message": "Server not found"}, status=404
+                    )
+                with transaction.atomic():
+                    cancelled = Invite.objects.filter(
+                        realm=realm,
+                        target_entity=entity,
+                        kind="request",
+                        status="pending",
+                    ).update(status="revoked", resolved_at=now())
+                    if cancelled:
+                        transaction.on_commit(
+                            lambda: self._notify_requests_changed(realm)
+                        )
+                        transaction.on_commit(
+                            lambda: self._notify_access_changed(str(entity.pk), realm)
+                        )
+                return Response({"status": True, "request_pending": False})
+
             if not invite_token or not status_value:
                 return Response(
                     {

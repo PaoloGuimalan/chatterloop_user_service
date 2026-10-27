@@ -62,7 +62,7 @@ class CommunityScopeTests(unittest.TestCase):
                     reaction_id TEXT, post_id TEXT, entity_id TEXT, is_anonymous BOOLEAN
                 );
                 INSERT INTO newsfeed_post VALUES
-                    ('own-community', 'owner'), ('own-timeline', 'owner'),
+                    ('own-community', 'owner'), ('own-timeline', 'owner'), ('own-share', 'owner'),
                     ('other-community', 'other');
                 INSERT INTO community_realm VALUES ('realm', 'community', 'community');
                 INSERT INTO newsfeed_posttag VALUES
@@ -84,14 +84,28 @@ class CommunityScopeTests(unittest.TestCase):
                     db.execute("DELETE FROM newsfeed_comment")
                     db.execute("DELETE FROM newsfeed_reaction")
                     if table == "comment":
-                        db.execute(
+                        db.executemany(
                             "INSERT INTO newsfeed_comment VALUES (?, ?, ?, ?, ?)",
-                            ("activity", "own-community", actor, anonymous, deleted),
+                            [
+                                ("activity", target, actor, anonymous, deleted)
+                                for target in (
+                                    "own-community",
+                                    "own-timeline",
+                                    "own-share",
+                                )
+                            ],
                         )
                     elif table == "reaction":
-                        db.execute(
+                        db.executemany(
                             "INSERT INTO newsfeed_reaction VALUES (?, ?, ?, ?)",
-                            ("activity", "own-community", actor, anonymous),
+                            [
+                                ("activity", target, actor, anonymous)
+                                for target in (
+                                    "own-community",
+                                    "own-timeline",
+                                    "own-share",
+                                )
+                            ],
                         )
                     query = Post.objects.filter(
                         community_home_filter("owner", ["friend"])
@@ -101,7 +115,9 @@ class CommunityScopeTests(unittest.TestCase):
                         row[0] for row in db.execute(sql.replace("%s", "?"), params)
                     }
                     self.assertEqual("own-community" in result, visible)
-                    self.assertTrue({"own-timeline", "other-community"} <= result)
+                    self.assertEqual("own-timeline" in result, visible)
+                    self.assertEqual("own-share" in result, visible)
+                    self.assertIn("other-community", result)
 
     def test_only_profile_owner_can_list_their_own_anonymous_posts(self):
         from community import posts
