@@ -492,7 +492,13 @@ class NewsfeedProfileView(CommunityPostAccessMixin, APIView):
 
             viewcache = request.data.get("viewcache", [])
 
-            if user.username != username and viewcache:
+            # Public share pages can send cached views without an acting entity.
+            if (
+                entity is not None
+                and getattr(user, "is_authenticated", False)
+                and user.username != username
+                and viewcache
+            ):
                 RabbitMQClient.publish_on_commit(
                     Queues.SAVE_VIEWCACHE_ENGAGEMENTS,
                     {"entity_id": entity.id, "view_cache": viewcache},
