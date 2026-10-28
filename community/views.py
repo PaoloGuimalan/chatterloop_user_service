@@ -1078,7 +1078,7 @@ class InviteView(APIView):
         if not entity:
             return
 
-        Member.objects.get_or_create(
+        member, created = Member.objects.get_or_create(
             entity=entity,
             realm=invite.realm,
             defaults={
@@ -1087,6 +1087,10 @@ class InviteView(APIView):
                 "date_joined": now(),
             },
         )
+        if created and invite.realm.type == "community":
+            from community.admin_notifications import notify_member_joined
+
+            transaction.on_commit(lambda: notify_member_joined(str(member.pk)))
 
     def post(self, request):
         """

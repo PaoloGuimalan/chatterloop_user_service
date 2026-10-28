@@ -178,9 +178,12 @@ class CommunityJoinView(APIView):
                 from community.views import InviteView
 
                 return InviteView()._request_access(realm, request.user, viewer)
-            Member.objects.create(
+            member = Member.objects.create(
                 entity=viewer, realm=realm, added_by=viewer, date_joined=now()
             )
+            from community.admin_notifications import notify_member_joined
+
+            transaction.on_commit(lambda: notify_member_joined(str(member.pk)))
             _notify_membership_changed(realm, viewer)
         return Response({"status": True, "is_member": True})
 

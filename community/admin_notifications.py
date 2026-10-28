@@ -1,11 +1,14 @@
 """Community management inbox and per-administrator bell projections."""
 
+import hashlib
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
 
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
+from bson import ObjectId
 from mongoengine import NotUniqueError
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
@@ -19,7 +22,7 @@ from entity.permissions import Permission
 from entity.serializers import EntitySerializer
 from entity.services.permission_resolver import has_permission
 from entity.utils import get_entity_display_username, get_entity_name
-from newsfeed.models import Comment, CommentReaction, Post, Reaction
+from newsfeed.models import Comment, CommentReaction, Post, PostTag, Reaction
 from user.ext_models.mongomodels import (
     Content,
     DateInfo,
@@ -33,8 +36,16 @@ JOIN_REQUEST = "community_join_request"
 ADMIN_ACTIVITY = "community_admin_activity"
 ADMIN_INBOX = "community_admin_inbox"
 PREVIEW_HEADLINE = "Community activity preview"
-PREVIEW_COOLDOWN_SECONDS = 5 * 60
-INBOX_TYPES = (JOIN_REQUEST, "post_comment", "post_reaction", "comment_reaction")
+MEMBER_JOINED = "community_member_joined"
+POST_CREATED = "community_post_created"
+INBOX_TYPES = (
+    JOIN_REQUEST,
+    MEMBER_JOINED,
+    POST_CREATED,
+    "post_comment",
+    "post_reaction",
+    "comment_reaction",
+)
 MANAGER_ROLES = ("owner", "admin", "moderator")
 
 
@@ -102,7 +113,6 @@ def _upsert_notice(**notice):
             "toUserID",
             "fromUserID",
             "type",
-            "community_entity_id",
             "is_anonymous",
         )
     }
@@ -147,54 +157,90 @@ def _admin_inbox(realm, recipient):
     return Notification.objects(
         type=ADMIN_INBOX,
         toUserID=str(recipient),
-        community_entity_id=str(realm.entity_id),
+        referenceID__in=Notification.objects(
+            toUserID=str(realm.entity_id), type__in=INBOX_TYPES
+        ).distinct("notificationID"),
     )
 
 
 def _save_preview(realm, recipient):
-    """Use the existing Redis limiter; save the unread number as normal text."""
+    """Replace the saved preview immediately using existing notification fields."""
     manager = Entity.objects.get(pk=recipient)
     if not has_permission(manager, Permission.REALM_REQUEST_APPROVE, realm=realm):
         return
-    cutoff = _timestamp()
-    unread = _admin_inbox(realm, recipient).filter(isRead=False, date__date__lte=cutoff)
-    if not unread.first():
-        return
-    key = f"community_admin_preview:{realm.entity_id}:{recipient}"
-    if not RedisPubSubClient.acquire_push_cooldown(key, PREVIEW_COOLDOWN_SECONDS):
-        return
-    count = unread.count()
-    if not count:
-        return
-    noun = "activity" if count == 1 else "activities"
-    preview = Notification(
-        notificationID="NTF_community_preview_" + str(uuid.uuid4()),
-        referenceID=str(realm.entity_id),
-        referenceStatus=True,
-        toUserID=str(recipient),
-        fromUserID=str(realm.entity_id),
-        community_entity_id=str(realm.entity_id),
-        is_anonymous=False,
-        type=ADMIN_ACTIVITY,
-        content=Content(
-            headline=PREVIEW_HEADLINE,
-            details=f"{count} new {noun} in your community. Check them out.",
-        ),
-        date=DateInfo(date=cutoff),
-        target=NotificationTarget(
-            type="community_notifications", supportingID=str(realm.pk)
-        ),
-        redirects=_redirects(realm),
-        isRead=False,
+    # The existing Mongo _id is the unique slot, shared with the Node writer.
+    # Concurrent activity replaces this row instead of deleting another write.
+    slot_key = json.dumps(
+        ["community_admin_preview", str(realm.entity_id), str(recipient)],
+        separators=(",", ":"),
     )
-    # Save first so a failed insert preserves the previous preview. Redis
-    # serializes this community/admin pair for the five-minute cooldown.
-    preview.save()
+    slot_id = ObjectId(hashlib.sha256(slot_key.encode()).hexdigest()[:24])
+    while True:
+        previous = Notification.objects(id=slot_id).first()
+        previous_id = previous.notificationID if previous else None
+        cutoff = _timestamp()
+        unread = _admin_inbox(realm, recipient).filter(
+            isRead=False, date__date__lte=cutoff
+        )
+        if not unread.first():
+            return
+        count = unread.count()
+        if not count:
+            return
+        noun = "activity" if count == 1 else "activities"
+        preview = Notification(
+            notificationID="NTF_community_preview_" + str(uuid.uuid4()),
+            referenceID=str(realm.entity_id),
+            referenceStatus=True,
+            toUserID=str(recipient),
+            fromUserID=str(realm.entity_id),
+            is_anonymous=False,
+            type=ADMIN_ACTIVITY,
+            content=Content(
+                headline=PREVIEW_HEADLINE,
+                details=f"{count} new {noun} in your community. Check them out.",
+            ),
+            date=DateInfo(date=cutoff),
+            target=NotificationTarget(
+                type="community_notifications", supportingID=str(realm.pk)
+            ),
+            redirects=_redirects(realm),
+            isRead=False,
+        )
+        updates = {
+            f"set__{field}": getattr(preview, field)
+            for field in (
+                "notificationID",
+                "referenceID",
+                "referenceStatus",
+                "toUserID",
+                "fromUserID",
+                "is_anonymous",
+                "type",
+                "content",
+                "date",
+                "target",
+                "redirects",
+                "isRead",
+            )
+        }
+        query = Notification.objects(id=slot_id)
+        if previous_id:
+            query = query.filter(notificationID=previous_id)
+        else:
+            query = query.filter(notificationID__exists=False)
+        try:
+            if not query.update_one(upsert=previous is None, **updates):
+                continue
+            break
+        except NotUniqueError:
+            # A competing writer won. Recount against its new logical revision.
+            continue
     Notification.objects(
         type=ADMIN_ACTIVITY,
         toUserID=str(recipient),
-        community_entity_id=str(realm.entity_id),
-        notificationID__ne=preview.notificationID,
+        fromUserID=str(realm.entity_id),
+        id__ne=slot_id,
     ).delete()
     _reconcile_previews(realm, recipient)
     unread_preview = Notification.objects(
@@ -210,7 +256,7 @@ def _save_preview(realm, recipient):
 
 
 def notify_join_request(invite):
-    """Write the inbox immediately; personal previews use the delivery window."""
+    """Write a join request and refresh the administrator previews immediately."""
     try:
         current = (
             Invite.objects.select_related("realm", "target_entity")
@@ -230,7 +276,6 @@ def notify_join_request(invite):
             referenceID=str(current.pk),
             toUserID=str(realm.entity_id),
             fromUserID=str(current.target_entity_id),
-            community_entity_id=str(realm.entity_id),
             is_anonymous=False,
             type=JOIN_REQUEST,
             referenceStatus=False,
@@ -250,12 +295,41 @@ def notify_join_request(invite):
         logger.exception("Failed to deliver community join-request notices")
 
 
+def notify_member_joined(member_id):
+    """After commit, record a successful community join once per membership."""
+    try:
+        member = (
+            Member.objects.select_related("realm", "entity")
+            .filter(pk=member_id, realm__type="community", realm__is_active=True)
+            .first()
+        )
+        if member is None:
+            return
+        realm = member.realm
+        notice = dict(
+            referenceID=str(member.pk),
+            toUserID=str(realm.entity_id),
+            fromUserID=str(member.entity_id),
+            is_anonymous=False,
+            type=MEMBER_JOINED,
+            content_headline="Member joined",
+            content_details=f"{get_entity_name(member.entity)} joined {realm.name}.",
+            target_type="community_notifications",
+            target_id=str(realm.pk),
+        )
+        record_admin_activity(realm, notice, actor_id=member.entity_id)
+    except Exception:
+        logger.exception("Failed to record community member join")
+
+
 def _reconcile_previews(realm, recipient):
     for preview in _summary(realm, recipient).filter(isRead=False):
         if not _admin_inbox(realm, recipient).filter(
             isRead=False, date__date__lte=preview.date.date
         ).first():
-            Notification.objects(notificationID=preview.notificationID).update_one(set__isRead=True)
+            Notification.objects(notificationID=preview.notificationID).update_one(
+                set__isRead=True
+            )
 
 
 def settle_join_requests(reference_ids):
@@ -287,7 +361,7 @@ def settle_join_requests(reference_ids):
 
 
 def record_admin_activity(realm, notice, *, actor_id=None):
-    """Store immediate inbox rows and cooldown-limited personal previews."""
+    """Store immediate inbox rows and refresh personal unread previews."""
     canonical_id = _notice_id(notice["referenceID"], notice["toUserID"], notice["type"])
     managers = [
         recipient for recipient in _managers(realm) if str(recipient) != str(actor_id)
@@ -316,7 +390,7 @@ def _summary(realm, viewer):
     return Notification.objects(
         type=ADMIN_ACTIVITY,
         content__headline=PREVIEW_HEADLINE,
-        community_entity_id=str(realm.entity_id),
+        fromUserID=str(realm.entity_id),
         toUserID=str(viewer.pk if hasattr(viewer, "pk") else viewer),
     )
 
@@ -337,7 +411,6 @@ def acknowledge_activity(realm, viewer, revision, notification_ids=None):
     notices = Notification.objects(
         notificationID__in=notification_ids,
         toUserID=str(realm.entity_id),
-        community_entity_id=str(realm.entity_id),
         type__in=INBOX_TYPES,
     )
     changed = False
@@ -352,7 +425,6 @@ def acknowledge_activity(realm, viewer, revision, notification_ids=None):
             set_on_insert__referenceID=notice.notificationID,
             set_on_insert__toUserID=str(viewer.pk),
             set_on_insert__fromUserID=notice.fromUserID,
-            set_on_insert__community_entity_id=str(realm.entity_id),
             set_on_insert__is_anonymous=notice.is_anonymous,
             set_on_insert__content=notice.content,
             set_on_insert__target=notice.target,
@@ -399,28 +471,39 @@ def _project_notices(realm, notices):
         for row in notices
         if row.target and row.target.type == "post"
     ]
+    scoped_ids = PostTag.objects.filter(
+        post_id__in=post_ids, entity_id=realm.entity_id
+    ).values_list("post_id", flat=True)
     posts = {
         str(item.pk): item
-        for item in Post.objects.filter(
-            pk__in=post_ids,
-            entity_id=realm.entity_id,
-            from_system=True,
-            details__community_media_update=True,
-            deleted_at=None,
-            is_archived=False,
+        for item in _actor_queryset(Post).filter(
+            pk__in=scoped_ids, deleted_at=None, is_archived=False
+        )
+    }
+    media_posts = {
+        key: post
+        for key, post in posts.items()
+        if str(post.entity_id) == str(realm.entity_id)
+        and post.from_system
+        and (post.details or {}).get("community_media_update") is True
+    }
+    joined_actors = {
+        str(entity.pk): entity
+        for entity in Entity.objects.select_related("users", "realms", "bots").filter(
+            pk__in=[row.fromUserID for row in notices if row.type == MEMBER_JOINED]
         )
     }
     activities = {
         "post_comment": {
             str(item.pk): item
             for item in _actor_queryset(Comment).filter(
-                pk__in=references, post_id__in=posts, deleted_at=None
+                pk__in=references, post_id__in=media_posts, deleted_at=None
             )
         },
         "post_reaction": {
             str(item.pk): item
             for item in _actor_queryset(Reaction).filter(
-                pk__in=references, post_id__in=posts
+                pk__in=references, post_id__in=media_posts
             )
         },
         "comment_reaction": {
@@ -428,7 +511,7 @@ def _project_notices(realm, notices):
             for item in _actor_queryset(CommentReaction)
             .select_related("comment")
             .filter(
-                pk__in=references, comment__post_id__in=posts, comment__deleted_at=None
+                pk__in=references, comment__post_id__in=media_posts, comment__deleted_at=None
             )
         },
     }
@@ -438,38 +521,48 @@ def _project_notices(realm, notices):
             requests.get(str(row.referenceID)) if row.type == JOIN_REQUEST else None
         )
         activity = activities.get(row.type, {}).get(str(row.referenceID))
-        if request is None and activity is None:
-            continue
-        actor = request.target_entity if request is not None else activity.entity
-        anonymous = request is None and activity.is_anonymous
-        subject = (
-            "An anonymous member"
-            if anonymous
-            else get_entity_name(actor)
-            if actor is not None
-            else "Someone"
+        new_post = posts.get(str(row.referenceID)) if row.type == POST_CREATED else None
+        joined = row.type == MEMBER_JOINED and row.target and (
+            row.target.type == "community_notifications"
+            and str(row.target.supportingID) == str(realm.pk)
         )
+        if request is None and activity is None and new_post is None and not joined:
+            continue
+        anonymous = False
+        if joined:
+            actor = joined_actors.get(str(row.fromUserID))
+        elif new_post is not None:
+            actor = new_post.entity
+            anonymous = bool(new_post.is_anonymous)
+        elif request is not None:
+            actor = request.target_entity
+        else:
+            actor = activity.entity
+            anonymous = bool(activity.is_anonymous)
+        if anonymous:
+            subject = "An anonymous member"
+        else:
+            subject = get_entity_name(actor) if actor is not None else "Someone"
         post_id = None
-        if request is not None:
+        if joined:
+            description = f"{subject} joined the community."
+        elif new_post is not None:
+            post_id = str(new_post.pk)
+            if row.target is None or str(row.target.supportingID) != post_id:
+                continue
+            description = f"{subject} posted in the community."
+        elif request is not None:
             description = (
-                f"{subject} wants to join {realm.name}."
-                if request.status == "pending"
+                f"{subject} wants to join the community." if request.status == "pending"
                 else f"{subject}’s join request is {request.status}."
             )
         else:
-            post_id = str(
-                activity.comment.post_id
-                if row.type == "comment_reaction"
-                else activity.post_id
-            )
+            post_id = str(activity.comment.post_id if row.type == "comment_reaction" else activity.post_id)
             if row.target is None or str(row.target.supportingID) != post_id:
                 continue
-            verb = {
-                "post_comment": "commented on",
-                "post_reaction": "reacted to",
-                "comment_reaction": "reacted to a comment on",
-            }[row.type]
-            description = f"{subject} {verb} {realm.name}’s post."
+            verb = {"post_comment": "commented on", "post_reaction": "reacted to",
+                    "comment_reaction": "reacted to a comment on"}[row.type]
+            description = f"{subject} {verb} the community’s post."
         results.append(
             {
                 "id": row.notificationID,
@@ -501,7 +594,6 @@ class CommunityNotificationsView(APIView):
             raise ValidationError("Invalid notification pagination") from exc
         query = Notification.objects(
             toUserID=str(realm.entity_id),
-            community_entity_id=str(realm.entity_id),
             type__in=INBOX_TYPES,
         )
         total = query.count()

@@ -484,7 +484,8 @@ class CommunityReactionNotificationTests(unittest.TestCase):
         notice = self.store.rows[0]
         original_id = notice.notificationID
         self.assertEqual(notice.fromUserID, "actor")
-        self.assertEqual(notice.community_entity_id, "community")
+        self.assertNotIn("community_entity_id", notice.to_mongo())
+        self.assertEqual(notice.target.supportingID, "post")
         self.assertFalse(notice.is_anonymous)
         notice.isRead = True
         self.reaction.is_anonymous = True

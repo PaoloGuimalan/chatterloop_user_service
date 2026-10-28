@@ -37,7 +37,6 @@ def notification_description(
             if is_anonymous or not actor_entity_id
             else actor_entity_id
         ),
-        "community_entity_id": str(community_entity_id),
         "is_anonymous": bool(is_anonymous),
         "content_details": f"{subject} {verb} on {post_label} in the community.",
         "target_type": "post",
@@ -160,7 +159,9 @@ def notify_community_activity(
                     **description,
                 )
                 if reaction_model is not None:
-                    service.upsert_community_reaction(**notification)
+                    service.upsert_community_reaction(
+                        **notification, community_id=str(realm.entity_id)
+                    )
                 else:
                     service.add_notification(
                         **notification, referenceStatus=True, isRead=False

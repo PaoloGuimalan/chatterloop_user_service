@@ -429,11 +429,15 @@ def _publish(entity_id, event, result):
 
 
 def _add_member(entity, realm, added_by, role="member"):
-    _, created = Member.objects.get_or_create(
+    member, created = Member.objects.get_or_create(
         entity=entity,
         realm=realm,
         defaults={"added_by": added_by, "role": role, "date_joined": now()},
     )
+    if created and realm.type == "community":
+        from community.admin_notifications import notify_member_joined
+
+        transaction.on_commit(lambda: notify_member_joined(str(member.pk)))
     return created
 
 

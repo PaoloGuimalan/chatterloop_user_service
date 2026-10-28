@@ -48,7 +48,6 @@ class NotificationService:
         target_anchor=None,
         redirects=None,
         actions=None,
-        community_entity_id=None,
         is_anonymous=None,
     ):
         """
@@ -114,7 +113,6 @@ class NotificationService:
             referenceStatus=referenceStatus,
             toUserID=toUserID,
             fromUserID=fromUserID,
-            community_entity_id=community_entity_id,
             is_anonymous=is_anonymous,
             content=content,
             date=date,
@@ -140,7 +138,7 @@ class NotificationService:
         target_type,
         target_id,
         target_anchor=None,
-        community_entity_id=None,
+        community_id=None,
         is_anonymous=None,
     ):
         """Replace one community reaction projection, including legacy duplicates.
@@ -154,7 +152,7 @@ class NotificationService:
             "toUserID": str(toUserID),
             "type": type,
         }
-        community_id = str(community_entity_id or fromUserID)
+        community_id = str(community_id or fromUserID)
         notification_id = "NTF_community_" + str(
             uuid.uuid5(
                 uuid.NAMESPACE_URL,
@@ -163,10 +161,18 @@ class NotificationService:
                 ),
             )
         )
+        # A reaction ID, recipient and notification type already identify this
+        # delivery. Community ownership is resolved through the target post.
         existing = [
             row for row in Notification.objects(**scope)
-            if row.community_entity_id == community_id
-            or (not row.community_entity_id and row.fromUserID in {community_id, str(fromUserID)})
+            if (
+                row.target is not None
+                and row.target.type == target_type
+                and str(row.target.supportingID) == str(target_id)
+            ) or (
+                row.target is None
+                and row.fromUserID in {community_id, str(fromUserID)}
+            )
         ]
         active = [row for row in existing if row.referenceStatus]
         is_read = bool(active) and all(row.isRead for row in active)
@@ -185,7 +191,6 @@ class NotificationService:
             set__type=type,
             set__referenceStatus=True,
             set__fromUserID=str(fromUserID),
-            set__community_entity_id=community_id,
             set__is_anonymous=is_anonymous,
             set__content=Content(headline=content_headline, details=content_details),
             set__target=NotificationTarget(

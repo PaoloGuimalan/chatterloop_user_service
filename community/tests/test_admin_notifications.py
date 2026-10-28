@@ -175,6 +175,7 @@ class AdminNotificationTests(unittest.TestCase):
                 if row.toUserID == "community"]
 
     def test_reuses_notification_schema_without_extra_mongo_documents(self):
+        self.assertNotIn("community_entity_id", Notification._fields)
         for name in ("CommunityAdminReceipt", "CommunityAdminDelivery"):
             self.assertFalse(hasattr(mongomodels, name))
         for field in ("preview_key", "activity_count", "activity_revision",
@@ -188,27 +189,31 @@ class AdminNotificationTests(unittest.TestCase):
         self.assertEqual(len(self.inbox()), 1)
         self.assertFalse(self.inbox()[0].isRead)
         preview = self.previews()[0]
+        self.assertEqual(preview.toUserID, "admin")
+        self.assertEqual(preview.fromUserID, "community")
+        for row in self.memory.rows:
+            self.assertNotIn("community_entity_id", row.to_mongo())
         self.assertEqual(preview.content.details, "1 new activity in your community. Check them out.")
         self.assertEqual(preview.fromUserID, "community")
-        self.assertEqual(self.cooldown.call_args.args[1], 300)
+        self.cooldown.assert_not_called()
         events = [call.args[1]["event"] for call in self.publish.call_args_list]
         self.assertIn("community_notifications_changed", events)
         self.assertIn("community_admin_preview_changed", events)
 
-    def test_redis_cooldown_replaces_one_preview_without_rewriting_earlier_content(self):
+    def test_each_activity_immediately_replaces_preview_with_saved_unread_total(self):
         record_admin_activity(self.realm, self.notice("one"))
         first = self.previews()[0]
-        self.elapsed = 120
+        first_id = first.notificationID
+        first_text = first.content.details
         record_admin_activity(self.realm, self.notice("two"))
-        self.assertEqual(self.previews(), [first])
-        self.assertTrue(first.content.details.startswith("1 new activity"))
-        self.elapsed = 300
+        second = self.previews()[0]
+        self.assertNotEqual(first_id, second.notificationID)
+        self.assertTrue(first_text.startswith("1 new activity"))
+        self.assertTrue(second.content.details.startswith("2 new activities"))
         record_admin_activity(self.realm, self.notice("three"))
         self.assertEqual(len(self.previews()), 1)
-        latest = self.previews()[0]
-        self.assertNotEqual(latest.notificationID, first.notificationID)
-        self.assertEqual(latest.content.details, "3 new activities in your community. Check them out.")
-        self.assertTrue(first.content.details.startswith("1 new activity"))
+        self.assertTrue(self.previews()[0].content.details.startswith("3 new activities"))
+        self.cooldown.assert_not_called()
 
     def test_replays_do_not_duplicate_inbox_or_bypass_cooldown(self):
         record_admin_activity(self.realm, self.notice("one"))
@@ -216,7 +221,7 @@ class AdminNotificationTests(unittest.TestCase):
         record_admin_activity(self.realm, self.notice("one"))
         self.assertEqual(len(self.inbox()), 1)
         self.assertEqual(len(self.previews()), 1)
-        self.assertEqual(self.cooldown.call_count, 1)
+        self.cooldown.assert_not_called()
 
     def test_join_requests_use_the_same_generic_preview(self):
         notify_join_request(self.invite)
@@ -265,21 +270,46 @@ class AdminNotificationTests(unittest.TestCase):
         self.assertTrue(self.inbox()[0].isRead)
         self.assertEqual(self.previews(), [])
 
-    def test_redis_outage_never_blocks_inbox_and_never_writes_zero_preview(self):
-        self.cooldown.side_effect = None
-        self.cooldown.return_value = False
+    def test_preview_does_not_depend_on_a_redis_cooldown(self):
+        self.cooldown.side_effect = AssertionError("Preview must not use cooldown")
         record_admin_activity(self.realm, self.notice("one"))
         self.assertEqual(len(self.inbox()), 1)
-        self.assertEqual(self.previews(), [])
-        self.assertEqual(len(self.canonical_ids()), 1)
+        self.assertEqual(len(self.previews()), 1)
+        self.cooldown.assert_not_called()
+
+    def test_overlapping_preview_cannot_replace_a_newer_count_in_the_same_millisecond(self):
+        from community.tests.notification_memory import NotificationQuery
+
+        original = NotificationQuery.count
+        overlap = True
+
+        def count(query):
+            nonlocal overlap
+            total = original(query)
+            if overlap and query.query.get("type") == "community_admin_inbox":
+                overlap = False
+                record_admin_activity(self.realm, self.notice("two"))
+            return total
+
+        with patch.object(NotificationQuery, "count", count):
+            record_admin_activity(self.realm, self.notice("one"))
+        self.assertEqual(len(self.previews()), 1)
+        self.assertEqual(
+            self.previews()[0].content.details,
+            "2 new activities in your community. Check them out.",
+        )
 
     def test_read_racing_preview_save_hides_it_without_changing_saved_count(self):
-        def save(document, *args, **kwargs):
-            for row in self.inbox():
-                row.isRead = True
-            return self.memory.save(document)
+        from community.tests.notification_memory import NotificationQuery
 
-        with patch.object(Notification, "save", save):
+        original = NotificationQuery.update_one
+        def update(query, *args, **kwargs):
+            if kwargs.get("set__type") == "community_admin_activity":
+                for row in self.inbox():
+                    row.isRead = True
+            return original(query, *args, **kwargs)
+
+        with patch.object(NotificationQuery, "update_one", update):
             record_admin_activity(self.realm, self.notice("one"))
         preview = self.previews()[0]
         self.assertTrue(preview.isRead)
@@ -336,6 +366,7 @@ class AdminNotificationTests(unittest.TestCase):
                 )
             ]
         )
+        PostTag.objects.create(post_id="photo", entity=self.destination)
         Comment.objects.bulk_create(
             [
                 Comment(
@@ -359,3 +390,75 @@ class AdminNotificationTests(unittest.TestCase):
         Post.objects.filter(pk="photo").update(entity=self.actor)
         self.assertEqual(self.get_inbox().data["results"], [])
 
+
+    def test_joined_member_appears_in_inbox_and_in_preview_count(self):
+        from community import admin_notifications
+
+        member = Member.objects.create(realm=self.realm, entity=self.actor, added_by=self.admin)
+        admin_notifications.notify_member_joined(str(member.pk))
+        admin_notifications.notify_member_joined(str(member.pk))
+        result = self.get_inbox().data["results"]
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["type"], "community_member_joined")
+        self.assertEqual(result[0]["actor"]["id"], "actor")
+        self.assertEqual(result[0]["description"], "Maya Chen joined the community.")
+        self.assertTrue(self.previews()[0].content.details.startswith("1 new activity"))
+
+    def test_new_post_projection_rechecks_scope_and_anonymity(self):
+        Post.objects.bulk_create([Post(post_id="new-post", entity=self.actor, is_anonymous=True)])
+        post = Post.objects.get(pk="new-post")
+        PostTag.objects.create(post=post, entity=self.destination)
+        notice = self.notice("new-post", anonymous=True)
+        notice.update(type="community_post_created", target_id="new-post")
+        record_admin_activity(self.realm, notice)
+        result = self.get_inbox().data["results"][0]
+        self.assertEqual(result["post_id"], "new-post")
+        self.assertEqual(result["description"], "An anonymous member posted in the community.")
+        self.assertIsNone(result["actor"])
+        self.assertTrue(result["is_anonymous"])
+        Post.objects.filter(pk="new-post").update(is_anonymous=False)
+        self.assertEqual(self.get_inbox().data["results"][0]["actor"]["id"], "actor")
+        PostTag.objects.filter(post=post).delete()
+        self.assertEqual(self.get_inbox().data["results"], [])
+
+    def test_public_join_records_one_join_activity(self):
+        from community.community_views import CommunityJoinView
+
+        request = APIRequestFactory().post("/api/realm/communities/club/join")
+        request.entity = self.actor
+        force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
+        with patch("community.community_views._notify_membership_changed"):
+            for _ in range(2):
+                response = CommunityJoinView.as_view()(request, realm_id="club")
+                self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(self.canonical_ids()), 1)
+        self.assertEqual(self.get_inbox().data["results"][0]["type"], "community_member_joined")
+
+    def test_private_request_acceptance_records_join_activity(self):
+        self.realm.is_private = True
+        Realm.objects.filter(pk=self.realm.pk).update(is_private=True)
+        for _ in range(2):
+            InviteView()._add_member_if_missing(self.invite, self.admin)
+        self.assertEqual(len(self.canonical_ids()), 1)
+        self.assertEqual(self.get_inbox().data["results"][0]["actor"]["id"], "actor")
+
+    def test_private_invite_acceptance_records_join_without_messages(self):
+        from community.invites import accept_side_effects
+
+        self.invite.kind = "invite"
+        self.invite.purpose = "join"
+        with patch("community.invites.post_joined_notice") as message:
+            for _ in range(2):
+                accept_side_effects(self.invite, self.actor)
+        message.assert_not_called()
+        self.assertEqual(len(self.canonical_ids()), 1)
+        self.assertEqual(self.get_inbox().data["results"][0]["type"], "community_member_joined")
+
+    def test_rolled_back_join_never_publishes_a_notification(self):
+        from django.db import transaction
+
+        with self.assertRaises(RuntimeError):
+            with transaction.atomic():
+                InviteView()._add_member_if_missing(self.invite, self.admin)
+                raise RuntimeError("rollback")
+        self.assertEqual(self.canonical_ids(), [])

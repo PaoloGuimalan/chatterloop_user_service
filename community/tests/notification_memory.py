@@ -1,6 +1,7 @@
 """Inert MongoEngine persistence boundary for notification behavior tests."""
 
 from user.ext_models.mongomodels import Notification
+from mongoengine import NotUniqueError
 from mongoengine.queryset import transform
 from types import SimpleNamespace
 
@@ -51,6 +52,8 @@ class NotificationQuery:
 
     @classmethod
     def matches(cls, row, key, value):
+        if key.endswith("__exists"):
+            return (cls.field(row, key[:-8]) is not None) == value
         if key.endswith("__ne"):
             return cls.field(row, key[:-4]) != value
         if key.endswith("__lte"):
@@ -77,6 +80,9 @@ class NotificationQuery:
     def first(self):
         return next(iter(self), None)
 
+    def distinct(self, field):
+        return list({self.field(row, field) for row in self})
+
     def filter(self, **query):
         return NotificationQuery(self.store, {**self.query, **query})
 
@@ -86,7 +92,11 @@ class NotificationQuery:
         if inserted:
             if not upsert:
                 return 0
-            row = self.store.model(**self.query)
+            if self.query.get("id") is not None and any(
+                item.pk == self.query["id"] for item in self.store.rows
+            ):
+                raise NotUniqueError("Duplicate notification slot")
+            row = self.store.model(**{key: value for key, value in self.query.items() if "__" not in key})
             self.store.rows.append(row)
         before = row.to_mongo().to_dict()
         self._update(row, updates, inserted)
