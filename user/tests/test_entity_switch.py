@@ -5,7 +5,7 @@ from django.utils.timezone import now
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from community.models import Member, Realm
-from entity.models import Entity
+from entity.models import Entity, Role
 from entity.permissions import MemberRole
 from user.entity_switch_views import EntitySwitch, EntitySwitchBack
 from user.ext_models.mongomodels import Session
@@ -36,6 +36,10 @@ def _make_page_realm(created_by):
         created_by=created_by,
         type="page",
     )
+
+
+def _role(name):
+    return Role.objects.get_or_create(name=name, is_default=True)[0]
 
 
 class EntitySwitchTests(TestCase):
@@ -77,7 +81,7 @@ class EntitySwitchTests(TestCase):
             entity=self.personal_entity,
             realm=self.page_realm,
             added_by=self.personal_entity,
-            role=MemberRole.MEMBER,
+            role=_role(MemberRole.MEMBER),
             date_joined=now(),
         )
         response = self._post(
@@ -97,7 +101,7 @@ class EntitySwitchTests(TestCase):
             entity=self.personal_entity,
             realm=server_realm,
             added_by=self.personal_entity,
-            role=MemberRole.OWNER,
+            role=_role(MemberRole.OWNER),
             date_joined=now(),
         )
         response = self._post(
@@ -111,7 +115,7 @@ class EntitySwitchTests(TestCase):
             entity=self.personal_entity,
             realm=self.page_realm,
             added_by=self.personal_entity,
-            role=MemberRole.OWNER,
+            role=_role(MemberRole.OWNER),
             date_joined=now(),
         )
 
@@ -153,7 +157,7 @@ class EntitySwitchTests(TestCase):
             entity=self.personal_entity,
             realm=self.page_realm,
             added_by=self.personal_entity,
-            role=MemberRole.ADMIN,
+            role=_role(MemberRole.ADMIN),
             date_joined=now(),
         )
         response = self._post(
@@ -169,14 +173,14 @@ class EntitySwitchTests(TestCase):
             entity=self.personal_entity,
             realm=self.page_realm,
             added_by=self.personal_entity,
-            role=MemberRole.OWNER,
+            role=_role(MemberRole.OWNER),
             date_joined=now(),
         )
         Member.objects.create(
             entity=self.personal_entity,
             realm=other_page,
             added_by=self.personal_entity,
-            role=MemberRole.OWNER,
+            role=_role(MemberRole.OWNER),
             date_joined=now(),
         )
 
@@ -201,7 +205,7 @@ class EntitySwitchTests(TestCase):
             entity=self.personal_entity,
             realm=self.page_realm,
             added_by=self.personal_entity,
-            role=MemberRole.OWNER,
+            role=_role(MemberRole.OWNER),
             date_joined=now(),
         )
         self._post(EntitySwitch, {"realm_id": self.page_realm.id}, self.personal_entity)

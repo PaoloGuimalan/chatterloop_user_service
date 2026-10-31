@@ -6,10 +6,13 @@ and the answer has a non-obvious special case (see below) that must not drift
 between them.
 """
 
-from django.db.models import Case, CharField, OuterRef, Subquery, Value, When
+from django.db.models import (
+    BigIntegerField, Case, CharField, Count, Exists, Min, OuterRef, Subquery, Value, When,
+)
 
 from community.models import Member
 from entity.permissions import MemberRole
+from entity.models import Role
 
 
 def my_role_annotation(entity):
@@ -28,9 +31,36 @@ def my_role_annotation(entity):
     return Case(
         When(entity=entity, then=Value(MemberRole.OWNER.value)),
         default=Subquery(
-            Member.objects.filter(realm=OuterRef("pk"), entity=entity).values("role")[
+            Member.objects.filter(realm=OuterRef("pk"), entity=entity).values("role__name")[
                 :1
             ]
         ),
         output_field=CharField(),
+    )
+
+
+def my_role_id_annotation(entity):
+    """Exact role ID, including the realm owner's assigned definition for self access."""
+    owners = Member.objects.filter(realm=OuterRef("pk"), role__name=MemberRole.OWNER)
+    owner_role = (
+        owners.order_by().values("realm")
+        .annotate(role_count=Count("role_id", distinct=True), role_pk=Min("role_id"))
+        .annotate(resolved_id=Case(
+            When(role_count=1, then="role_pk"),
+            default=Value(None),
+            output_field=BigIntegerField(),
+        ))
+        .values("resolved_id")[:1]
+    )
+    self_role = Case(
+        When(Exists(owners), then=Subquery(owner_role)),
+        default=Subquery(
+            Role.objects.filter(name=MemberRole.OWNER, is_default=True).values("pk")[:1]
+        ), output_field=BigIntegerField(),
+    )
+    return Case(
+        When(entity=entity, then=self_role),
+        default=Subquery(
+            Member.objects.filter(realm=OuterRef("pk"), entity=entity).values("role_id")[:1]
+        ), output_field=BigIntegerField(),
     )

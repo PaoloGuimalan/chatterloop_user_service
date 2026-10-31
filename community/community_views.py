@@ -15,6 +15,7 @@ from community.posts import community_metadata
 from core.profile_paths import ProfilePathError, validate_profile_path
 from entity.models import Entity
 from entity.permissions import MemberRole, Permission
+from entity.roles import get_default_role
 from entity.services.permission_resolver import has_permission
 
 
@@ -26,6 +27,7 @@ def _community_card(realm, viewer):
         type="community",
         member_count=getattr(realm, "member_count", None),
         my_role=realm.my_role,
+        my_role_id=realm.my_role_id,
         request_pending=realm.request_pending,
     )
     return data
@@ -36,9 +38,12 @@ def _communities_for(viewer):
         joined=Exists(Member.objects.filter(realm=OuterRef("pk"), entity=viewer)),
         member_count=Count("member", distinct=True),
         my_role=Subquery(
-            Member.objects.filter(realm=OuterRef("pk"), entity=viewer).values("role")[
+            Member.objects.filter(realm=OuterRef("pk"), entity=viewer).values("role__name")[
                 :1
             ]
+        ),
+        my_role_id=Subquery(
+            Member.objects.filter(realm=OuterRef("pk"), entity=viewer).values("role_id")[:1]
         ),
         request_pending=Exists(
             Invite.objects.filter(
@@ -125,7 +130,7 @@ class CommunitiesView(APIView):
                 entity=viewer,
                 realm=realm,
                 added_by=viewer,
-                role=MemberRole.OWNER,
+                role=get_default_role(MemberRole.OWNER),
                 date_joined=now(),
             )
         return Response(
@@ -196,12 +201,15 @@ class CommunityLeaveView(APIView):
             realm = get_object_or_404(
                 Realm.objects.select_for_update(), pk=realm_id, type="community"
             )
-            member = Member.objects.filter(realm=realm, entity=request.entity).first()
+            member = (
+                Member.objects.select_related("role")
+                .filter(realm=realm, entity=request.entity).first()
+            )
             cancel_only = request.data.get("cancel_request") is True
             if (
                 not cancel_only
                 and member is not None
-                and member.role == MemberRole.OWNER
+                and member.role.name == MemberRole.OWNER
             ):
                 raise ValidationError(
                     "Transfer ownership before leaving this community."

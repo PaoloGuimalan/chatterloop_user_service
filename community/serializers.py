@@ -5,6 +5,8 @@ from entity.serializers import EntitySerializer
 
 
 class RealmMemberSerializer(serializers.ModelSerializer):
+    role = serializers.CharField(source="role.name", read_only=True)
+    role_id = serializers.IntegerField(read_only=True)
     entity = EntitySerializer(read_only=True)
     added_by = EntitySerializer(read_only=True)
 
@@ -33,6 +35,8 @@ class FollowSerializer(serializers.ModelSerializer):
 
 
 class InviteSerializer(serializers.ModelSerializer):
+    role = serializers.CharField(source="role.name", read_only=True, allow_null=True)
+    role_id = serializers.IntegerField(read_only=True, allow_null=True)
     realm_id = serializers.CharField(source="realm.realm_id", read_only=True)
     realm_name = serializers.CharField(source="realm.name", read_only=True)
     realm_type = serializers.CharField(source="realm.type", read_only=True)
@@ -68,6 +72,7 @@ class InviteSerializer(serializers.ModelSerializer):
             "status",
             "purpose",
             "role",
+            "role_id",
             "inviter",
             "target_email",
             "target_entity",
@@ -103,6 +108,7 @@ class RealmSerializer(serializers.ModelSerializer):
     # works on querysets that did not apply my_role_annotation: those get null
     # instead of an AttributeError.
     my_role = serializers.SerializerMethodField()
+    my_role_id = serializers.IntegerField(read_only=True, allow_null=True, default=None)
     parent = BasicRealmSerializer(allow_null=True)
 
     def get_my_role(self, obj):

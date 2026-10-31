@@ -77,7 +77,7 @@ from entity.utils import (
     get_entity_profile_path,
     entity_side_is_visible,
 )
-from community.annotations import my_role_annotation
+from community.annotations import my_role_annotation, my_role_id_annotation
 from community.serializers import RealmSerializer
 import bcrypt
 import uuid
@@ -398,7 +398,7 @@ class UserAuthentication(APIView):
                         Q(
                             Exists(
                                 Member.objects.filter(
-                                    Q(Q(role="admin") | Q(role="owner")),
+                                    Q(Q(role__name="admin") | Q(role__name="owner")),
                                     realm=OuterRef("pk"),
                                     entity=entity,
                                 )
@@ -424,6 +424,7 @@ class UserAuthentication(APIView):
                         )
                     ),
                     my_role=my_role_annotation(entity),
+                    my_role_id=my_role_id_annotation(entity),
                     request_pending=(
                         Exists(
                             Invite.objects.filter(
@@ -2485,7 +2486,7 @@ class DeviceSessionList(APIView):
         check, so a revoke can never reach an entity this device could not
         have legitimately held a session for."""
         page_entity_ids = Member.objects.filter(
-            entity=entity, role__in=[MemberRole.OWNER, MemberRole.ADMIN]
+            entity=entity, role__name__in=[MemberRole.OWNER, MemberRole.ADMIN]
         ).values_list("realm__entity_id", flat=True)
         return [str(entity.id), *[str(e) for e in page_entity_ids]]
 

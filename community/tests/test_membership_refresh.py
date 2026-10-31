@@ -27,7 +27,7 @@ class MembershipRefreshTests(unittest.TestCase):
         force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
         with (
             patch("community.community_views.get_object_or_404", return_value=realm),
-            patch("community.community_views.Member.objects.filter") as members,
+            patch("community.community_views.Member.objects.select_related") as members,
             patch("community.community_views.Invite.objects.filter") as invites,
             patch(
                 "community.community_views.transaction.atomic",
@@ -39,7 +39,7 @@ class MembershipRefreshTests(unittest.TestCase):
             ),
             patch.object(InviteView, "_notify_requests_changed") as notify,
         ):
-            members.return_value.first.return_value = None
+            members.return_value.filter.return_value.first.return_value = None
             invites.return_value.update.return_value = 1
             response = CommunityLeaveView.as_view()(request, realm_id="club")
         self.assertEqual(response.status_code, 200)

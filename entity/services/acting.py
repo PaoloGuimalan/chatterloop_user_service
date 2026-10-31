@@ -12,7 +12,7 @@ def can_act_as_entity(account, entity) -> bool:
         return False
     Member = apps.get_model("community", "Member")
     return Member.objects.filter(entity_id=personal_id, realm__entity_id=entity.id,
-                                 realm__is_active=True, role__in=("owner", "admin")).exists()
+                                 realm__is_active=True, role__name__in=("owner", "admin")).exists()
 
 
 def is_switchable_realm(realm) -> bool:

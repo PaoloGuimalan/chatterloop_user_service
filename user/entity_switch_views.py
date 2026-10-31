@@ -80,9 +80,12 @@ class EntitySwitch(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            member = Member.objects.filter(entity=user.entity, realm=realm).first()
+            member = (
+                Member.objects.select_related("role")
+                .filter(entity=user.entity, realm=realm).first()
+            )
 
-            if member is None or member.role not in (
+            if member is None or member.role.name not in (
                 MemberRole.OWNER,
                 MemberRole.ADMIN,
             ):
@@ -149,10 +152,10 @@ class SwitchablePages(APIView):
             members = (
                 Member.objects.filter(
                     entity=user.entity,
-                    role__in=(MemberRole.OWNER, MemberRole.ADMIN),
+                    role__name__in=(MemberRole.OWNER, MemberRole.ADMIN),
                     realm__type="page",
                 )
-                .select_related("realm")
+                .select_related("realm", "role")
                 .order_by("realm__name")
             )
 
@@ -163,7 +166,8 @@ class SwitchablePages(APIView):
                     "name": member.realm.name,
                     "slug": member.realm.slug,
                     "profile": member.realm.profile,
-                    "role": member.role,
+                    "role": member.role.name,
+                    "role_id": member.role_id,
                 }
                 for member in members
             ]

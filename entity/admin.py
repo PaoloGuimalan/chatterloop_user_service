@@ -2,19 +2,33 @@ from django.contrib import admin
 from .models import (
     Entity,
     PermissionCatalogEntry,
-    RolePermission,
+    Role,
     EntityPermission,
-    EntityTypeDefaultPermission,
+    EntityTypeDefinition,
     Token,
     EncryptionConfiguration,
     EncryptionPurpose,
 )
+from entity.forms import PermissionCatalogForm, RoleForm
 
 admin.site.register(Entity)
-admin.site.register(PermissionCatalogEntry)
-admin.site.register(RolePermission)
 admin.site.register(EntityPermission)
-admin.site.register(EntityTypeDefaultPermission)
+admin.site.register(EntityTypeDefinition)
+
+
+@admin.register(PermissionCatalogEntry)
+class PermissionCatalogAdmin(admin.ModelAdmin):
+    form = PermissionCatalogForm
+    list_display = ("codename", "scope", "is_active")
+    list_filter = ("scope", "is_active")
+    search_fields = ("codename",)
+
+
+@admin.register(Role)
+class RoleAdmin(admin.ModelAdmin):
+    form = RoleForm
+    list_display = ("name", "id", "is_default")
+    list_filter = ("name", "is_default")
 
 
 @admin.register(EncryptionPurpose)

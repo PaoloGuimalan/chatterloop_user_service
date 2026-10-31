@@ -347,14 +347,14 @@ class CommunityScopeTests(unittest.TestCase):
     def test_community_entities_cannot_be_members_of_any_realm(self):
         from django.core.exceptions import ValidationError
 
-        membership = Member(entity_id="community", realm_id="another-community")
+        membership = Member(entity_id="community", realm_id="another-community", role_id=1)
         with patch("community.models.Realm.objects.filter") as lookup:
             lookup.return_value.exists.return_value = True
             with self.assertRaises(ValidationError):
                 membership.clean()
 
     def test_pages_remain_eligible_for_membership(self):
-        membership = Member(entity_id="page", realm_id="community")
+        membership = Member(entity_id="page", realm_id="community", role_id=1)
         with patch("community.models.Realm.objects.filter") as lookup:
             lookup.return_value.exists.return_value = False
             membership.clean()

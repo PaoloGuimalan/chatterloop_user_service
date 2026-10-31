@@ -9,7 +9,7 @@ from user.models import Account
 # an Entity, so a page can follow a page. Re-exported so existing
 # `from community.models import Follow` imports keep resolving.
 from entity.models import Entity, Follow  # noqa: F401
-from entity.permissions import MemberRole
+from entity.roles import get_default_member_role_id
 from django.utils.timezone import now
 from core.profile_paths import clean_model_profile_path, validate_model_profile_path
 
@@ -135,8 +135,9 @@ class Member(models.Model):
         on_delete=models.DO_NOTHING,
         related_name="user_as_added_by",
     )
-    role = models.CharField(
-        max_length=150, choices=MemberRole.choices, default=MemberRole.MEMBER
+    role = models.ForeignKey(
+        "entity.Role", on_delete=models.PROTECT, related_name="memberships",
+        default=get_default_member_role_id,
     )
     date_joined = models.DateTimeField(null=True)
 
@@ -201,7 +202,10 @@ class Invite(models.Model):
         max_length=20, choices=INVITE_PURPOSE_CHOICES, default="join"
     )
     # A "manage" invite's role: admin or moderator. Null otherwise.
-    role = models.CharField(max_length=20, null=True, blank=True, default=None)
+    role = models.ForeignKey(
+        "entity.Role", on_delete=models.PROTECT, related_name="invites",
+        null=True, blank=True, default=None,
+    )
     # Only what the inviter TYPED. A username invite has none - storing the
     # account's address would hand it to the inviter in every reply.
     target_email = models.EmailField(db_index=True, null=True, blank=True)

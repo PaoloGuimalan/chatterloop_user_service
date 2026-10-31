@@ -2,7 +2,8 @@ from django.db.models import Q
 from django.utils.timezone import now
 
 from entity.models import EntityPermission
-from entity.permissions import GLOBAL_PLATFORM_DEFAULT, MemberRole, PermissionEffect
+from entity.permissions import GLOBAL_PLATFORM_DEFAULT, PermissionEffect
+from entity.roles import realm_owner_role_id
 from entity.services.permission_catalog_cache import (
     get_catalog,
     get_entity_type_matrix,
@@ -14,7 +15,9 @@ def _active_override(entity, permission, realm=None):
     """Non-expired EntityPermission row for this exact (entity, permission,
     realm) scope, if one exists."""
     return (
-        EntityPermission.objects.filter(entity=entity, permission=permission, realm=realm)
+        EntityPermission.objects.filter(
+            entity=entity, permission__codename=permission, realm=realm,
+        )
         .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now()))
         .first()
     )
@@ -31,7 +34,7 @@ def has_permission(entity, permission, realm=None) -> bool:
 
     The permission catalog, role-default matrix, and entity-type-default
     matrix are database-backed (PermissionCatalogEntry, RolePermission,
-    EntityTypeDefaultPermission) rather than hardcoded Python sets, cached
+    PermissionEntityType) rather than hardcoded Python sets, cached
     via entity/services/permission_catalog_cache.py.
     """
     if entity is None:
@@ -68,12 +71,13 @@ def has_permission(entity, permission, realm=None) -> bool:
         # can never equal a *different* realm's entity - so it can't be used
         # to bypass authorization on any other realm.
         if getattr(realm, "entity_id", None) == entity.id:
-            return permission in get_role_matrix().get(MemberRole.OWNER.value, [])
+            owner_role_id = realm_owner_role_id(realm)
+            return permission in get_role_matrix().get(str(owner_role_id), [])
 
         member = Member.objects.filter(entity=entity, realm=realm).first()
         if member is None:
             return False
-        return permission in get_role_matrix().get(member.role, [])
+        return permission in get_role_matrix().get(str(member.role_id), [])
 
     default_check = GLOBAL_PLATFORM_DEFAULT.get(permission)
     return bool(default_check(entity)) if default_check else False

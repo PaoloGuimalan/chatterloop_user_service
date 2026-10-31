@@ -26,6 +26,18 @@ class EntityType(models.TextChoices):
     REALM_CHOICE = "realm", "realm"
 
 
+class EntityTypeDefinition(models.Model):
+    """Entity-type choices used by the permission catalog's many-to-many field."""
+
+    name = models.CharField(max_length=20, choices=EntityType.choices, unique=True)
+
+    class Meta:
+        db_table = "entity_type"
+
+    def __str__(self):
+        return self.name
+
+
 class Entity(models.Model):
     id = models.CharField(max_length=40, default=uuid.uuid4, primary_key=True)
     type = models.CharField(choices=EntityType.choices)
@@ -98,7 +110,10 @@ class EntityPermission(models.Model):
     entity = models.ForeignKey(
         Entity, on_delete=models.CASCADE, related_name="permission_overrides"
     )
-    permission = models.CharField(max_length=150)
+    permission = models.ForeignKey(
+        "PermissionCatalogEntry", on_delete=models.PROTECT,
+        related_name="entity_overrides",
+    )
     effect = models.CharField(max_length=10, choices=PermissionEffect.choices)
     realm = models.ForeignKey(
         "community.Realm",
@@ -119,9 +134,10 @@ class EntityPermission(models.Model):
     expires_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
+        db_table = "entity_permission"
         indexes = [
-            models.Index(fields=["entity", "permission", "realm"]),
-            models.Index(fields=["entity", "permission"]),
+            models.Index(fields=["entity", "permission", "realm"], name="entity_enti_entity__2248f6_idx"),
+            models.Index(fields=["entity", "permission"], name="entity_enti_entity__39ca75_idx"),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -156,31 +172,51 @@ class PermissionCatalogEntry(models.Model):
     description = models.TextField(blank=True, default="")
     scope = models.CharField(max_length=20, choices=PermissionScope.choices)
     is_active = models.BooleanField(default=True)  # soft-disable without deleting
+    entity_types = models.ManyToManyField(
+        EntityTypeDefinition, through="PermissionEntityType", related_name="permissions", blank=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        indexes = [models.Index(fields=["scope", "is_active"])]
+        db_table = "entity_permission_catalog"
+        indexes = [models.Index(fields=["scope", "is_active"], name="entity_perm_scope_356fa2_idx")]
 
     def __str__(self):
         return self.codename
 
 
-class RolePermission(models.Model):
-    """
-    Role -> default permission mapping (what used to be the hardcoded
-    REALM_ROLE_DEFAULT_PERMISSIONS dict). MemberRole itself stays a fixed
-    Python enum (see entity/permissions.py for why) - only which
-    permissions each role grants by default is database-editable.
-    """
+class Role(models.Model):
+    """A role definition with multiple permissions; duplicate names are allowed."""
 
-    role = models.CharField(max_length=20, choices=MemberRole.choices)
+    name = models.CharField(max_length=150, choices=MemberRole.choices)
+    is_default = models.BooleanField(default=False)
+    permissions = models.ManyToManyField(
+        PermissionCatalogEntry, through="RolePermission", related_name="roles", blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "entity_role"
+        constraints = [models.UniqueConstraint(
+            fields=["name"], condition=models.Q(is_default=True), name="unique_default_role_name",
+        )]
+
+    def __str__(self):
+        return f"{self.get_name_display()} (#{self.pk})" if self.pk else self.get_name_display()
+
+
+class RolePermission(models.Model):
+    """Join records for Role.permissions, retaining legacy grant timestamps."""
+
+    role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name="permission_links")
     permission = models.ForeignKey(
         PermissionCatalogEntry, on_delete=models.CASCADE, related_name="role_grants"
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        db_table = "entity_role_permissions"
         constraints = [
             models.UniqueConstraint(
                 fields=["role", "permission"], name="unique_role_permission"
@@ -191,33 +227,10 @@ class RolePermission(models.Model):
         return f"{self.role} -> {self.permission.codename}"
 
 
-class EntityTypeDefaultPermission(models.Model):
-    """
-    Entity.type -> default permission mapping, for permissions whose
-    resolution depends on the ACTING entity's own fundamental type (e.g.
-    "does this entity see the Page Dashboard module" vs "does this entity
-    see the Diary module") rather than on a realm-scoped Member.role.
+class PermissionEntityType(models.Model):
+    """Join rows for PermissionCatalogEntry.entity_types, preserving assignment IDs."""
 
-    Distinct axis from RolePermission: RolePermission answers "what can
-    this entity do WITHIN a specific realm it is a member of" (e.g. can an
-    admin of realm X update realm X). This model answers "what does this
-    entity fundamentally get, everywhere, by virtue of being a user vs a
-    realm" - independent of any specific realm the entity might currently
-    be visiting or a member of. Scoped to PermissionCatalogEntry rows with
-    scope=PermissionScope.ENTITY_TYPE, always checked with realm=None (same
-    call shape as global-scoped permissions), resolved against this table
-    keyed by entity.type instead of GLOBAL_PLATFORM_DEFAULT's predicates.
-
-    Keyed on the coarse Entity.type (user/bot/realm), not the finer-grained
-    Realm.type (page/server/group/...) - module gating is a UI-shell-level
-    concern (personal vs. institutional), and drilling into Realm.type would
-    cost an extra query hop on every permission check for no current
-    benefit. If individual realm types ever need to diverge from their
-    entity type's default, use EntityPermission's existing nullable `realm`
-    FK for a per-realm exception instead of adding a new model.
-    """
-
-    entity_type = models.CharField(max_length=20, choices=EntityType.choices)
+    entity_type = models.ForeignKey(EntityTypeDefinition, on_delete=models.PROTECT)
     permission = models.ForeignKey(
         PermissionCatalogEntry,
         on_delete=models.CASCADE,
@@ -226,6 +239,7 @@ class EntityTypeDefaultPermission(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        db_table = "entity_permission_catalog_entity_types"
         constraints = [
             models.UniqueConstraint(
                 fields=["entity_type", "permission"],
@@ -578,7 +592,7 @@ class Token(models.Model):
     WHAT `scopes` MEANS
     -------------------
     The permission codenames this token may exercise, from the same catalog
-    (`entity_permissioncatalogentry`) that every other permission check in the
+    (`entity_permission_catalog`) that every other permission check in the
     platform reads. It is a CEILING, not a grant. A request is allowed only if
     the scope is on the token AND `has_permission(entity, codename, realm)`
     passes for the owning entity, so:
@@ -589,8 +603,8 @@ class Token(models.Model):
       * a token can be deliberately narrower than its entity - a read-only
         token for a bot that is otherwise allowed to post.
 
-    Stored as JSON rather than a join table to match `EntityPermission`, which
-    also holds a bare codename string rather than a FK to the catalog.
+    Token scopes remain JSON codenames as a portable ceiling. EntityPermission
+    overrides reference the catalog by numeric foreign key instead.
     """
 
     id = models.CharField(

@@ -19,13 +19,17 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 from community.models import Invite, Member, Realm
 from community.views import InviteView
 from community.community_views import CommunityLeaveView
-from entity.models import Entity, Follow
+from entity.models import Entity, Follow, Role
 from user.views import UserAuthentication
+
+
+def _role(name):
+    return Role.objects.get_or_create(name=name, is_default=True)[0]
 
 
 class CommunityProfilePathTests(unittest.TestCase):
     def test_cancelling_a_community_request_never_removes_an_approved_member(self):
-        Member.objects.create(realm=self.realm, entity=self.viewer, added_by=self.viewer, role="member")
+        Member.objects.create(realm=self.realm, entity=self.viewer, added_by=self.viewer, role=_role("member"))
         request = APIRequestFactory().post("/api/realm/communities/club/leave", {"cancel_request": True}, format="json")
         request.entity = self.viewer
         force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
@@ -76,7 +80,7 @@ class CommunityProfilePathTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.models = (Entity, Realm, Member, Follow, Invite)
+        cls.models = (Entity, Role, Realm, Member, Follow, Invite)
         with connection.schema_editor() as editor:
             for model in cls.models:
                 editor.create_model(model)
@@ -136,6 +140,7 @@ class CommunityProfilePathTests(unittest.TestCase):
         self.assertFalse(data["is_member"])
         self.assertFalse(data["is_admin"])
         self.assertIsNone(data["my_role"])
+        self.assertIsNone(data["my_role_id"])
 
         Member.objects.bulk_create(
             [
@@ -143,7 +148,7 @@ class CommunityProfilePathTests(unittest.TestCase):
                     entity=self.viewer,
                     realm=self.realm,
                     added_by=self.viewer,
-                    role="member",
+                    role=_role("member"),
                 )
             ]
         )
@@ -151,6 +156,7 @@ class CommunityProfilePathTests(unittest.TestCase):
         self.assertTrue(joined["is_member"])
         self.assertFalse(joined["is_admin"])
         self.assertEqual(joined["my_role"], "member")
+        self.assertEqual(joined["my_role_id"], _role("member").pk)
         Member.objects.filter(realm=self.realm).delete()
         self.assertFalse(
             self.get_profile(self.realm.realm_id).data["data"]["is_member"]

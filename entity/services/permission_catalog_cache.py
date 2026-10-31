@@ -31,7 +31,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 CATALOG_CACHE_KEY = "permcache:catalog:v1"
-ROLE_MATRIX_CACHE_KEY = "permcache:role_matrix:v1"
+ROLE_MATRIX_CACHE_KEY = "permcache:role_matrix:v2"
 ENTITY_TYPE_MATRIX_CACHE_KEY = "permcache:entity_type_matrix:v1"
 CACHE_TTL_SECONDS = 60 * 60  # safety-net only; invalidation is signal-driven
 
@@ -89,7 +89,7 @@ def get_catalog():
 
 
 def get_role_matrix():
-    """role -> [codename, ...], joined against active permissions only."""
+    """Exact role ID string -> active permission codenames; never keyed by name."""
     cached = _redis_get(ROLE_MATRIX_CACHE_KEY)
     if cached is not None:
         return json.loads(cached)
@@ -99,9 +99,9 @@ def get_role_matrix():
     matrix = {}
     role_permissions = RolePermission.objects.filter(
         permission__is_active=True
-    ).select_related("permission")
-    for rp in role_permissions:
-        matrix.setdefault(rp.role, []).append(rp.permission.codename)
+    ).values_list("role_id", "permission__codename")
+    for role_id, codename in role_permissions:
+        matrix.setdefault(str(role_id), []).append(codename)
 
     _redis_set(ROLE_MATRIX_CACHE_KEY, json.dumps(matrix))
     return matrix
@@ -113,14 +113,14 @@ def get_entity_type_matrix():
     if cached is not None:
         return json.loads(cached)
 
-    from entity.models import EntityTypeDefaultPermission
+    from entity.models import PermissionEntityType
 
     matrix = {}
-    entity_type_permissions = EntityTypeDefaultPermission.objects.filter(
+    entity_type_permissions = PermissionEntityType.objects.filter(
         permission__is_active=True
-    ).select_related("permission")
-    for etp in entity_type_permissions:
-        matrix.setdefault(etp.entity_type, []).append(etp.permission.codename)
+    ).values_list("entity_type__name", "permission__codename")
+    for entity_type, codename in entity_type_permissions:
+        matrix.setdefault(entity_type, []).append(codename)
 
     _redis_set(ENTITY_TYPE_MATRIX_CACHE_KEY, json.dumps(matrix))
     return matrix
@@ -132,6 +132,7 @@ def invalidate_catalog_cache():
 
 def invalidate_role_matrix_cache():
     _redis_delete(ROLE_MATRIX_CACHE_KEY)
+    _redis_delete("permcache:role_matrix:v1")
 
 
 def invalidate_entity_type_matrix_cache():

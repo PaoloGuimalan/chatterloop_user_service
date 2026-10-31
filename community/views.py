@@ -28,8 +28,9 @@ from datetime import datetime
 from user.models import Account
 from user.utils.external_requests import emailer
 from user_service.services.redis import RedisPubSubClient
-from community.annotations import my_role_annotation
+from community.annotations import my_role_annotation, my_role_id_annotation
 from entity.permissions import Permission
+from entity.roles import get_default_role
 from entity.services.permission_resolver import has_permission
 from entity.utils import get_entity_display_username, resolve_entity_target
 from entity.services.follows import (
@@ -90,7 +91,7 @@ class TopRealms(APIView):
                     Q(
                         Exists(
                             Member.objects.filter(
-                                Q(Q(role="admin") | Q(role="owner")),
+                                Q(Q(role__name="admin") | Q(role__name="owner")),
                                 realm=OuterRef("pk"),
                                 entity=entity,
                             )
@@ -116,6 +117,7 @@ class TopRealms(APIView):
                     )
                 ),
                 my_role=my_role_annotation(entity),
+                my_role_id=my_role_id_annotation(entity),
                 request_pending=Exists(
                     Invite.objects.filter(
                         realm=OuterRef("pk"),
@@ -177,7 +179,7 @@ class MyRealms(APIView):
                     Q(
                         Exists(
                             Member.objects.filter(
-                                Q(Q(role="admin") | Q(role="owner")),
+                                Q(Q(role__name="admin") | Q(role__name="owner")),
                                 realm=OuterRef("pk"),
                                 entity=entity,
                             )
@@ -203,6 +205,7 @@ class MyRealms(APIView):
                     )
                 ),
                 my_role=my_role_annotation(entity),
+                my_role_id=my_role_id_annotation(entity),
             ).filter(is_member=True, type=type)
 
             if search:
@@ -336,7 +339,7 @@ class FollowRealmView(APIView):
                         Q(
                             Exists(
                                 Member.objects.filter(
-                                    Q(Q(role="admin") | Q(role="owner")),
+                                    Q(Q(role__name="admin") | Q(role__name="owner")),
                                     realm=OuterRef("pk"),
                                     entity=entity,
                                 )
@@ -362,6 +365,7 @@ class FollowRealmView(APIView):
                         )
                     ),
                     my_role=my_role_annotation(entity),
+                    my_role_id=my_role_id_annotation(entity),
                 )
                 .filter(is_follower=True, type=type)
                 .order_by("-id")
@@ -785,7 +789,7 @@ class JoinGroupRealmV2(APIView):
                 realm=realm,
                 defaults={
                     "added_by": entity,
-                    "role": "member",
+                    "role": get_default_role("member"),
                     "date_joined": now(),
                 },
             )
@@ -833,7 +837,7 @@ class RealmMembersView(APIView):
                 )
 
             realm_members_query_set = (
-                Member.objects.prefetch_related("entity", "added_by")
+                Member.objects.select_related("entity", "added_by", "role")
                 .filter(realm__id=realm_id)
                 .order_by("-date_joined")
             )
@@ -1000,11 +1004,11 @@ class InviteView(APIView):
         if realm.type == "community":
             return set(
                 Member.objects.filter(
-                    realm=realm, role__in=("owner", "admin", "moderator")
+                    realm=realm, role__name__in=("owner", "admin", "moderator")
                 ).values_list("entity_id", flat=True)
             )
         recipient_ids = set(
-            Member.objects.filter(realm=realm, role__in=("owner", "admin")).values_list(
+            Member.objects.filter(realm=realm, role__name__in=("owner", "admin")).values_list(
                 "entity__id", flat=True
             )
         )
@@ -1083,7 +1087,7 @@ class InviteView(APIView):
             realm=invite.realm,
             defaults={
                 "added_by": actor,
-                "role": "member",
+                "role": get_default_role("member"),
                 "date_joined": now(),
             },
         )
@@ -1100,7 +1104,7 @@ class InviteView(APIView):
           {realm_id, target}            what was typed: an email or a username
           {realm_id, target_entity_id}  a person picked from search
           {realm_id, target_email}      the older field, still accepted
-          + purpose ("join" | "manage" | "follow") and role (for "manage");
+          + purpose ("join" | "manage" | "follow") and role_id (for "manage");
             a realm with one purpose takes it when none is sent.
 
         kind="request" - a conference participant asking for access, as before.
@@ -1129,6 +1133,7 @@ class InviteView(APIView):
                     target_entity_id=request.data.get("target_entity_id"),
                     purpose=request.data.get("purpose"),
                     role=request.data.get("role"),
+                    role_id=request.data.get("role_id"),
                 )
             except InviteError as err:
                 return Response(
@@ -1213,7 +1218,7 @@ class InviteView(APIView):
             target_email = request.query_params.get("target_email")
 
             if invite_token:
-                invite = get_object_or_404(Invite, invite_token=invite_token)
+                invite = get_object_or_404(Invite.objects.select_related("role"), invite_token=invite_token)
                 return Response(
                     {
                         "status": True,
@@ -1285,7 +1290,7 @@ class InviteView(APIView):
                 if status_filter in {"pending", "accepted", "declined", "revoked"}:
                     invites = invites.filter(status=status_filter)
 
-                invites = invites.order_by("-created_at")
+                invites = invites.select_related("role").order_by("-created_at")
                 return Response(
                     {
                         "status": True,
@@ -1296,7 +1301,7 @@ class InviteView(APIView):
 
             # Invites the caller SENT. created_by is an Entity - this used to
             # filter on request.user, an Account, which matched nothing.
-            invites = Invite.objects.filter(created_by=request.entity).order_by(
+            invites = Invite.objects.select_related("role").filter(created_by=request.entity).order_by(
                 "-created_at"
             )
             return Response(
@@ -1354,7 +1359,7 @@ class InviteView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            invite = get_object_or_404(Invite, invite_token=invite_token)
+            invite = get_object_or_404(Invite.objects.select_related("role"), invite_token=invite_token)
             normalized_status = str(status_value).strip().lower()
 
             if normalized_status not in {"accepted", "declined", "revoked"}:
@@ -1517,6 +1522,8 @@ class InviteView(APIView):
                 },
                 status=status.HTTP_200_OK,
             )
+        except InviteError as err:
+            return Response({"status": False, "message": err.message}, status=err.status_code)
         except Exception as e:
             logger.exception("InviteView.patch failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)

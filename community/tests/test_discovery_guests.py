@@ -66,9 +66,9 @@ class CommunityDiscoveryGuestTests(unittest.TestCase):
                 "community.community_views.get_object_or_404",
                 return_value=Realm(id="club"),
             ),
-            patch("community.community_views.Member.objects.filter") as members,
+            patch("community.community_views.Member.objects.select_related") as members,
         ):
-            members.return_value.first.return_value = SimpleNamespace(role="owner")
+            members.return_value.filter.return_value.first.return_value = SimpleNamespace(role=SimpleNamespace(name="owner"))
             response = CommunityLeaveView.as_view()(request, realm_id="club")
         self.assertEqual(response.status_code, 400)
         self.assertIsInstance(response.data, list)
@@ -102,6 +102,7 @@ class CommunityDiscoveryGuestTests(unittest.TestCase):
                 realm.joined = False
                 realm.member_count = 3
                 realm.my_role = None
+                realm.my_role_id = None
                 realm.request_pending = False
                 request = APIRequestFactory().get("/api/realm/communities/garden")
                 with patch(

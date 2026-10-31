@@ -53,11 +53,15 @@ def export_account_data(account, entity):
                 "realm_id", "name", "type", "is_private", "created_at"
             )
         ),
-        "realm_memberships": list(
-            Member.objects.filter(entity=entity).values(
-                "realm__realm_id", "realm__name", "role", "nickname", "date_joined"
+        "realm_memberships": [
+            {
+                **{key: value for key, value in row.items() if key != "role__name"},
+                "role": row["role__name"],
+            }
+            for row in Member.objects.filter(entity=entity).values(
+                "realm__realm_id", "realm__name", "role_id", "role__name", "nickname", "date_joined"
             )
-        ),
+        ],
         # Follow targets an entity now, so a followed page is reached via
         # Realm.entity's reverse accessor. Export key kept as-is so an
         # existing export's shape does not change.

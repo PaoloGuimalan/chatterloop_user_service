@@ -51,7 +51,7 @@ MANAGER_ROLES = ("owner", "admin", "moderator")
 
 def _managers(realm):
     return list(
-        Member.objects.filter(realm=realm, role__in=MANAGER_ROLES).values_list(
+        Member.objects.filter(realm=realm, role__name__in=MANAGER_ROLES).values_list(
             "entity_id", flat=True
         )
     )
@@ -443,7 +443,7 @@ def _manager_realm(request, realm_id):
         Realm, Q(pk=realm_id) | Q(slug=realm_id), type="community", is_active=True
     )
     if not Member.objects.filter(
-        realm=realm, entity=request.entity, role__in=MANAGER_ROLES
+        realm=realm, entity=request.entity, role__name__in=MANAGER_ROLES
     ).exists() or not has_permission(
         request.entity, Permission.REALM_REQUEST_APPROVE, realm=realm
     ):

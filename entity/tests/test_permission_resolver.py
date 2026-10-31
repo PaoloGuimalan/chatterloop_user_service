@@ -1,23 +1,14 @@
 from datetime import timedelta
 
-from django_redis import get_redis_connection
+from unittest.mock import patch
 from django.test import TestCase
 from django.utils.timezone import now
 
 from community.models import Member, Realm
-from entity.models import Entity, EntityPermission
+from entity.models import Entity, EntityPermission, PermissionCatalogEntry
 from entity.permissions import MemberRole, Permission, PermissionEffect
-from entity.services.permission_catalog_cache import (
-    CATALOG_CACHE_KEY,
-    ENTITY_TYPE_MATRIX_CACHE_KEY,
-    ROLE_MATRIX_CACHE_KEY,
-)
 from entity.services.permission_resolver import has_permission
-
-
-def _clear_permission_cache():
-    conn = get_redis_connection("default")
-    conn.delete(CATALOG_CACHE_KEY, ROLE_MATRIX_CACHE_KEY, ENTITY_TYPE_MATRIX_CACHE_KEY)
+from entity.roles import get_default_role
 
 
 def _make_entity(entity_type="user"):
@@ -36,13 +27,11 @@ def _make_realm(created_by):
 
 class HasPermissionTests(TestCase):
     def setUp(self):
-        # The catalog/role-matrix cache lives in the real shared Redis
-        # instance (not a per-test in-memory cache), so clear it around
-        # every test - otherwise a stale read from a previous run (or a
-        # write that outlives this test's DB transaction rollback) can
-        # leak between tests or into real app traffic.
-        _clear_permission_cache()
-        self.addCleanup(_clear_permission_cache)
+        # Resolve against this test database, without touching shared Redis.
+        for method in ("_redis_get", "_redis_set", "_redis_delete"):
+            mock = patch(f"entity.services.permission_catalog_cache.{method}", return_value=None)
+            mock.start()
+            self.addCleanup(mock.stop)
 
         self.entity = _make_entity()
         self.creator = _make_entity()
@@ -114,7 +103,7 @@ class HasPermissionTests(TestCase):
         user_entity = _make_entity(entity_type="user")
         EntityPermission.objects.create(
             entity=user_entity,
-            permission=Permission.MODULE_DIARY_ACCESS,
+            permission=PermissionCatalogEntry.objects.get(codename=Permission.MODULE_DIARY_ACCESS),
             effect=PermissionEffect.DENY,
             realm=None,
         )
@@ -124,7 +113,7 @@ class HasPermissionTests(TestCase):
         realm_entity = _make_entity(entity_type="realm")
         EntityPermission.objects.create(
             entity=realm_entity,
-            permission=Permission.MODULE_DIARY_ACCESS,
+            permission=PermissionCatalogEntry.objects.get(codename=Permission.MODULE_DIARY_ACCESS),
             effect=PermissionEffect.GRANT,
             realm=None,
         )
@@ -138,28 +127,28 @@ class HasPermissionTests(TestCase):
     def test_owner_gets_realm_update(self):
         Member.objects.create(
             entity=self.entity, realm=self.realm, added_by=self.creator,
-            role=MemberRole.OWNER, date_joined=now(),
+            role=get_default_role(MemberRole.OWNER), date_joined=now(),
         )
         self.assertTrue(has_permission(self.entity, Permission.REALM_UPDATE, realm=self.realm))
 
     def test_plain_member_denied_realm_update(self):
         Member.objects.create(
             entity=self.entity, realm=self.realm, added_by=self.creator,
-            role=MemberRole.MEMBER, date_joined=now(),
+            role=get_default_role(MemberRole.MEMBER), date_joined=now(),
         )
         self.assertFalse(has_permission(self.entity, Permission.REALM_UPDATE, realm=self.realm))
 
     def test_plain_member_gets_member_view(self):
         Member.objects.create(
             entity=self.entity, realm=self.realm, added_by=self.creator,
-            role=MemberRole.MEMBER, date_joined=now(),
+            role=get_default_role(MemberRole.MEMBER), date_joined=now(),
         )
         self.assertTrue(has_permission(self.entity, Permission.REALM_MEMBER_VIEW, realm=self.realm))
 
     def test_moderator_can_approve_requests_but_not_update_realm(self):
         Member.objects.create(
             entity=self.entity, realm=self.realm, added_by=self.creator,
-            role=MemberRole.MODERATOR, date_joined=now(),
+            role=get_default_role(MemberRole.MODERATOR), date_joined=now(),
         )
         self.assertTrue(has_permission(self.entity, Permission.REALM_REQUEST_APPROVE, realm=self.realm))
         self.assertFalse(has_permission(self.entity, Permission.REALM_UPDATE, realm=self.realm))
@@ -191,7 +180,7 @@ class HasPermissionTests(TestCase):
 
     def test_explicit_deny_beats_self_realm_owner_default(self):
         EntityPermission.objects.create(
-            entity=self.realm.entity, permission=Permission.REALM_UPDATE,
+            entity=self.realm.entity, permission=PermissionCatalogEntry.objects.get(codename=Permission.REALM_UPDATE),
             effect=PermissionEffect.DENY, realm=self.realm,
         )
         self.assertFalse(
@@ -210,7 +199,7 @@ class HasPermissionTests(TestCase):
 
     def test_explicit_deny_beats_platform_default(self):
         EntityPermission.objects.create(
-            entity=self.entity, permission=Permission.MESSAGES_SEND,
+            entity=self.entity, permission=PermissionCatalogEntry.objects.get(codename=Permission.MESSAGES_SEND),
             effect=PermissionEffect.DENY, realm=None,
         )
         self.assertFalse(has_permission(self.entity, Permission.MESSAGES_SEND))
@@ -218,10 +207,10 @@ class HasPermissionTests(TestCase):
     def test_explicit_grant_beats_role_default(self):
         Member.objects.create(
             entity=self.entity, realm=self.realm, added_by=self.creator,
-            role=MemberRole.MEMBER, date_joined=now(),
+            role=get_default_role(MemberRole.MEMBER), date_joined=now(),
         )
         EntityPermission.objects.create(
-            entity=self.entity, permission=Permission.REALM_UPDATE,
+            entity=self.entity, permission=PermissionCatalogEntry.objects.get(codename=Permission.REALM_UPDATE),
             effect=PermissionEffect.GRANT, realm=self.realm,
         )
         self.assertTrue(has_permission(self.entity, Permission.REALM_UPDATE, realm=self.realm))
@@ -229,10 +218,10 @@ class HasPermissionTests(TestCase):
     def test_explicit_deny_beats_owner_role_default(self):
         Member.objects.create(
             entity=self.entity, realm=self.realm, added_by=self.creator,
-            role=MemberRole.OWNER, date_joined=now(),
+            role=get_default_role(MemberRole.OWNER), date_joined=now(),
         )
         EntityPermission.objects.create(
-            entity=self.entity, permission=Permission.REALM_UPDATE,
+            entity=self.entity, permission=PermissionCatalogEntry.objects.get(codename=Permission.REALM_UPDATE),
             effect=PermissionEffect.DENY, realm=self.realm,
         )
         self.assertFalse(has_permission(self.entity, Permission.REALM_UPDATE, realm=self.realm))
@@ -241,7 +230,7 @@ class HasPermissionTests(TestCase):
 
     def test_expired_deny_falls_through_to_default(self):
         EntityPermission.objects.create(
-            entity=self.entity, permission=Permission.MESSAGES_SEND,
+            entity=self.entity, permission=PermissionCatalogEntry.objects.get(codename=Permission.MESSAGES_SEND),
             effect=PermissionEffect.DENY, realm=None,
             expires_at=now() - timedelta(minutes=1),
         )
@@ -249,7 +238,7 @@ class HasPermissionTests(TestCase):
 
     def test_unexpired_deny_still_blocks(self):
         EntityPermission.objects.create(
-            entity=self.entity, permission=Permission.MESSAGES_SEND,
+            entity=self.entity, permission=PermissionCatalogEntry.objects.get(codename=Permission.MESSAGES_SEND),
             effect=PermissionEffect.DENY, realm=None,
             expires_at=now() + timedelta(minutes=5),
         )

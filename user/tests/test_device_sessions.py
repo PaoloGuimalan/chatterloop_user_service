@@ -5,7 +5,7 @@ from django.utils.timezone import now
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from community.models import Member, Realm
-from entity.models import Entity
+from entity.models import Entity, Role
 from entity.permissions import MemberRole
 from user.ext_models.mongomodels import Session
 from user.models import Account
@@ -52,6 +52,10 @@ def _make_session(entity_id, device_token, session_id=None, **overrides):
     )
     session.save()
     return session
+
+
+def _role(name):
+    return Role.objects.get_or_create(name=name, is_default=True)[0]
 
 
 class DeviceSessionListTests(TestCase):
@@ -126,7 +130,7 @@ class DeviceSessionListTests(TestCase):
             entity=self.personal_entity,
             realm=page_realm,
             added_by=self.personal_entity,
-            role=MemberRole.OWNER,
+            role=_role(MemberRole.OWNER),
             date_joined=now(),
         )
         _make_session(page_realm.entity_id, self.device_token)

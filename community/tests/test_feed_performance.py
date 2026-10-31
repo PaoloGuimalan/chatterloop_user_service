@@ -17,7 +17,7 @@ from django.test.utils import CaptureQueriesContext
 
 from bot.models import Bot
 from community.models import Member, Realm
-from entity.models import Entity
+from entity.models import Entity, Role
 from interests.models import Interest, PostInterestLink
 from newsfeed.models import (
     Emoji,
@@ -40,6 +40,7 @@ class FeedPerformanceTests(unittest.TestCase):
         super().setUpClass()
         cls.models = (
             Entity,
+            Role,
             Account,
             Realm,
             Bot,
@@ -67,6 +68,7 @@ class FeedPerformanceTests(unittest.TestCase):
         super().tearDownClass()
 
     def setUp(self):
+        Role.objects.get_or_create(name="member", is_default=True)
         self.entities = {
             kind: Entity.objects.create(id=kind, type=entity_type)
             for kind, entity_type in (

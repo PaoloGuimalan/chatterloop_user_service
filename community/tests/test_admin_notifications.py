@@ -27,11 +27,15 @@ from community.admin_notifications import (
 )
 from community.notifications import notification_description
 from community.tests.notification_memory import NotificationMemory
-from entity.models import Entity
+from entity.models import Entity, Role
 from newsfeed.models import Post, PostTag, Comment, Reaction, CommentReaction, Emoji
 from user.models import Account
 from user.ext_models.mongomodels import Notification, Content, DateInfo
 from user.ext_models import mongomodels
+
+
+def _role(name):
+    return Role.objects.get_or_create(name=name, is_default=True)[0]
 
 
 class AdminNotificationTests(unittest.TestCase):
@@ -40,6 +44,7 @@ class AdminNotificationTests(unittest.TestCase):
         super().setUpClass()
         cls.models = (
             Entity,
+            Role,
             Account,
             Bot,
             Realm,
@@ -64,6 +69,8 @@ class AdminNotificationTests(unittest.TestCase):
         super().tearDownClass()
 
     def setUp(self):
+        for name in ("owner", "admin", "moderator", "member"):
+            _role(name)
         self.enterContext(override_settings(ALLOWED_HOSTS=["testserver"]))
         self.memory = NotificationMemory()
         self.enterContext(patch.object(Notification, "objects", self.memory))
@@ -117,7 +124,7 @@ class AdminNotificationTests(unittest.TestCase):
         )
         Realm.objects.bulk_create([self.realm])
         Member.objects.create(
-            realm=self.realm, entity=self.admin, added_by=self.admin, role="admin"
+            realm=self.realm, entity=self.admin, added_by=self.admin, role=_role("admin")
         )
         self.invite = Invite.objects.create(
             realm=self.realm,
@@ -237,7 +244,7 @@ class AdminNotificationTests(unittest.TestCase):
 
     def test_each_admin_counts_their_own_unread_notifications(self):
         other = Entity.objects.create(id="other-admin", type="user")
-        Member.objects.create(realm=self.realm, entity=other, added_by=self.admin, role="moderator")
+        Member.objects.create(realm=self.realm, entity=other, added_by=self.admin, role=_role("moderator"))
         for reference in ("one", "two"):
             record_admin_activity(self.realm, self.notice(reference))
         acknowledge_activity(self.realm, self.admin, 0, self.canonical_ids())
@@ -350,7 +357,7 @@ class AdminNotificationTests(unittest.TestCase):
     def test_inbox_requires_a_current_manager_and_permission(self):
         notify_join_request(self.invite)
         self.assertEqual(self.get_inbox(permitted=False).status_code, 403)
-        Member.objects.filter(entity=self.admin).update(role="member")
+        Member.objects.filter(entity=self.admin).update(role=_role("member"))
         self.assertEqual(self.get_inbox().status_code, 403)
 
     def test_inbox_rechecks_current_activity_anonymity_and_community_authorship(self):
@@ -462,3 +469,159 @@ class AdminNotificationTests(unittest.TestCase):
                 InviteView()._add_member_if_missing(self.invite, self.admin)
                 raise RuntimeError("rollback")
         self.assertEqual(self.canonical_ids(), [])
+
+    def test_manage_invite_uses_selected_duplicate_role_id_and_wire_name(self):
+        from community.invites import create_invite, accept_side_effects
+        from community.serializers import InviteSerializer, RealmMemberSerializer
+
+        Realm.objects.filter(pk=self.realm.pk).update(type="page")
+        self.realm.refresh_from_db()
+        selected = Role.objects.create(name="moderator")
+        other = Role.objects.create(name="moderator")
+        with (
+            patch("community.invites.has_permission", return_value=True),
+            patch("community.invites.is_blocked", return_value=False),
+            patch("community.invites.get_entity_display_username", return_value="Admin"),
+            patch("community.invites.notify_invitee"),
+        ):
+            invite, created = create_invite(
+                self.realm, self.admin, target_entity_id=self.actor.pk,
+                purpose="manage", role_id=selected.pk,
+            )
+        self.assertTrue(created)
+        self.assertEqual(invite.role_id, selected.pk)
+        self.assertNotEqual(invite.role_id, other.pk)
+        accept_side_effects(invite, self.actor)
+        membership = Member.objects.get(realm=self.realm, entity=self.actor)
+        self.assertEqual(membership.role_id, selected.pk)
+        for payload in (InviteSerializer(invite).data, RealmMemberSerializer(membership).data):
+            self.assertEqual(payload["role"], "moderator")
+            self.assertEqual(payload["role_id"], selected.pk)
+
+    def test_manage_acceptance_updates_existing_member_to_exact_selected_role(self):
+        from community.invites import accept_side_effects
+
+        selected = Role.objects.create(name="moderator")
+        membership = Member.objects.create(
+            realm=self.realm, entity=self.actor, added_by=self.admin,
+        )
+        invite = Invite.objects.create(
+            realm=self.realm, created_by=self.admin, target_entity=self.actor,
+            purpose="manage", role=selected,
+        )
+        accept_side_effects(invite, self.actor)
+        membership.refresh_from_db()
+        self.assertEqual(membership.role_id, selected.pk)
+
+    def test_manage_acceptance_preserves_existing_owner_and_admin_roles(self):
+        from community.invites import accept_side_effects
+        from community.invite_rules import InviteError
+
+        selected = Role.objects.create(name="moderator")
+        for name in ("owner", "admin"):
+            with self.subTest(role=name):
+                existing = _role(name)
+                membership, _ = Member.objects.update_or_create(
+                    realm=self.realm, entity=self.actor,
+                    defaults={"added_by": self.admin, "role": existing},
+                )
+                invite = Invite.objects.create(
+                    realm=self.realm, created_by=self.admin, target_entity=self.actor,
+                    purpose="manage", role=selected,
+                )
+                with self.assertRaises(InviteError):
+                    accept_side_effects(invite, self.actor)
+                membership.refresh_from_db()
+                self.assertEqual(membership.role_id, existing.pk)
+
+    def test_realm_self_role_annotation_uses_exact_owner_and_denies_ambiguous_ids(self):
+        from community.annotations import my_role_annotation, my_role_id_annotation
+        from entity.roles import realm_owner_role_id
+
+        selected = Role.objects.create(name="owner")
+        default_card = Realm.objects.annotate(
+            my_role_id=my_role_id_annotation(self.destination),
+        ).get(pk=self.realm.pk)
+        self.assertEqual(default_card.my_role_id, _role("owner").pk)
+        Member.objects.filter(realm=self.realm, entity=self.admin).update(role=selected)
+        def card():
+            return Realm.objects.annotate(
+                my_role=my_role_annotation(self.destination),
+                my_role_id=my_role_id_annotation(self.destination),
+            ).get(pk=self.realm.pk)
+        self.assertEqual(card().my_role, "owner")
+        self.assertEqual(card().my_role_id, selected.pk)
+        self.assertEqual(realm_owner_role_id(self.realm), selected.pk)
+        Member.objects.create(
+            realm=self.realm, entity=self.actor, added_by=self.admin, role=_role("owner"),
+        )
+        self.assertIsNone(card().my_role_id)
+        self.assertIsNone(realm_owner_role_id(self.realm))
+
+
+    def test_join_and_follow_invites_never_store_a_supplied_role(self):
+        from community.invites import create_invite
+
+        for realm_type, purpose in (("group", "join"), ("page", "follow")):
+            with self.subTest(purpose=purpose):
+                Realm.objects.filter(pk=self.realm.pk).update(type=realm_type)
+                self.realm.refresh_from_db()
+                with (
+                    patch("community.invites.has_permission", return_value=True),
+                    patch("community.invites.is_blocked", return_value=False),
+                    patch("community.invites.accepted_follow_exists", return_value=False),
+                    patch("community.invites.get_entity_display_username", return_value="Admin"),
+                    patch("community.invites.notify_invitee"),
+                ):
+                    invite, _ = create_invite(
+                        self.realm, self.admin, target_entity_id=self.actor.pk,
+                        purpose=purpose, role_id=_role("admin").pk,
+                    )
+                self.assertIsNone(invite.role_id)
+
+    def test_pending_manage_invite_with_different_role_id_returns_conflict(self):
+        from community.invites import create_invite
+        from community.invite_rules import InviteError
+
+        Realm.objects.filter(pk=self.realm.pk).update(type="page")
+        self.realm.refresh_from_db()
+        first = Role.objects.create(name="moderator")
+        second = Role.objects.create(name="moderator")
+        Invite.objects.create(
+            realm=self.realm, created_by=self.admin, target_entity=self.actor,
+            purpose="manage", role=first,
+        )
+        with (
+            patch("community.invites.has_permission", return_value=True),
+            patch("community.invites.is_blocked", return_value=False),
+            self.assertRaises(InviteError) as caught,
+        ):
+            create_invite(
+                self.realm, self.admin, target_entity_id=self.actor.pk,
+                purpose="manage", role_id=second.pk,
+            )
+        self.assertEqual(caught.exception.status_code, 409)
+
+
+    def test_switchable_pages_and_session_authority_follow_exact_role_tier(self):
+        from entity.services.acting import can_act_as_entity
+        from user.entity_switch_views import SwitchablePages
+        from user.views import DeviceSessionList
+
+        Realm.objects.filter(pk=self.realm.pk).update(type="page")
+        selected = Role.objects.create(name="admin")
+        Member.objects.filter(realm=self.realm, entity=self.admin).update(role=selected)
+        account = SimpleNamespace(entity=self.admin, entity_id=self.admin.pk, is_authenticated=True)
+        request = APIRequestFactory().get("/api/user/entity/pages")
+        force_authenticate(request, user=account)
+        response = SwitchablePages.as_view()(request)
+        self.assertEqual(response.status_code, 200)
+        pages = response.data["result"]["pages"]
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(pages[0]["role"], "admin")
+        self.assertEqual(pages[0]["role_id"], selected.pk)
+        self.assertTrue(can_act_as_entity(account, self.destination))
+        self.assertIn(str(self.destination.pk), DeviceSessionList()._allowed_entity_ids(self.admin))
+        Member.objects.filter(realm=self.realm, entity=self.admin).update(role=_role("moderator"))
+        self.assertFalse(can_act_as_entity(account, self.destination))
+        self.assertEqual(DeviceSessionList()._allowed_entity_ids(self.admin), [str(self.admin.pk)])
