@@ -1,7 +1,8 @@
 # Entity permission catalog migration
 
 Migrations: `entity.0022_entitypermission_catalog`, `entity.0023_role_permissions`,
-`entity.0024_catalog_entity_types`, and `community.0011_role_references`.
+`entity.0024_catalog_entity_types`, `entity.0025_editable_definition_names`, and
+`community.0011_role_references`.
 
 The catalog table becomes `entity_permission_catalog`. The override table becomes
 `entity_permission`; its string `permission` column becomes numeric
@@ -9,8 +10,9 @@ The catalog table becomes `entity_permission_catalog`. The override table become
 deletion is protected while overrides reference it. Existing catalog IDs are
 preserved.
 
-Role definitions live in `entity_role`, with built-in name choices owner/admin/
-moderator/member. Names are not unique. Each record has its own `permissions`
+Role definitions live in `entity_role`, with freely entered text names. The
+owner/admin/moderator/member names are reference comments, not field choices.
+Names are not unique. Each record has its own `permissions`
 many-to-many relation through `entity_role_permissions`. Grants are evaluated by
 role ID, never combined by name. Original grant IDs and timestamps are retained.
 
@@ -25,6 +27,8 @@ type-assignment IDs, timestamps and permission links are preserved. The scalar
 `scope` field still chooses global, realm or entity-type resolution; assigning
 types does not change a permission's scope or activation status. Both catalog
 and role admin forms expose their many-to-many selections directly.
+Entity-type definition names are also free text; user/realm/bot are reference
+comments only. Django admin labels the catalog "Permission catalog".
 
 ## Existing data
 
@@ -121,7 +125,7 @@ has not been executed locally; the Docker daemon is unavailable.
 
 Latest verification results:
 
-- Core schema/resolver/forms/migration/SQL contracts: 59 tests passed.
+- Core schema/resolver/forms/migration/SQL contracts: 60 tests passed.
 - Isolated community/invitation/profile runtime coverage: 88 tests passed.
 - Web role coverage: 4 tests passed; TypeScript passed. Full web suite: 229/230
   passed; existing failure: `a direct guest profile visit still opens the public profile`.

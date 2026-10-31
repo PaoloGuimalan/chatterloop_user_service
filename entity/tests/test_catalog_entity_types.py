@@ -46,6 +46,17 @@ class CatalogEntityTypesTests(TestCase):
         self.permission.save()
         self.assertNotIn("module.diary.access", get_entity_type_matrix().get("user", []))
 
+    def test_admin_entity_type_name_is_text_and_accepts_custom_definitions(self):
+        from django import forms
+
+        form_class = forms.modelform_factory(self.Type, fields=("name",))
+        form = form_class(data={"name": "organization"})
+        self.assertIsInstance(form.fields["name"].widget, forms.TextInput)
+        self.assertTrue(form.is_valid(), form.errors)
+        definition = form.save()
+        self.permission.entity_types.add(definition)
+        self.assertIn("module.diary.access", get_entity_type_matrix()["organization"])
+
     def test_catalog_form_saves_entity_types_and_retains_existing_assignment_ids(self):
         from entity.forms import PermissionCatalogForm
 

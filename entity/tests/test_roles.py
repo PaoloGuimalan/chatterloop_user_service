@@ -37,12 +37,18 @@ class RoleTests(TestCase):
         self.Role.objects.create(name="reviewer")
         self.assertEqual(self.Role.objects.filter(name="reviewer").count(), 2)
 
-    def test_role_name_exposes_builtin_choices_without_a_uniqueness_constraint(self):
-        field = self.Role._meta.get_field("name")
-        self.assertEqual(dict(field.choices), {
-            "owner": "Owner", "admin": "Admin", "moderator": "Moderator", "member": "Member",
-        })
-        self.assertFalse(field.unique)
+    def test_admin_role_name_is_text_and_accepts_custom_duplicate_names(self):
+        from django import forms
+        from entity.forms import RoleForm
+
+        for _ in range(2):
+            form = RoleForm(data={"name": "content reviewer", "permissions": [self.permission.pk]})
+            self.assertIsInstance(form.fields["name"].widget, forms.TextInput)
+            self.assertTrue(form.is_valid(), form.errors)
+            role = form.save()
+            self.assertEqual(role.name, "content reviewer")
+            self.assertEqual(list(role.permissions.values_list("codename", flat=True)), ["realm.update"])
+        self.assertEqual(self.Role.objects.filter(name="content reviewer").count(), 2)
 
     def test_admin_role_form_saves_multiple_permissions_and_names_remain_distinguishable(self):
         from entity.forms import RoleForm

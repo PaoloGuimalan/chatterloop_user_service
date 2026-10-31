@@ -5,7 +5,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.timezone import now
 
-from entity.permissions import PermissionEffect, MemberRole
+from entity.permissions import PermissionEffect
 
 
 def generate_random_digit(digit):
@@ -27,9 +27,10 @@ class EntityType(models.TextChoices):
 
 
 class EntityTypeDefinition(models.Model):
-    """Entity-type choices used by the permission catalog's many-to-many field."""
+    """Editable entity-type definitions used by the permission catalog."""
 
-    name = models.CharField(max_length=20, choices=EntityType.choices, unique=True)
+    # Reference choices only: [("user", "user"), ("realm", "realm"), ("bot", "bot")]
+    name = models.CharField(max_length=20, unique=True)
 
     class Meta:
         db_table = "entity_type"
@@ -180,6 +181,8 @@ class PermissionCatalogEntry(models.Model):
 
     class Meta:
         db_table = "entity_permission_catalog"
+        verbose_name = "permission catalog"
+        verbose_name_plural = "permission catalog"
         indexes = [models.Index(fields=["scope", "is_active"], name="entity_perm_scope_356fa2_idx")]
 
     def __str__(self):
@@ -189,7 +192,9 @@ class PermissionCatalogEntry(models.Model):
 class Role(models.Model):
     """A role definition with multiple permissions; duplicate names are allowed."""
 
-    name = models.CharField(max_length=150, choices=MemberRole.choices)
+    # Reference choices only: [("owner", "Owner"), ("admin", "Admin"),
+    #                          ("moderator", "Moderator"), ("member", "Member")]
+    name = models.CharField(max_length=150)
     is_default = models.BooleanField(default=False)
     permissions = models.ManyToManyField(
         PermissionCatalogEntry, through="RolePermission", related_name="roles", blank=True,
@@ -203,7 +208,7 @@ class Role(models.Model):
         )]
 
     def __str__(self):
-        return f"{self.get_name_display()} (#{self.pk})" if self.pk else self.get_name_display()
+        return f"{self.name} (#{self.pk})" if self.pk else self.name
 
 
 class RolePermission(models.Model):
