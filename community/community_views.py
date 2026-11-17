@@ -15,11 +15,11 @@ from community.posts import community_metadata
 from core.profile_paths import ProfilePathError, validate_profile_path
 from entity.models import Entity
 from entity.permissions import MemberRole, Permission
-from entity.roles import get_default_role
+from entity.roles import get_default_role, role_tier, role_tier_expression
 from entity.services.permission_resolver import has_permission
 
 
-def _community_card(realm, viewer):
+def _community_card(realm, viewer, *, include_capabilities=False):
     data = community_metadata(realm, viewer)
     data.update(
         description=realm.description,
@@ -30,6 +30,14 @@ def _community_card(realm, viewer):
         my_role_id=realm.my_role_id,
         request_pending=realm.request_pending,
     )
+    if include_capabilities:
+        from community.role_policy import feature_availability, realm_capabilities
+        from entity.models import Role
+
+        role = Role.objects.filter(pk=realm.my_role_id).values("name", "code").first()
+        data.update(my_role_name=role["name"] if role else None,
+                    my_role_code=role["code"] if role else None,
+                    features=feature_availability(), capabilities=realm_capabilities(viewer, realm))
     return data
 
 
@@ -38,7 +46,9 @@ def _communities_for(viewer):
         joined=Exists(Member.objects.filter(realm=OuterRef("pk"), entity=viewer)),
         member_count=Count("member", distinct=True),
         my_role=Subquery(
-            Member.objects.filter(realm=OuterRef("pk"), entity=viewer).values("role__name")[
+            Member.objects.filter(realm=OuterRef("pk"), entity=viewer).annotate(
+                structural_role=role_tier_expression(),
+            ).values("structural_role")[
                 :1
             ]
         ),
@@ -130,7 +140,7 @@ class CommunitiesView(APIView):
                 entity=viewer,
                 realm=realm,
                 added_by=viewer,
-                role=get_default_role(MemberRole.OWNER),
+                role=get_default_role(MemberRole.OWNER, realm=realm),
                 date_joined=now(),
             )
         return Response(
@@ -160,7 +170,7 @@ class CommunityDetailView(APIView):
             _communities_for(viewer),
             Q(pk=realm_id) | Q(slug=realm_id) | Q(entity_id=realm_id),
         )
-        return Response({"status": True, "result": _community_card(realm, viewer)})
+        return Response({"status": True, "result": _community_card(realm, viewer, include_capabilities=True)})
 
 
 class CommunityJoinView(APIView):
@@ -209,7 +219,7 @@ class CommunityLeaveView(APIView):
             if (
                 not cancel_only
                 and member is not None
-                and member.role.name == MemberRole.OWNER
+                and role_tier(member.role) == MemberRole.OWNER
             ):
                 raise ValidationError(
                     "Transfer ownership before leaving this community."
@@ -217,22 +227,8 @@ class CommunityLeaveView(APIView):
             if not cancel_only and member is not None:
                 member.delete()
                 _notify_membership_changed(realm, request.entity)
-            pending_requests = Invite.objects.filter(
-                realm=realm,
-                target_entity=request.entity,
-                kind="request",
-                status="pending",
-            )
-            request_ids = list(pending_requests.values_list("pk", flat=True))
-            cancelled = pending_requests.update(status="revoked", resolved_at=now())
-            if cancelled:
-                from community.views import InviteView
-                from community.admin_notifications import settle_join_requests
-
-                transaction.on_commit(lambda: settle_join_requests(request_ids))
-                transaction.on_commit(
-                    lambda: InviteView()._notify_requests_changed(realm)
-                )
+            from community.invite_review import cancel_own_join_requests
+            cancel_own_join_requests(request.entity, realm.pk)
         return Response(
             {
                 "status": True,

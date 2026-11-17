@@ -37,6 +37,19 @@ COMPLIANCE_EXEMPT_VIEW_NAMES = {
 
 class AutheticationBackend(BaseBackend):
 
+    def _check_acting_authority(self, request, user, entity):
+        from entity.services.acting import can_act_as_entity
+
+        # Revoked delegates must still be able to return to their own identity.
+        match = getattr(request, "resolver_match", None)
+        if getattr(match, "view_name", None) == "api-user:entity-switch-back":
+            return
+        if not can_act_as_entity(user, entity):
+            from community.models import Realm
+            realm = Realm.objects.filter(entity=entity).values("name").first()
+            name = realm["name"] if realm and realm["name"] else "this realm"
+            raise PermissionDenied(f"REALM_ACCESS_REVOKED: Your access to {name} was revoked.")
+
     def _check_compliance(self, request, user):
         resolver_match = getattr(request, "resolver_match", None)
         if resolver_match is None:
@@ -108,6 +121,9 @@ class AutheticationBackend(BaseBackend):
                     "ACCOUNT_INACTIVE: this account has been deactivated"
                 )
 
+            entity = Entity.objects.get(id=uuid.UUID(decoded_header["entity"]))
+            self._check_acting_authority(request, user, entity)
+
             session = SessionService()
             is_existing = session.exists(device_token, decoded_header["entity"])
 
@@ -122,7 +138,6 @@ class AutheticationBackend(BaseBackend):
             self._check_compliance(request, user)
 
             if decoded_header["entity"]:
-                entity = Entity.objects.get(id=uuid.UUID(decoded_header["entity"]))
                 request.entity = entity
                 # `request` here is DRF's Request wrapper, and plain attribute
                 # assignment on it does not reach the Django HttpRequest

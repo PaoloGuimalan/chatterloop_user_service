@@ -70,6 +70,8 @@ from community.models import Realm, Member, Follow, Invite
 from bot.models import Bot
 from entity.models import Entity, EntityType
 from entity.permissions import Permission, MemberRole
+from entity.roles import role_tier_filter
+from entity.services.acting import acting_memberships
 from entity.drf_permissions import RequiresPermission
 from entity.services.allowed_modules import resolve_allowed_modules_and_context
 from entity.utils import (
@@ -397,11 +399,8 @@ class UserAuthentication(APIView):
                     is_admin=ExpressionWrapper(
                         Q(
                             Exists(
-                                Member.objects.filter(
-                                    Q(Q(role__name="admin") | Q(role__name="owner")),
-                                    realm=OuterRef("pk"),
-                                    entity=entity,
-                                )
+                                Member.objects.filter(role_tier_filter(('owner', 'admin')),
+                                    entity=entity, realm=OuterRef('pk'))
                             )
                         )
                         | Q(entity=entity),
@@ -479,7 +478,7 @@ class UserAuthentication(APIView):
                     realm_is_connected = realm_connection.status
                     realm_is_initiator = realm_connection.action_by_id == entity.id
 
-            serialized_realm = RealmSerializer(realm_queryset)
+            serialized_realm = RealmSerializer(realm_queryset, context={"request": request})
             data = {
                 "data": {
                     **serialized_realm.data,
@@ -2485,9 +2484,7 @@ class DeviceSessionList(APIView):
         switch into - mirrors EntitySwitch's own admin/owner membership
         check, so a revoke can never reach an entity this device could not
         have legitimately held a session for."""
-        page_entity_ids = Member.objects.filter(
-            entity=entity, role__name__in=[MemberRole.OWNER, MemberRole.ADMIN]
-        ).values_list("realm__entity_id", flat=True)
+        page_entity_ids = acting_memberships(entity).values_list("realm__entity_id", flat=True)
         return [str(entity.id), *[str(e) for e in page_entity_ids]]
 
     def get(self, request):

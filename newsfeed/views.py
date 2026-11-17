@@ -1,3 +1,4 @@
+from newsfeed.services.post_cards import unavailable_post_card
 from django.conf import settings
 from django.shortcuts import render
 from django.http import HttpResponse
@@ -144,6 +145,7 @@ class Pagination(PageNumberPagination):
 
 
 class NewsfeedView(CommunityPostAccessMixin, APIView):
+    allow_author_withdrawal = True
     permission_classes = [IsAuthenticated]
     pagination_class = Pagination
 
@@ -440,6 +442,8 @@ class NewsfeedView(CommunityPostAccessMixin, APIView):
                 Post.objects.filter(post_id__in=post_ids).update(
                     deleted_at=now(), deleted_by=entity
                 )
+                from community.admin_notifications import settle_withdrawn_review_notices
+                settle_withdrawn_review_notices(post_ids)
                 # Their files go too, unless still used or reported.
                 publish_media_release(post_items(post_ids))
 
@@ -683,7 +687,7 @@ class NewsfeedPostPreviewView(CommunityPostAccessMixin, APIView):
 
             if result["deleted_at"] or result["is_archived"]:
                 return Response(
-                    {**result, "caption": "", "references": []},
+                    unavailable_post_card(result),
                     status=status.HTTP_200_OK,
                 )
             else:

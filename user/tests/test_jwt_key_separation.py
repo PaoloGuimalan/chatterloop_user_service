@@ -70,8 +70,8 @@ class JwtKeySeparationTests(unittest.TestCase):
 
     def authenticate_request(self, device="abc", session_exists=True, token=None):
         """Exercise the real backend with database/cache boundaries kept in memory."""
-        user = SimpleNamespace(is_active=True)
         entity = SimpleNamespace(id="00000000-0000-0000-0000-000000000001")
+        user = SimpleNamespace(is_active=True, entity_id=entity.id)
         sessions = SimpleNamespace(
             exists=lambda device, entity_id: session_exists and device in ("abc", "other-device") and entity_id == entity.id,
             update_fcm_token=lambda *args: None,

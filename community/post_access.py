@@ -7,6 +7,7 @@ from community.posts import assert_post_access, request_anonymity
 
 
 class CommunityPostAccessMixin:
+    allow_author_withdrawal = False
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
         from newsfeed.models import Comment, Post
@@ -44,6 +45,14 @@ class CommunityPostAccessMixin:
         if isinstance(body.get("post_ids"), list):
             posts.extend(Post.objects.filter(post_id__in=body["post_ids"]))
         for current in posts:
+            # Only the owning post-delete endpoint may withdraw a hidden
+            # submission. Comment/reaction/tag DELETE endpoints keep all guards.
+            if (self.allow_author_withdrawal and request.method == 'DELETE'
+                    and current.approval in (0, 2) and getattr(request, 'entity', None) is not None
+                    and str(current.entity_id) == str(request.entity.pk)):
+                from community.posts import community_for_post
+                if community_for_post(current) is not None:
+                    continue
             assert_post_access(
                 current,
                 request,

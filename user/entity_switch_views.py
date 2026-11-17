@@ -7,6 +7,8 @@ from django.shortcuts import get_object_or_404
 
 from community.models import Realm, Member
 from entity.permissions import MemberRole
+from entity.roles import role_tier
+from entity.services.acting import acting_memberships, can_act_as_entity
 from .utils.jwt_tools import JWTTools
 from .services.mongohelpers import SessionService
 import logging
@@ -85,10 +87,7 @@ class EntitySwitch(APIView):
                 .filter(entity=user.entity, realm=realm).first()
             )
 
-            if member is None or member.role.name not in (
-                MemberRole.OWNER,
-                MemberRole.ADMIN,
-            ):
+            if member is None or not can_act_as_entity(user, realm.entity):
                 return Response(
                     {
                         "status": False,
@@ -150,11 +149,7 @@ class SwitchablePages(APIView):
         user = request.user
         try:
             members = (
-                Member.objects.filter(
-                    entity=user.entity,
-                    role__name__in=(MemberRole.OWNER, MemberRole.ADMIN),
-                    realm__type="page",
-                )
+                acting_memberships(user.entity).filter(realm__type="page")
                 .select_related("realm", "role")
                 .order_by("realm__name")
             )
@@ -166,7 +161,9 @@ class SwitchablePages(APIView):
                     "name": member.realm.name,
                     "slug": member.realm.slug,
                     "profile": member.realm.profile,
-                    "role": member.role.name,
+                    "role": role_tier(member.role),
+                    "role_name": member.role.name,
+                    "role_code": member.role.code,
                     "role_id": member.role_id,
                 }
                 for member in members

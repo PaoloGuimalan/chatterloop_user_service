@@ -17,7 +17,7 @@ from django.test.utils import CaptureQueriesContext
 
 from bot.models import Bot
 from community.models import Member, Realm
-from entity.models import Entity, Role
+from entity.models import Entity, PermissionCatalogEntry, Role, RolePermission
 from interests.models import Interest, PostInterestLink
 from newsfeed.models import (
     Emoji,
@@ -38,9 +38,12 @@ class FeedPerformanceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        cls.enterClassContext(patch("entity.services.permission_catalog_cache._redis_delete"))
         cls.models = (
             Entity,
+            PermissionCatalogEntry,
             Role,
+            RolePermission,
             Account,
             Realm,
             Bot,
@@ -68,7 +71,6 @@ class FeedPerformanceTests(unittest.TestCase):
         super().tearDownClass()
 
     def setUp(self):
-        Role.objects.get_or_create(name="member", is_default=True)
         self.entities = {
             kind: Entity.objects.create(id=kind, type=entity_type)
             for kind, entity_type in (
@@ -111,6 +113,7 @@ class FeedPerformanceTests(unittest.TestCase):
                 ),
             ]
         )
+        Role.objects.create(realm_id="club", code="member", name="Member", is_default=True)
         Bot.objects.bulk_create(
             [Bot(entity=self.entities["bot"], name="Bot", handle="helper")]
         )

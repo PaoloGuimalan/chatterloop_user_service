@@ -15,7 +15,7 @@ from django.db import connection
 from django.test import override_settings
 from rest_framework.test import APIRequestFactory, force_authenticate
 from bot.models import Bot
-from community.models import Invite, Member, Realm
+from community.models import Invite, Member, Realm, Approvals
 from community.community_views import CommunityLeaveView
 from community.views import InviteView
 from community.admin_notifications import (
@@ -27,7 +27,7 @@ from community.admin_notifications import (
 )
 from community.notifications import notification_description
 from community.tests.notification_memory import NotificationMemory
-from entity.models import Entity, Role
+from entity.models import Entity, EntityPermission, PermissionCatalogEntry, Role, RolePermission
 from newsfeed.models import Post, PostTag, Comment, Reaction, CommentReaction, Emoji
 from user.models import Account
 from user.ext_models.mongomodels import Notification, Content, DateInfo
@@ -35,21 +35,54 @@ from user.ext_models import mongomodels
 
 
 def _role(name):
-    return Role.objects.get_or_create(name=name, is_default=True)[0]
+    return Role.objects.get_or_create(realm_id="club", code=name, is_default=True, defaults={"name": name})[0]
 
 
 class AdminNotificationTests(unittest.TestCase):
+    def test_reviewed_invite_retries_keep_one_notice_its_actions_and_read_state(self):
+        from community.invites import notify_invitee
+        from unittest.mock import Mock
+        invite = Invite(realm=self.realm, created_by=self.admin, target_entity=self.actor, kind="invite")
+        publisher = Mock(return_value=True)
+        with patch("community.invites.RedisPubSubClient.publish_json"):
+            notify_invitee(invite, "Admin", publisher=publisher)
+            notice = [row for row in self.memory.rows if row.type == "realm_invite"][0]
+            notice.isRead = True
+            notify_invitee(invite, "Admin", publisher=publisher)
+        notices = [row for row in self.memory.rows if row.type == "realm_invite"]
+        self.assertEqual(len(notices), 1)
+        self.assertTrue(notices[0].isRead)
+        for platform in ("web", "android", "ios"):
+            self.assertEqual(len([action for action in notices[0].actions if action["platform"] == platform]), 2)
+        self.assertIn(invite.invite_token, str(notices[0].actions))
+
+    def test_reviewed_invite_transport_failure_can_retry_without_duplicate_notice(self):
+        from community.invites import notify_invitee
+        from unittest.mock import Mock
+        invite = Invite(realm=self.realm, created_by=self.admin, target_entity=self.actor, kind="invite")
+        publisher = Mock(side_effect=[False, True])
+        with patch("community.invites.RedisPubSubClient.publish_json"), patch("community.invites.logger"):
+            with self.assertRaises(RuntimeError):
+                notify_invitee(invite, "Admin", publisher=publisher)
+            notify_invitee(invite, "Admin", publisher=publisher)
+        self.assertEqual(len([row for row in self.memory.rows if row.type == "realm_invite"]), 1)
+
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        cls.enterClassContext(patch("entity.services.permission_catalog_cache._redis_delete"))
         cls.models = (
             Entity,
+            PermissionCatalogEntry,
+            EntityPermission,
             Role,
+            RolePermission,
             Account,
             Bot,
             Realm,
             Member,
             Invite,
+            Approvals,
             Post,
             PostTag,
             Comment,
@@ -69,8 +102,6 @@ class AdminNotificationTests(unittest.TestCase):
         super().tearDownClass()
 
     def setUp(self):
-        for name in ("owner", "admin", "moderator", "member"):
-            _role(name)
         self.enterContext(override_settings(ALLOWED_HOSTS=["testserver"]))
         self.memory = NotificationMemory()
         self.enterContext(patch.object(Notification, "objects", self.memory))
@@ -78,7 +109,10 @@ class AdminNotificationTests(unittest.TestCase):
         self.publish = self.enterContext(
             patch("community.admin_notifications.RedisPubSubClient.publish_json")
         )
-        self.enterContext(patch("community.admin_notifications.has_permission", return_value=True))
+        cache = {}
+        for name, effect in (("_redis_get", cache.get), ("_redis_set", cache.__setitem__),
+                             ("_redis_delete", lambda key: cache.pop(key, None))):
+            self.enterContext(patch(f"entity.services.permission_catalog_cache.{name}", side_effect=effect))
         self.elapsed = 0
         self.cooldowns = {}
 
@@ -123,6 +157,13 @@ class AdminNotificationTests(unittest.TestCase):
             type="community",
         )
         Realm.objects.bulk_create([self.realm])
+        for name in ("owner", "admin", "moderator", "member"):
+            _role(name)
+        for code in ('realm.notifications.view', 'realm.post.review', 'realm.invite.review',
+                     'realm.request.approve', 'realm.request.decline'):
+            entry = PermissionCatalogEntry.objects.create(codename=code, scope='realm')
+            for name in ('admin', 'moderator'):
+                _role(name).permissions.add(entry)
         Member.objects.create(
             realm=self.realm, entity=self.admin, added_by=self.admin, role=_role("admin")
         )
@@ -164,9 +205,9 @@ class AdminNotificationTests(unittest.TestCase):
         )
         request.entity = self.admin
         force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
-        with patch(
-            "community.admin_notifications.has_permission", return_value=permitted
-        ):
+        if permitted:
+            return CommunityNotificationsView.as_view()(request, realm_id="club")
+        with patch('community.admin_notifications.allowed_notice_types', return_value=()):
             return CommunityNotificationsView.as_view()(request, realm_id="club")
 
     def previews(self, admin="admin"):
@@ -476,10 +517,12 @@ class AdminNotificationTests(unittest.TestCase):
 
         Realm.objects.filter(pk=self.realm.pk).update(type="page")
         self.realm.refresh_from_db()
-        selected = Role.objects.create(name="moderator")
-        other = Role.objects.create(name="moderator")
+        selected = Role.objects.create(name="moderator", realm=self.realm)
+        other = Role.objects.create(name="moderator", realm=self.realm)
         with (
             patch("community.invites.has_permission", return_value=True),
+            patch("community.role_policy.assert_can_delegate_role"),
+            patch("community.invite_review.deliver_invitation"),
             patch("community.invites.is_blocked", return_value=False),
             patch("community.invites.get_entity_display_username", return_value="Admin"),
             patch("community.invites.notify_invitee"),
@@ -495,13 +538,14 @@ class AdminNotificationTests(unittest.TestCase):
         membership = Member.objects.get(realm=self.realm, entity=self.actor)
         self.assertEqual(membership.role_id, selected.pk)
         for payload in (InviteSerializer(invite).data, RealmMemberSerializer(membership).data):
-            self.assertEqual(payload["role"], "moderator")
+            self.assertEqual(payload["role"], "member")
+            self.assertEqual(payload["role_name"], "moderator")
             self.assertEqual(payload["role_id"], selected.pk)
 
     def test_manage_acceptance_updates_existing_member_to_exact_selected_role(self):
         from community.invites import accept_side_effects
 
-        selected = Role.objects.create(name="moderator")
+        selected = Role.objects.create(name="moderator", realm=self.realm)
         membership = Member.objects.create(
             realm=self.realm, entity=self.actor, added_by=self.admin,
         )
@@ -517,7 +561,7 @@ class AdminNotificationTests(unittest.TestCase):
         from community.invites import accept_side_effects
         from community.invite_rules import InviteError
 
-        selected = Role.objects.create(name="moderator")
+        selected = Role.objects.create(name="moderator", realm=self.realm)
         for name in ("owner", "admin"):
             with self.subTest(role=name):
                 existing = _role(name)
@@ -534,30 +578,19 @@ class AdminNotificationTests(unittest.TestCase):
                 membership.refresh_from_db()
                 self.assertEqual(membership.role_id, existing.pk)
 
-    def test_realm_self_role_annotation_uses_exact_owner_and_denies_ambiguous_ids(self):
+    def test_realm_self_role_annotation_uses_its_one_local_owner_definition(self):
         from community.annotations import my_role_annotation, my_role_id_annotation
         from entity.roles import realm_owner_role_id
-
-        selected = Role.objects.create(name="owner")
-        default_card = Realm.objects.annotate(
-            my_role_id=my_role_id_annotation(self.destination),
-        ).get(pk=self.realm.pk)
-        self.assertEqual(default_card.my_role_id, _role("owner").pk)
+        selected = Role.objects.create(name="owner", realm=self.realm)
         Member.objects.filter(realm=self.realm, entity=self.admin).update(role=selected)
-        def card():
-            return Realm.objects.annotate(
-                my_role=my_role_annotation(self.destination),
-                my_role_id=my_role_id_annotation(self.destination),
-            ).get(pk=self.realm.pk)
-        self.assertEqual(card().my_role, "owner")
-        self.assertEqual(card().my_role_id, selected.pk)
-        self.assertEqual(realm_owner_role_id(self.realm), selected.pk)
-        Member.objects.create(
-            realm=self.realm, entity=self.actor, added_by=self.admin, role=_role("owner"),
-        )
-        self.assertIsNone(card().my_role_id)
-        self.assertIsNone(realm_owner_role_id(self.realm))
-
+        for entity in (self.admin, self.actor):
+            Member.objects.update_or_create(realm=self.realm, entity=entity,
+                defaults={"added_by": self.admin, "role": _role("owner")})
+        card = Realm.objects.annotate(my_role=my_role_annotation(self.destination),
+            my_role_id=my_role_id_annotation(self.destination)).get(pk=self.realm.pk)
+        self.assertEqual(card.my_role, "owner")
+        self.assertEqual(card.my_role_id, _role("owner").pk)
+        self.assertEqual(realm_owner_role_id(self.realm), _role("owner").pk)
 
     def test_join_and_follow_invites_never_store_a_supplied_role(self):
         from community.invites import create_invite
@@ -585,14 +618,16 @@ class AdminNotificationTests(unittest.TestCase):
 
         Realm.objects.filter(pk=self.realm.pk).update(type="page")
         self.realm.refresh_from_db()
-        first = Role.objects.create(name="moderator")
-        second = Role.objects.create(name="moderator")
+        first = Role.objects.create(name="moderator", realm=self.realm)
+        second = Role.objects.create(name="moderator", realm=self.realm)
         Invite.objects.create(
             realm=self.realm, created_by=self.admin, target_entity=self.actor,
             purpose="manage", role=first,
         )
         with (
             patch("community.invites.has_permission", return_value=True),
+            patch("community.role_policy.assert_can_delegate_role"),
+            patch("community.invite_review.deliver_invitation"),
             patch("community.invites.is_blocked", return_value=False),
             self.assertRaises(InviteError) as caught,
         ):
@@ -609,7 +644,8 @@ class AdminNotificationTests(unittest.TestCase):
         from user.views import DeviceSessionList
 
         Realm.objects.filter(pk=self.realm.pk).update(type="page")
-        selected = Role.objects.create(name="admin")
+        selected = Role.objects.create(name="admin", realm=self.realm)
+        selected.permissions.add(PermissionCatalogEntry.objects.create(codename="realm.identity.act", scope="realm"))
         Member.objects.filter(realm=self.realm, entity=self.admin).update(role=selected)
         account = SimpleNamespace(entity=self.admin, entity_id=self.admin.pk, is_authenticated=True)
         request = APIRequestFactory().get("/api/user/entity/pages")
@@ -618,7 +654,8 @@ class AdminNotificationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         pages = response.data["result"]["pages"]
         self.assertEqual(len(pages), 1)
-        self.assertEqual(pages[0]["role"], "admin")
+        self.assertEqual(pages[0]["role"], "member")
+        self.assertEqual(pages[0]["role_name"], "admin")
         self.assertEqual(pages[0]["role_id"], selected.pk)
         self.assertTrue(can_act_as_entity(account, self.destination))
         self.assertIn(str(self.destination.pk), DeviceSessionList()._allowed_entity_ids(self.admin))

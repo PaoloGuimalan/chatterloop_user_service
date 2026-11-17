@@ -3,12 +3,15 @@ from django.urls import re_path, path
 from rest_framework import routers
 
 from newsfeed import views, moment_views
+from newsfeed.submission_views import AuthorSubmissionsView, AuthorSubmissionDetailView
 
 router = routers.DefaultRouter()
 
 app_name = "newsfeed"
 
 urlpatterns = [
+    path("submissions", AuthorSubmissionsView.as_view(), name="author-submissions"),
+    path("submissions/<str:post_id>", AuthorSubmissionDetailView.as_view(), name="author-submission-detail"),
     re_path("", include((router.urls, "newsfeed-routes"))),
     re_path("default", views.NewsfeedView.as_view(), name="newsfeed-default"),
     # Search v2 (redesigned Search page) - NEW route; every pre-existing

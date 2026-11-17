@@ -1,7 +1,7 @@
 import uuid
 import random
 import secrets
-from django.db import models
+from django.db import models, transaction
 from django.core.exceptions import ValidationError
 from user.models import Account
 
@@ -9,7 +9,6 @@ from user.models import Account
 # an Entity, so a page can follow a page. Re-exported so existing
 # `from community.models import Follow` imports keep resolving.
 from entity.models import Entity, Follow  # noqa: F401
-from entity.roles import get_default_member_role_id
 from django.utils.timezone import now
 from core.profile_paths import clean_model_profile_path, validate_model_profile_path
 
@@ -101,11 +100,16 @@ class Realm(models.Model):
     ranking_score = models.FloatField(default=0.0, db_index=True)
 
     def save(self, *args, **kwargs):
+        created = self._state.adding
         validate_model_profile_path(self, "slug", kwargs.get("update_fields"))
         # Enforced unconditionally, not just "if blank" - id and realm_id
         # must always be the same value, full stop.
         self.realm_id = self.id
-        super().save(*args, **kwargs)
+        with transaction.atomic(using=kwargs.get("using") or self._state.db or "default"):
+            super().save(*args, **kwargs)
+            if created:
+                from entity.roles import ensure_default_roles
+                ensure_default_roles(self)
 
     def clean(self):
         super().clean()
@@ -137,7 +141,6 @@ class Member(models.Model):
     )
     role = models.ForeignKey(
         "entity.Role", on_delete=models.PROTECT, related_name="memberships",
-        default=get_default_member_role_id,
     )
     date_joined = models.DateTimeField(null=True)
 
@@ -156,9 +159,17 @@ class Member(models.Model):
                 {"entity": "Communities cannot be members of any realm"}
             )
 
+        if self.role_id and self.realm_id and self.role.realm_id != self.realm_id:
+            raise ValidationError({"role": "The selected role belongs to another realm."})
+
     def save(self, *args, **kwargs):
+        if not self.role_id and self.realm_id:
+            from entity.roles import get_default_role
+            self.role = get_default_role("member", realm=self.realm_id)
         self.clean()
         return super().save(*args, **kwargs)
+
+
 
 
 class Invite(models.Model):
@@ -168,6 +179,8 @@ class Invite(models.Model):
     ]
 
     INVITE_STATUS_CHOICES = [
+        ("for_approval", "Awaiting approval"),
+        ("rejected", "Rejected"),
         ("pending", "Pending"),
         ("accepted", "Accepted"),
         ("declined", "Declined"),
@@ -240,9 +253,45 @@ class Invite(models.Model):
         indexes = [
             models.Index(fields=["realm", "target_email"]),
             models.Index(fields=["realm", "invite_token"]),
+            models.Index(fields=["realm", "kind", "status", "-created_at"], name="realm_invite_review_idx"),
         ]
 
     def save(self, *args, **kwargs):
         if self.target_email:
             self.target_email = self.target_email.strip().lower()
         super().save(*args, **kwargs)
+
+
+class Approvals(models.Model):
+    """Immutable human audit, with delivery bookkeeping on the same SQL row."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    realm = models.ForeignKey(Realm, on_delete=models.PROTECT, related_name="review_decisions")
+    actor = models.ForeignKey(Entity, on_delete=models.PROTECT, related_name="realm_review_decisions")
+    target_kind = models.CharField(max_length=10, choices=[("post", "Post"), ("invite", "Invite"), ("join", "Join")])
+    target_id = models.CharField(max_length=150)
+    action = models.CharField(max_length=16, choices=[(value, value.title()) for value in (
+        "submit", "edit", "approve", "reject", "takedown", "revoke", "accept", "decline")])
+    previous_state = models.JSONField(default=dict)
+    new_state = models.JSONField(default=dict)
+    reason = models.TextField(blank=True, default="")
+    content_version = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=now, editable=False)
+    delivery_state = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = "community_approvals"
+        ordering = ["-created_at", "-id"]
+        indexes = [
+            models.Index(fields=["realm", "target_kind", "target_id", "-created_at"], name="realm_review_target_idx"),
+            models.Index(fields=["target_kind", "target_id", "-created_at"], name="approval_subject_idx"),
+            models.Index(fields=["created_at", "id"], condition=models.Q(delivery_state__status="pending"), name="realm_review_delivery_idx"),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            original = type(self).objects.using(kwargs.get("using") or self._state.db).get(pk=self.pk)
+            immutable = (field for field in self._meta.concrete_fields if field.name != "delivery_state")
+            if any(field.get_prep_value(getattr(original, field.attname)) !=
+                   field.get_prep_value(getattr(self, field.attname)) for field in immutable):
+                raise ValidationError("Review decisions cannot be changed.")
+        return super().save(*args, **kwargs)

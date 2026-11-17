@@ -75,6 +75,8 @@ def allows_replies(post):
 
 
 class Post(models.Model):
+    approval = models.PositiveSmallIntegerField(default=1, db_default=1,
+        choices=[(0, "Pending"), (1, "Approved"), (2, "Unapproved")])
     is_anonymous = models.BooleanField(default=False)
     # "connections" is the audience a private profile writes with: visible
     # to the author's accepted contacts, nobody else. It is a distinct
@@ -140,7 +142,9 @@ class Post(models.Model):
     )
 
     class Meta:
+        constraints = [models.CheckConstraint(condition=Q(approval__in=[0, 1, 2]), name="post_approval_valid")]
         indexes = [
+            models.Index(fields=["approval", "date_posted"], name="post_pending_approval_idx", condition=~Q(approval=1)),
             # Serves "which of these entities have a live moment/thought" (the
             # tray, the contacts thought lookup) and the author's moment
             # archive. Partial: feed posts are the overwhelming majority and

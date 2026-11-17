@@ -164,6 +164,8 @@ class PostSerializer(CommunityContributionMixin, serializers.ModelSerializer):
     is_edited = serializers.BooleanField(read_only=True)
 
     def get_link_preview(self, obj):
+        if self.context.get("suppress_link_previews"):
+            return None
         url = extract_first_url(obj.caption or "")
         if not url:
             return None
@@ -197,7 +199,7 @@ class PostSerializer(CommunityContributionMixin, serializers.ModelSerializer):
         model = Post
         fields = "__all__"
 
-        read_only_fields = ["is_edited"]
+        read_only_fields = ["is_edited", "approval"]
 
 
 class EmojiSerializer(serializers.ModelSerializer):

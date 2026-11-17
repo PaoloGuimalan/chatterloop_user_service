@@ -2,13 +2,19 @@ from rest_framework import serializers
 from .models import Realm, Member, Follow, Invite
 from user.serializers import AccountPreviewSerializer
 from entity.serializers import EntitySerializer
+from entity.roles import role_tier
 
 
 class RealmMemberSerializer(serializers.ModelSerializer):
-    role = serializers.CharField(source="role.name", read_only=True)
+    role = serializers.SerializerMethodField()
+    role_name = serializers.CharField(source="role.name", read_only=True)
+    role_code = serializers.CharField(source="role.code", read_only=True)
     role_id = serializers.IntegerField(read_only=True)
     entity = EntitySerializer(read_only=True)
     added_by = EntitySerializer(read_only=True)
+
+    def get_role(self, obj):
+        return role_tier(obj.role)
 
     class Meta:
         model = Member
@@ -35,7 +41,9 @@ class FollowSerializer(serializers.ModelSerializer):
 
 
 class InviteSerializer(serializers.ModelSerializer):
-    role = serializers.CharField(source="role.name", read_only=True, allow_null=True)
+    role = serializers.SerializerMethodField()
+    role_name = serializers.CharField(source="role.name", read_only=True, allow_null=True)
+    role_code = serializers.CharField(source="role.code", read_only=True, allow_null=True)
     role_id = serializers.IntegerField(read_only=True, allow_null=True)
     realm_id = serializers.CharField(source="realm.realm_id", read_only=True)
     realm_name = serializers.CharField(source="realm.name", read_only=True)
@@ -48,6 +56,9 @@ class InviteSerializer(serializers.ModelSerializer):
     target_entity = EntitySerializer(read_only=True)
     accepted_by_entity = EntitySerializer(read_only=True)
     created_by_id = serializers.SerializerMethodField()
+
+    def get_role(self, obj):
+        return role_tier(obj.role) if obj.role_id else None
 
     # def get_target_user_id(self, obj):
     #     return obj.target_user.id if obj.target_user else None
@@ -73,6 +84,8 @@ class InviteSerializer(serializers.ModelSerializer):
             "purpose",
             "role",
             "role_id",
+            "role_name",
+            "role_code",
             "inviter",
             "target_email",
             "target_entity",
@@ -113,6 +126,20 @@ class RealmSerializer(serializers.ModelSerializer):
 
     def get_my_role(self, obj):
         return getattr(obj, "my_role", None)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        from community.role_policy import feature_availability, realm_capabilities
+        from entity.models import Role
+
+        role = Role.objects.filter(pk=data.get("my_role_id")).values("name", "code").first()
+        data.update(my_role_name=role["name"] if role else None,
+                    my_role_code=role["code"] if role else None,
+                    features=feature_availability())
+        request = self.context.get("request")
+        if request is not None:
+            data["capabilities"] = realm_capabilities(getattr(request, "entity", None), instance)
+        return data
 
     class Meta:
         model = Realm

@@ -1,12 +1,15 @@
 from django.urls import include, path
 
 from entity import moderation_views, network_views, search_views, views
-from entity.role_views import RolesView
+from community.review_views import RealmReviewDetailView
+from entity.role_views import RoleDetailView, RolesView
 
 app_name = "entity"
 
 urlpatterns = [
+    path("realm-review/<uuid:decision_id>/", RealmReviewDetailView.as_view(), name="realm-review-detail"),
     path("roles", RolesView.as_view(), name="roles"),
+    path("roles/<int:role_id>", RoleDetailView.as_view(), name="role-detail"),
     path("encryption-configurations/", include("entity.encryption_urls")),
     path("me/modules", views.MyAllowedModules.as_view(), name="my-allowed-modules"),
     # The one read path that renders soft-deleted content, gated to the owner

@@ -48,7 +48,7 @@ from community.invite_rules import (
 from community.models import Invite, Member, Realm
 from entity.models import Entity
 from entity.permissions import Permission
-from entity.roles import get_default_role, resolve_role
+from entity.roles import get_default_role, resolve_role, role_tier
 from entity.services.follows import accepted_follow_exists, follow_entity
 from entity.services.permission_resolver import has_permission
 from entity.utils import get_entity_display_username, get_entity_profile_path
@@ -77,33 +77,27 @@ def _member_role(entity, realm):
         Member.objects.select_related("role")
         .filter(entity=entity, realm=realm).first()
     )
-    return member.role.name if member else None
+    return role_tier(member.role) if member else None
 
 
 def _acts_as_realm(entity, realm):
-    """The realm's own entity (a page switched to itself), or its creator."""
-    return str(entity.id) in (str(realm.entity_id), str(realm.created_by_id))
+    """The realm's own entity; former creators do not retain owner authority."""
+    return str(entity.id) == str(realm.entity_id)
 
 
-def assert_can_invite(entity, realm, purpose, role):
+def assert_can_invite(entity, realm, purpose, role, *, fresh=False):
     """
     Raises InviteError unless `entity` may send this invite.
 
-    Mirrors who can ADD people today, so invites take nothing away:
-      group, server - any member (Node's /m/addnewmember and
-                      /s/addnewmembertoserver check membership only)
-      conference    - the realm.invite.create permission, as before
-      page          - realm.invite.create (owner, admins, the page itself);
-                      and an ADMIN invite only from the owner or the page,
-                      because an admin cannot make another admin (the
-                      target-role rule in entity/permissions.py)
+    Group/server Member templates preserve ordinary invitation access, while
+    configured role grants can now revoke it. Administrative role invitations
+    retain their additional owner/delegation guard.
     """
     if realm.type in ("group", "server"):
-        if _acts_as_realm(entity, realm) or _is_member(entity, realm):
-            return
-        raise InviteError("Only members can invite people here", 403)
+        if not (_acts_as_realm(entity, realm) or _is_member(entity, realm)):
+            raise InviteError("Only members can invite people here", 403)
 
-    if not has_permission(entity, Permission.REALM_INVITE_CREATE, realm=realm):
+    if not has_permission(entity, Permission.REALM_INVITE_CREATE, realm=realm, fresh=fresh):
         raise InviteError("You are not allowed to invite people here", 403)
 
     if purpose == "manage" and role == "admin":
@@ -218,6 +212,7 @@ def _assert_not_already_in(target_entity, realm, purpose):
 # --- creating -------------------------------------------------------------
 
 
+@transaction.atomic
 def create_invite(
     realm,
     inviter,
@@ -236,19 +231,29 @@ def create_invite(
     returned as it is rather than sent again - repeating it would only stack
     notifications, and each would carry its own token.
     """
+    from community.invite_review import invitation_status, deliver_invitation, notify_invite_review_activity
+    from community.models import Approvals
+    from community.role_policy import assert_can_delegate_role
+    realm = Realm.objects.select_for_update().get(pk=realm.pk)
+    if not realm.is_active:
+        raise InviteError("This realm is not available", 404)
     selected_role = None
     # Join/follow invites intentionally carry no role.
     if isinstance(purpose, str) and purpose.strip().lower() == "manage":
         try:
             selected_role = resolve_role(
-                role, role_id=role_id, allowed_names=("admin", "moderator"),
+                role, role_id=role_id, realm=realm,
             )
         except ValueError as exc:
             raise InviteError(str(exc)) from exc
-    purpose, role_name = resolve_purpose(
-        realm.type, purpose, selected_role.name if selected_role else None
-    )
-    assert_can_invite(inviter, realm, purpose, role_name)
+    custom = selected_role is not None and selected_role.realm_id == realm.pk
+    purpose, role_name = resolve_purpose(realm.type, purpose,
+        (selected_role.code if custom else role_tier(selected_role)) if selected_role else None,
+        allow_custom_role=custom)
+    assert_can_invite(inviter, realm, purpose, role_name, fresh=True)
+    if selected_role is not None:
+        assert_can_delegate_role(inviter, realm, None, selected_role)
+    initial_status = invitation_status(inviter, realm)
 
     target_entity, email = resolve_target(raw_target, target_email, target_entity_id)
 
@@ -262,7 +267,7 @@ def create_invite(
         _assert_not_already_in(target_entity, realm, purpose)
 
     pending = Invite.objects.filter(
-        realm=realm, kind="invite", status="pending", purpose=purpose
+        realm=realm, kind="invite", status__in=["pending", "for_approval"], purpose=purpose
     )
     pending = (
         pending.filter(target_entity=target_entity)
@@ -281,7 +286,7 @@ def create_invite(
         invite = Invite.objects.create(
             realm=realm,
             kind="invite",
-            status="pending",
+            status=initial_status,
             purpose=purpose,
             role=selected_role,
             # Only what was TYPED is stored as the email: a username invite
@@ -291,11 +296,13 @@ def create_invite(
             created_by=inviter,
         )
 
-        inviter_name = get_entity_display_username(inviter)
-        if target_entity is not None:
-            notify_invitee(invite, inviter_name)
-        if email:
-            email_invite(invite, inviter_name, email)
+        if initial_status == "for_approval":
+            decision = Approvals.objects.create(realm=realm, actor=inviter, target_kind="invite",
+                target_id=str(invite.pk), action="submit", previous_state={}, new_state={"status": initial_status},
+                delivery_state={"status": "pending"})
+            transaction.on_commit(lambda: notify_invite_review_activity(str(decision.pk)), robust=True)
+        else:
+            transaction.on_commit(lambda: deliver_invitation(str(invite.pk)), robust=True)
 
     return invite, True
 
@@ -306,32 +313,35 @@ def invite_link(invite):
     return f"{base}{invite_route(invite.invite_token, realm.type, realm.slug)}"
 
 
-def email_invite(invite, inviter_name, to_email):
+def email_invite(invite, inviter_name, to_email, *, publisher=None):
     """The emailed link - to the invite's page, which handles signing in."""
+    if invite.status != "pending":
+        return
     realm = invite.realm
-    emailer.send_realm_invite_email(
+    subject = f"{inviter_name} invited you on Chatterloop"
+    body = invite_sentence(inviter_name, realm.name, realm.type, invite.purpose,
+        invite.role.name if invite.role_id else None) + "\n\nOpen the invite to accept it:\n" + invite_link(invite)
+    if publisher is not None:
+        return publisher(Queues.SEND_EMAIL, {"to": [to_email], "from": settings.EMAIL_VERIFY_USER,
+            "subject": subject, "body": body})
+    return emailer.send_realm_invite_email(
         to_email=to_email,
         realm_name=realm.name,
         invite_link=invite_link(invite),
         inviter_name=inviter_name,
-        subject=f"{inviter_name} invited you on Chatterloop",
-        body=(
-            invite_sentence(
-                inviter_name, realm.name, realm.type, invite.purpose,
-                invite.role.name if invite.role_id else None
-            )
-            + "\n\nOpen the invite to accept it:\n"
-            + invite_link(invite)
-        ),
+        subject=subject,
+        body=body,
     )
 
 
-def notify_invitee(invite, inviter_name=None):
+def notify_invitee(invite, inviter_name=None, *, publisher=None):
     """
     The in-app half: a notification carrying Accept / Decline, a push, and the
     live event that makes an open client refetch. Best-effort - the invite is
     already saved, and a Mongo or broker hiccup must not undo it.
     """
+    if invite.status != "pending":
+        return
     target = invite.target_entity
     if target is None:
         return
@@ -346,7 +356,11 @@ def notify_invitee(invite, inviter_name=None):
     )
 
     try:
-        NotificationService().add_notification(
+        writer = NotificationService().add_notification
+        if publisher is not None:
+            from community.admin_notifications import _upsert_notice
+            writer = lambda **fields: _upsert_notice(is_anonymous=False, **fields)
+        writer(
             referenceID=str(invite.id),
             # False = still open, which is what keeps the buttons up; it flips
             # when the invite is answered (settle_invite_notifications).
@@ -382,18 +396,23 @@ def notify_invitee(invite, inviter_name=None):
         )
     except Exception:
         logger.exception("Failed to write the invite notification")
+        if publisher is not None:
+            raise
 
     try:
-        push.send_activity(
-            [str(target.id)],
-            type=INVITE_NOTIFICATION_TYPE,
-            title=realm.name,
-            body=details,
-            # The apps open the invite page for every realm type.
-            route=invite_route(invite.invite_token, platform="android"),
-        )
+        fields = dict(type=INVITE_NOTIFICATION_TYPE, title=realm.name, body=details,
+                      route=invite_route(invite.invite_token, platform="android"))
+        if publisher is None:
+            push.send_activity([str(target.id)], **fields)
+        else:
+            payload = push.activity_payload([str(target.id)], **fields)
+            payload["tag"] = f"realm-invite-{invite.pk}"
+            if not publisher(Queues.SEND_PUSH, payload):
+                raise RuntimeError("Invitation push was not accepted by the broker")
     except Exception:
         logger.exception("Failed to queue the invite push")
+        if publisher is not None:
+            raise
 
 
 def settle_invite_notifications(invite):
@@ -416,18 +435,30 @@ def claim_pending_invites(account):
     """
     if account is None or not account.email or account.entity_id is None:
         return 0
-    waiting = Invite.objects.filter(
-        kind="invite",
-        status="pending",
-        target_email__iexact=account.email,
-        target_entity__isnull=True,
-    ).select_related("realm", "created_by")
+    from rest_framework.exceptions import APIException
+    from community.invite_review import deliver_invitation, validate_inviter
+    waiting = list(Invite.objects.filter(kind="invite", status="pending",
+        target_email__iexact=account.email, target_entity__isnull=True).values_list("pk", "realm_id"))
     claimed = 0
-    for invite in waiting:
-        invite.target_entity = account.entity
-        invite.save(update_fields=["target_entity"])
-        notify_invitee(invite)
-        claimed += 1
+    for invite_id, realm_id in waiting:
+        try:
+            with transaction.atomic():
+                realm = Realm.objects.select_for_update().get(pk=realm_id)
+                invite = Invite.objects.select_for_update(of=("self",)).select_related("role", "created_by").filter(
+                    pk=invite_id, status="pending", target_entity__isnull=True).first()
+                if invite is None or not realm.is_active:
+                    continue
+                invite.realm = realm
+                validate_inviter(invite)
+                if is_blocked(invite.created_by, account.entity):
+                    continue
+                invite.target_entity = account.entity
+                invite.save(update_fields=["target_entity"])
+                transaction.on_commit(lambda key=invite.pk: deliver_invitation(str(key)), robust=True)
+                claimed += 1
+        except (InviteError, APIException, ValueError):
+            # A stale invitation must never prevent signup/verification.
+            continue
     return claimed
 
 
@@ -453,14 +484,14 @@ def _publish(entity_id, event, result):
 def _add_member(entity, realm, added_by, role=None):
     assigned_role = role
     if role is None:
-        role = get_default_role("member")
+        role = get_default_role("member", realm=realm)
     member, created = Member.objects.select_for_update().get_or_create(
         entity=entity,
         realm=realm,
         defaults={"added_by": added_by, "role": role, "date_joined": now()},
     )
     if not created and assigned_role is not None and member.role_id != assigned_role.pk:
-        if member.role.name in ("owner", "admin"):
+        if role_tier(member.role) in ("owner", "admin"):
             raise InviteError("This invite cannot replace an existing owner or admin role", 409)
         member.role = assigned_role
         member.save(update_fields=["role"])
@@ -509,7 +540,7 @@ def accept_side_effects(invite, entity):
         return
 
     if invite.purpose == "manage":
-        if invite.role_id is None or invite.role.name not in ("admin", "moderator"):
+        if invite.role_id is None or role_tier(invite.role) == "owner" or invite.role.realm_id not in (None, realm.pk):
             raise InviteError("This management invite has no valid role")
         _add_member(entity, realm, added_by, role=invite.role)
         return

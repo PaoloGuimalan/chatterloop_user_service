@@ -117,16 +117,30 @@ def community_audience(viewer):
     # Fail closed if a malformed legacy post carries multiple destinations.
     # Every community destination must be readable, and only feed posts qualify.
     return Q(Exists(tags)), (
-        ~Q(Exists(inaccessible)) & ~Q(Exists(multiple_destinations)) & Q(on_feed="feed")
+        ~Q(Exists(inaccessible)) & ~Q(Exists(multiple_destinations)) & Q(on_feed="feed", approval=1)
     )
 
 
-def can_read_community(realm, viewer):
-    return can_read(
-        is_private=realm.is_private,
-        is_active=realm.is_active,
-        is_member=is_member(realm, viewer),
-    )
+def membership_status(realm, viewer, cache=None):
+    if cache is None:
+        return is_member(realm, viewer)
+    key = (str(realm.pk), str(getattr(viewer, "pk", None)))
+    if key not in cache:
+        cache[key] = is_member(realm, viewer)
+    return cache[key]
+
+
+def prime_community_memberships(posts, viewer, cache):
+    realms = {realm.pk: realm for post in posts if (realm := community_for_post(post)) is not None}
+    missing = [rid for rid in realms if (str(rid), str(getattr(viewer, "pk", None))) not in cache]
+    joined = set(Member.objects.filter(entity=viewer, realm_id__in=missing).values_list("realm_id", flat=True)) if viewer and missing else set()
+    for rid in missing:
+        cache[(str(rid), str(getattr(viewer, "pk", None)))] = rid in joined
+
+
+def can_read_community(realm, viewer, *, membership_cache=None):
+    return can_read(is_private=realm.is_private, is_active=realm.is_active,
+                    is_member=membership_status(realm, viewer, membership_cache))
 
 
 def assert_post_access(post, request, *, contribute=False):

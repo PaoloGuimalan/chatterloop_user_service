@@ -16,15 +16,15 @@ django.setup()
 from django.db import connection
 from rest_framework.test import APIRequestFactory, force_authenticate
 
-from community.models import Invite, Member, Realm
+from community.models import Invite, Member, Realm, Approvals
 from community.views import InviteView
 from community.community_views import CommunityLeaveView
-from entity.models import Entity, Follow, Role
+from entity.models import Entity, EntityPermission, Follow, PermissionCatalogEntry, Role, RolePermission
 from user.views import UserAuthentication
 
 
 def _role(name):
-    return Role.objects.get_or_create(name=name, is_default=True)[0]
+    return Role.objects.get_or_create(realm_id="123456789012345", code=name, is_default=True, defaults={"name": name})[0]
 
 
 class CommunityProfilePathTests(unittest.TestCase):
@@ -80,7 +80,9 @@ class CommunityProfilePathTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.models = (Entity, Role, Realm, Member, Follow, Invite)
+        for method in ("_redis_get", "_redis_set", "_redis_delete"):
+            cls.enterClassContext(patch(f"entity.services.permission_catalog_cache.{method}", return_value=None))
+        cls.models = (Entity, PermissionCatalogEntry, EntityPermission, Role, RolePermission, Realm, Member, Follow, Invite, Approvals)
         with connection.schema_editor() as editor:
             for model in cls.models:
                 editor.create_model(model)
@@ -108,7 +110,7 @@ class CommunityProfilePathTests(unittest.TestCase):
         Realm.objects.bulk_create([self.realm])
 
     def tearDown(self):
-        with connection.cursor() as cursor:
+        with connection.constraint_checks_disabled(), connection.cursor() as cursor:
             for model in reversed(self.models):
                 cursor.execute(f'DELETE FROM "{model._meta.db_table}"')
 

@@ -79,7 +79,7 @@ def notify_community_activity(
 
         try:
             current = Post.objects.filter(
-                pk=post_id, deleted_at=None, is_archived=False
+                pk=post_id, deleted_at=None, is_archived=False, approval=1
             ).first()
             realm = community_for_post(current) if current is not None else None
             if realm is None or not realm.is_active:

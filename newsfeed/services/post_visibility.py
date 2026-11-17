@@ -97,7 +97,7 @@ def visible_posts_filter(viewer_entity):
     return (~is_community & ordinary) | (is_community & community_visible)
 
 
-def can_view_post(post, viewer_entity):
+def can_view_post(post, viewer_entity, *, membership_cache=None):
     """
     Single-object form of the same rule, for paths that already hold a Post
     and only need a yes/no (preview-by-id, comment reads).
@@ -112,7 +112,7 @@ def can_view_post(post, viewer_entity):
 
     community = community_for_post(post)
     if community is not None:
-        return post.on_feed == "feed" and can_read_community(community, viewer_entity)
+        return post.approval == 1 and post.on_feed == "feed" and can_read_community(community, viewer_entity, membership_cache=membership_cache)
 
     privacy = post.privacy_status or "public"
 

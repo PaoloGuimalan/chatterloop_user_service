@@ -3,7 +3,10 @@ from django.urls import re_path, path
 from rest_framework import routers
 
 from community import views
+from community.permission_views import RealmPermissionsView
+from community.approval_views import CommunityApprovalsView, CommunityPostReviewView, CommunityInviteReviewView
 from community.admin_notifications import CommunityNotificationsView
+from community.archive_views import CommunityArchiveView, CommunityArchivePostView
 from community.community_views import (
     CommunitiesView,
     CommunityDetailView,
@@ -16,6 +19,12 @@ router = routers.DefaultRouter()
 app_name = "community"
 
 urlpatterns = [
+    path('communities/<str:realm_id>/archive', CommunityArchiveView.as_view(), name='community-archive'),
+    path('communities/<str:realm_id>/archive/<str:post_id>', CommunityArchivePostView.as_view(), name='community-archive-post'),
+    path("communities/<str:realm_id>/approvals", CommunityApprovalsView.as_view(), name="community-approvals"),
+    path("communities/<str:realm_id>/approvals/posts/<str:post_id>", CommunityPostReviewView.as_view(), name="community-post-review"),
+    path("communities/<str:realm_id>/approvals/<str:kind>/<str:invite_id>", CommunityInviteReviewView.as_view(), name="community-invite-review"),
+    path("realms/<str:realm_id>/permissions", RealmPermissionsView.as_view(), name="realm-permissions"),
     path("communities", CommunitiesView.as_view(), name="communities"),
     path(
         "communities/<str:realm_id>/notifications",

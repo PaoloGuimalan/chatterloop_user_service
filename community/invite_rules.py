@@ -34,7 +34,7 @@ class InviteError(Exception):
         self.status_code = status_code
 
 
-def resolve_purpose(realm_type, purpose=None, role=None):
+def resolve_purpose(realm_type, purpose=None, role=None, *, allow_custom_role=False):
     """
     The (purpose, role) an invite into `realm_type` will carry, or InviteError.
 
@@ -56,7 +56,7 @@ def resolve_purpose(realm_type, purpose=None, role=None):
 
     if purpose == "manage":
         role = (role or "").strip().lower()
-        if role not in MANAGE_ROLES:
+        if role not in MANAGE_ROLES and not (allow_custom_role and role and role != "owner"):
             raise InviteError("Pick a role: admin or moderator")
         return purpose, role
     return purpose, None

@@ -6,7 +6,7 @@ from datetime import timedelta
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils.timezone import now
-from rest_framework.exceptions import APIException, ValidationError
+from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 
 from entity.ownership import assert_owns
 from community.posts import assert_anonymous_upload
@@ -27,6 +27,12 @@ EDITABLE_POST_FIELDS = frozenset(
 CONTENT_FIELDS = frozenset({"caption", "references"})
 FIXED_MEDIA_TYPES = frozenset({"profile", "cover_photo", "shared_post"})
 logger = logging.getLogger(__name__)
+
+
+def archive_changes(post, archived):
+    """Common archive validation; callers retain their own authorization guard."""
+    validate_fields({'is_archived': archived})
+    return {'is_archived': archived} if archived != post.is_archived else {}
 
 
 class AttachmentUnavailable(APIException):
@@ -133,13 +139,19 @@ def prepare_references(post, requested, account_id, existing):
 
 @transaction.atomic
 def update_post(*, request, post_id, fields):
+    from community.post_review import lock_post_realm, submission_approval
+    from community.models import Approvals
+    from community.review_delivery import publish_review_effects
     fields = validate_fields(fields)
     if not isinstance(post_id, str) or not post_id.strip():
         raise ValidationError({"post_id": "A post_id is required"})
+    realm = lock_post_realm(post_id)
     post = get_object_or_404(
         Post.objects.select_for_update(), post_id=post_id, deleted_at=None
     )
     assert_owns(request, post)
+    if realm is not None and post.approval != 1:
+        raise PermissionDenied("Pending and unapproved submissions are read-only. You can withdraw them by deleting the post.")
     if post.on_feed != PostKind.FEED and (
         CONTENT_FIELDS.intersection(fields) or "privacy_status" in fields
     ):
@@ -190,12 +202,16 @@ def update_post(*, request, post_id, fields):
             )
         if audience != post.privacy_status:
             changes["privacy_status"] = audience
-    if "is_archived" in fields and fields["is_archived"] != post.is_archived:
-        changes["is_archived"] = fields["is_archived"]
+    if "is_archived" in fields:
+        changes.update(archive_changes(post, fields['is_archived']))
 
     content_changed = "caption" in changes or bool(added or removed)
     if content_changed:
-        changes["updated_at"] = now()
+        changes["updated_at"] = max(now(), (post.updated_at or post.date_posted) + timedelta(microseconds=1))
+        if realm is not None and submission_approval(request.entity, realm) == 0:
+            if post.is_archived:
+                raise ValidationError({"is_archived": "Restore this post before submitting edits for approval."})
+            changes["approval"] = 0
         if post.content_type in ("text", "media") and not post.is_shared:
             media_type = "media" if kept or added else "text"
             changes.update(content_type=media_type, file_type=media_type)
@@ -227,6 +243,12 @@ def update_post(*, request, post_id, fields):
         Post.objects.filter(pk=post.pk).update(**changes)
         for key, value in changes.items():
             setattr(post, key, value)
+    if changes.get("approval") == 0:
+        decision = Approvals.objects.create(realm=realm, actor=request.entity, target_kind="post",
+            target_id=post.pk, action="edit", previous_state={"approval": 1, "published": True},
+            new_state={"approval": 0, "published": True}, content_version=post.updated_at,
+            delivery_state={"pending_notice": "pending", "status": "pending"})
+        transaction.on_commit(lambda: publish_review_effects(str(decision.pk)), robust=True)
     if "caption" in changes:
         # Explicit links can also come from comments, so only add the newly
         # declared hashtags here.
@@ -261,6 +283,7 @@ def post_patch(post):
             logger.exception("Link preview unavailable for edited post %s", post.pk)
     return {
         "post_id": post.post_id,
+        "approval": post.approval,
         "caption": post.caption or "",
         "updated_at": post.updated_at.isoformat() if post.updated_at else None,
         "is_edited": post.is_edited,

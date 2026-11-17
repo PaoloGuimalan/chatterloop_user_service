@@ -16,11 +16,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.utils.urls import replace_query_param
 
-from community.models import Invite, Member, Realm
+from community.models import Approvals, Invite, Member, Realm
+from community.notification_permissions import allowed_notice_types, permitted_members, permissions_for_notice
 from entity.models import Entity
-from entity.permissions import Permission
 from entity.serializers import EntitySerializer
-from entity.services.permission_resolver import has_permission
 from entity.utils import get_entity_display_username, get_entity_name
 from newsfeed.models import Comment, CommentReaction, Post, PostTag, Reaction
 from user.ext_models.mongomodels import (
@@ -42,6 +41,8 @@ INBOX_TYPES = (
     JOIN_REQUEST,
     MEMBER_JOINED,
     POST_CREATED,
+    "community_post_pending",
+    "community_invite_pending",
     "post_comment",
     "post_reaction",
     "comment_reaction",
@@ -49,12 +50,9 @@ INBOX_TYPES = (
 MANAGER_ROLES = ("owner", "admin", "moderator")
 
 
-def _managers(realm):
-    return list(
-        Member.objects.filter(realm=realm, role__name__in=MANAGER_ROLES).values_list(
-            "entity_id", flat=True
-        )
-    )
+def _managers(realm, kind=None):
+    codes = permissions_for_notice(kind) if kind else {code for item in INBOX_TYPES for code in permissions_for_notice(item)}
+    return list(permitted_members(realm, codes).values_list('entity_id', flat=True))
 
 
 def _redirects(realm):
@@ -74,7 +72,7 @@ def _notice_id(reference, recipient, kind):
     )
 
 
-def _publish_event(realm, recipient, event, *, personal=False):
+def _publish_event(realm, recipient, event, *, personal=False, metadata=None):
     RedisPubSubClient.publish_json(
         f"events_{recipient}",
         {
@@ -89,6 +87,7 @@ def _publish_event(realm, recipient, event, *, personal=False):
                     "realm_id": str(realm.pk),
                     "community_entity_id": str(realm.entity_id),
                     **({"type": ADMIN_ACTIVITY} if personal else {}),
+                    **(metadata or {}),
                 },
             },
             "dateTime": datetime.now().astimezone().isoformat(),
@@ -128,6 +127,8 @@ def _upsert_notice(**notice):
         referenceStatus=notice.get("referenceStatus", True),
         redirects=notice.get("redirects"),
     )
+    if "actions" in notice:
+        fields["actions"] = notice["actions"]
     updates = {f"set__{key}": value for key, value in fields.items()}
     updates.update(
         set_on_insert__date=DateInfo(date=_timestamp()),
@@ -154,11 +155,13 @@ def _timestamp():
 
 
 def _admin_inbox(realm, recipient):
+    actor = recipient if isinstance(recipient, Entity) else Entity.objects.get(pk=recipient)
+    kinds = allowed_notice_types(actor, realm, INBOX_TYPES)
     return Notification.objects(
         type=ADMIN_INBOX,
         toUserID=str(recipient),
         referenceID__in=Notification.objects(
-            toUserID=str(realm.entity_id), type__in=INBOX_TYPES
+            toUserID=str(realm.entity_id), type__in=kinds
         ).distinct("notificationID"),
     )
 
@@ -166,7 +169,7 @@ def _admin_inbox(realm, recipient):
 def _save_preview(realm, recipient):
     """Replace the saved preview immediately using existing notification fields."""
     manager = Entity.objects.get(pk=recipient)
-    if not has_permission(manager, Permission.REALM_REQUEST_APPROVE, realm=realm):
+    if not allowed_notice_types(manager, realm, INBOX_TYPES):
         return
     # The existing Mongo _id is the unique slot, shared with the Node writer.
     # Concurrent activity replaces this row instead of deleting another write.
@@ -360,11 +363,45 @@ def settle_join_requests(reference_ids):
         logger.exception("Failed to settle community join-request notices")
 
 
+def settle_review_notices(realm, kind, target_id, *, through_version=None):
+    """Resolve receipts for this submission, never a newer edited version."""
+    decisions = Approvals.objects.filter(realm=realm, target_kind=kind, target_id=str(target_id), action__in=('submit', 'edit'))
+    if kind == 'post':
+        if through_version is None:
+            return
+        decisions = decisions.filter(content_version__lte=through_version)
+    notice_type = 'community_post_pending' if kind == 'post' else 'community_invite_pending'
+    notices = Notification.objects(toUserID=str(realm.entity_id), type=notice_type,
+        referenceID__in=list(map(str, decisions.values_list('pk', flat=True))))
+    ids = [row.notificationID for row in notices]
+    notices.update(set__referenceStatus=True, set__isRead=True)
+    receipts = Notification.objects(type=ADMIN_INBOX, referenceID__in=ids)
+    recipients = receipts.distinct('toUserID')
+    receipts.update(set__referenceStatus=True, set__isRead=True)
+    for recipient in recipients:
+        _reconcile_previews(realm, recipient)
+    _event(realm, recipients)
+    _preview_read_event(realm, recipients)
+
+
+def settle_withdrawn_review_notices(post_ids):
+    """A withdrawn submission no longer contributes to pending unread previews."""
+    from django.db.models import Max
+    targets = Approvals.objects.filter(target_kind='post', target_id__in=post_ids,
+        action__in=('submit', 'edit')).values('realm_id', 'target_id').annotate(version=Max('content_version'))
+    realms = Realm.objects.in_bulk({row['realm_id'] for row in targets})
+    for row in targets:
+        try:
+            settle_review_notices(realms[row['realm_id']], 'post', row['target_id'], through_version=row['version'])
+        except Exception:
+            logger.exception('Failed to settle withdrawn submission notices for %s', row['target_id'])
+
+
 def record_admin_activity(realm, notice, *, actor_id=None):
     """Store immediate inbox rows and refresh personal unread previews."""
     canonical_id = _notice_id(notice["referenceID"], notice["toUserID"], notice["type"])
     managers = [
-        recipient for recipient in _managers(realm) if str(recipient) != str(actor_id)
+        recipient for recipient in _managers(realm, notice['type']) if str(recipient) != str(actor_id)
     ]
     inserted = []
     for recipient in managers:
@@ -411,7 +448,7 @@ def acknowledge_activity(realm, viewer, revision, notification_ids=None):
     notices = Notification.objects(
         notificationID__in=notification_ids,
         toUserID=str(realm.entity_id),
-        type__in=INBOX_TYPES,
+        type__in=allowed_notice_types(viewer, realm, INBOX_TYPES),
     )
     changed = False
     for notice in notices:
@@ -442,11 +479,7 @@ def _manager_realm(request, realm_id):
     realm = get_object_or_404(
         Realm, Q(pk=realm_id) | Q(slug=realm_id), type="community", is_active=True
     )
-    if not Member.objects.filter(
-        realm=realm, entity=request.entity, role__name__in=MANAGER_ROLES
-    ).exists() or not has_permission(
-        request.entity, Permission.REALM_REQUEST_APPROVE, realm=realm
-    ):
+    if not allowed_notice_types(request.entity, realm, INBOX_TYPES):
         raise PermissionDenied("Only community managers can view these notifications")
     return realm
 
@@ -460,6 +493,20 @@ def _actor_queryset(model):
 def _project_notices(realm, notices):
     """Re-read authoritative activity before projecting identity or a destination."""
     references = [row.referenceID for row in notices]
+    review_ids = []
+    for row in notices:
+        if row.type in ('community_post_pending', 'community_invite_pending'):
+            try:
+                review_ids.append(uuid.UUID(row.referenceID))
+            except (ValueError, TypeError, AttributeError):
+                pass
+    reviews = {str(item.pk): item for item in Approvals.objects.select_related(
+        'actor__users', 'actor__realms', 'actor__bots').filter(pk__in=review_ids, realm=realm, action__in=('submit', 'edit'))}
+    pending_posts = {str(item.pk): item for item in _actor_queryset(Post).filter(
+        pk__in=[item.target_id for item in reviews.values() if item.target_kind == 'post'],
+        tagging__entity_id=realm.entity_id, deleted_at=None).distinct()}
+    pending_invites = {str(item.pk): item for item in Invite.objects.filter(
+        pk__in=[item.target_id for item in reviews.values() if item.target_kind == 'invite'], realm=realm, kind='invite')}
     requests = {
         str(item.pk): item
         for item in Invite.objects.select_related(
@@ -517,6 +564,28 @@ def _project_notices(realm, notices):
     }
     results = []
     for row in notices:
+        review = reviews.get(str(row.referenceID)) if row.type in ('community_post_pending', 'community_invite_pending') else None
+        if review is not None:
+            if (not row.target or row.target.type != 'community_approvals' or str(row.target.supportingID) != str(realm.pk)):
+                continue
+            pending_post = pending_posts.get(review.target_id) if review.target_kind == 'post' else None
+            pending_invite = pending_invites.get(review.target_id) if review.target_kind == 'invite' else None
+            if (row.type == 'community_post_pending' and pending_post is None) or (row.type == 'community_invite_pending' and pending_invite is None):
+                continue
+            anonymous = bool(row.is_anonymous or (pending_post and pending_post.is_anonymous))
+            pending = not row.referenceStatus and (
+                pending_post.approval == 0 and (pending_post.updated_at or pending_post.date_posted) == review.content_version
+                if pending_post else pending_invite.status == 'for_approval')
+            subject = 'An anonymous member' if anonymous else get_entity_name(review.actor)
+            label = 'post' if pending_post else 'invitation'
+            results.append(dict(id=row.notificationID, type=row.type,
+                description=f'{subject} submitted a {label} for approval.' if pending else f'{subject}’s {label} submission was resolved.',
+                actor=None if anonymous else EntitySerializer(review.actor).data, is_anonymous=anonymous,
+                created_at=row.date.date, request_id=None, request_status=None, post_id=None, anchor=None,
+                approval_kind='posts' if pending_post else 'invites',
+                approval_id=str(review.pk) if pending_post else str(pending_invite.pk),
+                approval_target_id=review.target_id, approval_pending=bool(pending)))
+            continue
         request = (
             requests.get(str(row.referenceID)) if row.type == JOIN_REQUEST else None
         )
@@ -594,7 +663,7 @@ class CommunityNotificationsView(APIView):
             raise ValidationError("Invalid notification pagination") from exc
         query = Notification.objects(
             toUserID=str(realm.entity_id),
-            type__in=INBOX_TYPES,
+            type__in=allowed_notice_types(request.entity, realm, INBOX_TYPES),
         )
         total = query.count()
         rows = list(

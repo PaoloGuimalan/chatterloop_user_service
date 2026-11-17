@@ -60,6 +60,7 @@ class Permission:
     EVENTS_SUBSCRIBE = "events.subscribe"
 
     # --- Realm-scope capabilities (resolved via Member.role unless overridden) ---
+    REALM_IDENTITY_ACT = "realm.identity.act"
     REALM_UPDATE = "realm.update"
     REALM_INVITE_CREATE = "realm.invite.create"
     REALM_INVITE_REVOKE = "realm.invite.revoke"
@@ -83,6 +84,16 @@ class Permission:
     REALM_MEDIA_UPDATE = "realm.media.update"
     REALM_DELETE = "realm.delete"
     REALM_OWNERSHIP_TRANSFER = "realm.ownership.transfer"
+    REALM_POST_SUBMIT = "realm.post.submit"
+    REALM_POST_PUBLISH = "realm.post.publish"
+    REALM_POST_REVIEW = "realm.post.review"
+    REALM_POST_TAKEDOWN = "realm.post.takedown"
+    REALM_POST_ARCHIVE = "realm.post.archive"
+    REALM_INVITE_PUBLISH = "realm.invite.publish"
+    REALM_INVITE_REVIEW = "realm.invite.review"
+    REALM_ROLES_MANAGE = "realm.roles.manage"
+    REALM_PERMISSIONS_MANAGE = "realm.permissions.manage"
+    REALM_NOTIFICATIONS_VIEW = "realm.notifications.view"
 
     # --- Entity-type-scope capabilities (resolved via the acting entity's own
     # .type - user vs realm - unlike REALM_SCOPED above, which is about a
@@ -112,6 +123,7 @@ class Permission:
     }
 
     REALM_SCOPED = {
+        REALM_IDENTITY_ACT,
         REALM_UPDATE,
         REALM_INVITE_CREATE,
         REALM_INVITE_REVOKE,
@@ -126,6 +138,10 @@ class Permission:
         REALM_MEDIA_UPDATE,
         REALM_DELETE,
         REALM_OWNERSHIP_TRANSFER,
+        REALM_POST_SUBMIT, REALM_POST_PUBLISH, REALM_POST_REVIEW,
+        REALM_POST_TAKEDOWN, REALM_POST_ARCHIVE, REALM_INVITE_PUBLISH,
+        REALM_INVITE_REVIEW, REALM_ROLES_MANAGE, REALM_PERMISSIONS_MANAGE,
+        REALM_NOTIFICATIONS_VIEW,
     }
 
     ENTITY_TYPE_SCOPED = {
@@ -196,6 +212,19 @@ REALM_ROLE_DEFAULT_PERMISSIONS = {
         Permission.REALM_MEMBER_VIEW,
     },
 }
+
+
+for _grants in REALM_ROLE_DEFAULT_PERMISSIONS.values():
+    _grants.update({Permission.REALM_POST_SUBMIT, Permission.REALM_POST_PUBLISH, Permission.REALM_INVITE_PUBLISH})
+for _tier in (MemberRole.OWNER, MemberRole.ADMIN, MemberRole.MODERATOR):
+    REALM_ROLE_DEFAULT_PERMISSIONS[_tier].update({
+        Permission.REALM_POST_REVIEW, Permission.REALM_POST_TAKEDOWN,
+        Permission.REALM_INVITE_REVIEW, Permission.REALM_NOTIFICATIONS_VIEW,
+    })
+for _tier in (MemberRole.OWNER, MemberRole.ADMIN):
+    REALM_ROLE_DEFAULT_PERMISSIONS[_tier].update({
+        Permission.REALM_ROLES_MANAGE, Permission.REALM_PERMISSIONS_MANAGE, Permission.REALM_POST_ARCHIVE,
+    })
 
 
 def _account_in_good_standing(entity):

@@ -25,6 +25,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv()
 
 DB_HOST = os.getenv("DB_HOST")
+REALM_ROLE_CONFIGURATION_ENABLED = os.getenv("REALM_ROLE_CONFIGURATION_ENABLED", "false").lower() == "true"
+COMMUNITY_APPROVALS_ENABLED = os.getenv("COMMUNITY_APPROVALS_ENABLED", "false").lower() == "true"
 DB_NAME = os.getenv("DB_NAME")
 DB_PORT = os.getenv("DB_PORT")
 DB_USERNAME = os.getenv("DB_USERNAME")

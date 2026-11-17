@@ -6,7 +6,7 @@ from django.db import DatabaseError
 # Seed defaults used only when the Variable is unavailable; no runtime JSON file.
 RESERVED_PROFILE_PATHS = frozenset([
     "api", "assets", "conference", "contacts", "delete-account", "design",
-    "edits", "explore", "invite", "login", "mapfeed", "messages", "moderation",
+    "edits", "explore", "invite", "login", "mapfeed", "messages", "moderation", "realm-review",
     "moments", "notes", "notifications", "pages", "post", "privacy", "realms",
     "register", "scenes", "servers", "settings", "setup", "share", "studio",
     "studios", "support", "terms", "topics", "user", "verification",

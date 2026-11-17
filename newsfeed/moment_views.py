@@ -244,7 +244,7 @@ def _shared_pointer(post):
     return None
 
 
-def _shared_previews(viewer, moments):
+def _shared_previews(viewer, moments, *, membership_cache=None):
     """
     {moment post_id: preview} for the shared-post moments among `moments` -
     what a tile, a reply chip or the archive draws for them without fetching
@@ -265,7 +265,7 @@ def _shared_previews(viewer, moments):
             p.post_id: p
             for p in Post.objects.select_related("entity")
             .prefetch_related("references", "privacy_users", "tagging__entity__realms")
-            .filter(post_id__in=set(ids), deleted_at=None)
+            .filter(post_id__in=set(ids), deleted_at=None, is_archived=False)
         }
 
     shared = load(pointers.values())
@@ -273,15 +273,18 @@ def _shared_previews(viewer, moments):
         pointer for pointer in (_shared_pointer(p) for p in shared.values()) if pointer
     )
 
+    if membership_cache is not None:
+        from community.posts import prime_community_memberships
+        prime_community_memberships([*shared.values(), *originals.values()], viewer, membership_cache)
     previews = {}
     for moment_id, shared_id in pointers.items():
         post = shared.get(shared_id)
-        if post is None or not can_view_post(post, viewer):
+        if post is None or not can_view_post(post, viewer, membership_cache=membership_cache):
             previews[moment_id] = {"post_id": shared_id, "available": False}
             continue
         media = _first_media(post)
         original = originals.get(_shared_pointer(post) or "")
-        if media is None and original is not None and can_view_post(original, viewer):
+        if media is None and original is not None and can_view_post(original, viewer, membership_cache=membership_cache):
             media = _first_media(original)
         previews[moment_id] = {
             "post_id": shared_id,
@@ -301,7 +304,7 @@ def _shared_previews(viewer, moments):
                 viewer_id=getattr(viewer, "pk", None),
             )
             if community is not None:
-                previews[moment_id]["community"] = community_metadata(community, viewer)
+                previews[moment_id]["community"] = community_metadata(community, viewer, membership_cache=membership_cache)
     return previews
 
 

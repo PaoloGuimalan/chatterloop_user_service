@@ -54,8 +54,8 @@ def _make_session(entity_id, device_token, session_id=None, **overrides):
     return session
 
 
-def _role(name):
-    return Role.objects.get_or_create(name=name, is_default=True)[0]
+def _role(name, realm):
+    return Role.objects.get(realm=realm, code=name, is_default=True)
 
 
 class DeviceSessionListTests(TestCase):
@@ -130,7 +130,7 @@ class DeviceSessionListTests(TestCase):
             entity=self.personal_entity,
             realm=page_realm,
             added_by=self.personal_entity,
-            role=_role(MemberRole.OWNER),
+            role=_role(MemberRole.OWNER, page_realm),
             date_joined=now(),
         )
         _make_session(page_realm.entity_id, self.device_token)

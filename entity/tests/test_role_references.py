@@ -11,21 +11,12 @@ from entity.role_views import RolesView
 
 
 class RolesViewTests(TestCase):
-    def test_authenticated_list_keeps_duplicate_role_ids_and_permissions_distinct(self):
-        with patch("entity.services.permission_catalog_cache._redis_delete"):
-            first = Role.objects.create(name="admin")
-            second = Role.objects.create(name="admin")
-            first.permissions.add(PermissionCatalogEntry.objects.get(codename="realm.update"))
+    def test_unscoped_role_list_returns_no_definitions(self):
         request = APIRequestFactory().get("/api/entity/roles")
         force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
         response = RolesView.as_view()(request)
         self.assertEqual(response.status_code, 200)
-        rows = {row["id"]: row for row in response.data["result"]}
-        self.assertEqual(rows[first.pk]["name"], "admin")
-        self.assertEqual(rows[second.pk]["name"], "admin")
-        self.assertEqual(rows[first.pk]["permissions"], ["realm.update"])
-        self.assertEqual(rows[second.pk]["permissions"], [])
-        self.assertFalse(rows[first.pk]["is_default"])
+        self.assertEqual(response.data["result"], [])
 
     def test_unauthenticated_role_listing_is_rejected(self):
         response = RolesView.as_view()(APIRequestFactory().get("/api/entity/roles"))
@@ -35,16 +26,17 @@ class RolesViewTests(TestCase):
 class RoleReferenceMigrationTests(TransactionTestCase):
     before = [("entity", "0021_messages_encryption_purpose"),
               ("community", "0010_community_membership_capability")]
-    after = [("entity", "0024_catalog_entity_types"), ("community", "0011_role_references")]
+    after = [("entity", "0025_editable_definition_names"), ("community", "0011_role_references")]
 
-    def migrate(self, targets):
+    def migrate(self, targets=None):
         executor = MigrationExecutor(connection)
+        targets = targets or executor.loader.graph.leaf_nodes()
         executor.migrate(targets)
         return executor.loader.project_state(targets).apps
 
     def test_member_and_invite_names_migrate_to_exact_ids_and_reverse(self):
         old = self.migrate(self.before)
-        self.addCleanup(self.migrate, self.after)
+        self.addCleanup(self.migrate)
         entity = old.get_model("entity", "Entity")
         owner = entity.objects.create(type="user")
         realm = old.get_model("community", "Realm").objects.create(

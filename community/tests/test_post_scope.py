@@ -240,7 +240,7 @@ class CommunityScopeTests(unittest.TestCase):
                 CREATE TABLE entity_entity (id TEXT PRIMARY KEY);
                 CREATE TABLE community_realm (id TEXT, entity_id TEXT, type TEXT, is_active BOOLEAN, is_private BOOLEAN);
                 CREATE TABLE community_member (realm_id TEXT, entity_id TEXT);
-                CREATE TABLE newsfeed_post (post_id TEXT, entity_id TEXT, privacy_status TEXT, on_feed TEXT);
+                CREATE TABLE newsfeed_post (post_id TEXT, entity_id TEXT, privacy_status TEXT, on_feed TEXT, approval INTEGER DEFAULT 1);
                 CREATE TABLE newsfeed_posttag (post_id TEXT, entity_id TEXT);
                 CREATE TABLE newsfeed_postprivacy (post_id TEXT, allowed_entity_id TEXT);
                 CREATE TABLE entity_connection (action_by_id TEXT, involved_entity_id TEXT, status BOOLEAN);
@@ -249,7 +249,7 @@ class CommunityScopeTests(unittest.TestCase):
                 INSERT INTO entity_entity VALUES ('author'), ('viewer'), ('public'), ('private'), ('tagged-user');
                 INSERT INTO community_realm VALUES ('public-realm', 'public', 'community', 1, 0), ('private-realm', 'private', 'community', 1, 1);
                 INSERT INTO community_member VALUES ('private-realm', 'viewer');
-                INSERT INTO newsfeed_post VALUES
+                INSERT INTO newsfeed_post (post_id, entity_id, privacy_status, on_feed) VALUES
                     ('ordinary-public', 'author', 'public', 'feed'),
                     ('ordinary-private', 'author', 'private', 'feed'),
                     ('community-public', 'author', 'private', 'feed'),
@@ -354,7 +354,8 @@ class CommunityScopeTests(unittest.TestCase):
                 membership.clean()
 
     def test_pages_remain_eligible_for_membership(self):
-        membership = Member(entity_id="page", realm_id="community", role_id=1)
+        from entity.models import Role
+        membership = Member(entity_id="page", realm_id="community", role=Role(id=1, realm_id="community"))
         with patch("community.models.Realm.objects.filter") as lookup:
             lookup.return_value.exists.return_value = False
             membership.clean()

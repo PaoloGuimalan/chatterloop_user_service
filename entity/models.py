@@ -2,7 +2,7 @@ import random
 import uuid
 
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import IntegrityError, models, transaction
 from django.utils.timezone import now
 
 from entity.permissions import PermissionEffect
@@ -195,6 +195,11 @@ class Role(models.Model):
     # Reference choices only: [("owner", "Owner"), ("admin", "Admin"),
     #                          ("moderator", "Moderator"), ("member", "Member")]
     name = models.CharField(max_length=150)
+    code = models.CharField(max_length=255, editable=False)
+    realm = models.ForeignKey(
+        "community.Realm", on_delete=models.CASCADE,
+        related_name="owned_roles",
+    )
     is_default = models.BooleanField(default=False)
     permissions = models.ManyToManyField(
         PermissionCatalogEntry, through="RolePermission", related_name="roles", blank=True,
@@ -204,11 +209,57 @@ class Role(models.Model):
     class Meta:
         db_table = "entity_role"
         constraints = [models.UniqueConstraint(
-            fields=["name"], condition=models.Q(is_default=True), name="unique_default_role_name",
+            fields=["realm", "code"], name="unique_realm_role_code",
         )]
 
     def __str__(self):
         return f"{self.name} (#{self.pk})" if self.pk else self.name
+
+    def clean(self):
+        super().clean()
+        from entity.roles import BUILTIN_ROLE_CODES
+
+        if not self.name.strip():
+            raise ValidationError({"name": "Enter a role name."})
+        if not self.realm_id:
+            raise ValidationError({"realm": "Every role must belong to a realm."})
+        if self.is_default and self.code not in BUILTIN_ROLE_CODES:
+            raise ValidationError("Choose a canonical default role code.")
+        if not self.is_default and self.code in BUILTIN_ROLE_CODES:
+            raise ValidationError({"code": "Default role codes are reserved within the realm."})
+
+    def save(self, *args, **kwargs):
+        from entity.roles import generate_role_code
+
+        using = kwargs.get("using") or self._state.db or "default"
+        if not self._state.adding:
+            original = type(self).objects.using(using).get(pk=self.pk)
+            if (original.code, original.realm_id, original.is_default) != (
+                self.code, self.realm_id, self.is_default,
+            ):
+                raise ValidationError("Role identity, scope and structural tier cannot be changed.")
+            if original.code == "owner" and original.name != self.name:
+                raise ValidationError("The Owner role cannot be changed.")
+            self.clean()
+            return super().save(*args, **kwargs)
+
+        generated = not self.code
+        for attempt in range(5):
+            if generated:
+                self.code = generate_role_code(self, collision=attempt > 0)
+            self.clean()
+            try:
+                with transaction.atomic(using=using):
+                    return super().save(*args, **kwargs)
+            except IntegrityError:
+                if not generated or self.is_default or not type(self).objects.using(using).filter(realm_id=self.realm_id, code=self.code).exists():
+                    raise
+        raise ValidationError("Could not generate a distinct role code; retry creation.")
+
+    def delete(self, *args, **kwargs):
+        if self.code == "owner":
+            raise ValidationError("The Owner role cannot be deleted.")
+        return super().delete(*args, **kwargs)
 
 
 class RolePermission(models.Model):

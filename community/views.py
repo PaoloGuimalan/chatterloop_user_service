@@ -30,7 +30,7 @@ from user.utils.external_requests import emailer
 from user_service.services.redis import RedisPubSubClient
 from community.annotations import my_role_annotation, my_role_id_annotation
 from entity.permissions import Permission
-from entity.roles import get_default_role
+from entity.roles import get_default_role, role_tier_filter
 from entity.services.permission_resolver import has_permission
 from entity.utils import get_entity_display_username, resolve_entity_target
 from entity.services.follows import (
@@ -91,7 +91,7 @@ class TopRealms(APIView):
                     Q(
                         Exists(
                             Member.objects.filter(
-                                Q(Q(role__name="admin") | Q(role__name="owner")),
+                                role_tier_filter(["admin", "owner"]),
                                 realm=OuterRef("pk"),
                                 entity=entity,
                             )
@@ -179,7 +179,7 @@ class MyRealms(APIView):
                     Q(
                         Exists(
                             Member.objects.filter(
-                                Q(Q(role__name="admin") | Q(role__name="owner")),
+                                role_tier_filter(["admin", "owner"]),
                                 realm=OuterRef("pk"),
                                 entity=entity,
                             )
@@ -339,7 +339,7 @@ class FollowRealmView(APIView):
                         Q(
                             Exists(
                                 Member.objects.filter(
-                                    Q(Q(role__name="admin") | Q(role__name="owner")),
+                                    role_tier_filter(["admin", "owner"]),
                                     realm=OuterRef("pk"),
                                     entity=entity,
                                 )
@@ -789,7 +789,7 @@ class JoinGroupRealmV2(APIView):
                 realm=realm,
                 defaults={
                     "added_by": entity,
-                    "role": get_default_role("member"),
+                    "role": get_default_role("member", realm=realm),
                     "date_joined": now(),
                 },
             )
@@ -1004,11 +1004,11 @@ class InviteView(APIView):
         if realm.type == "community":
             return set(
                 Member.objects.filter(
-                    realm=realm, role__name__in=("owner", "admin", "moderator")
+                    role_tier_filter(["owner", "admin", "moderator"]), realm=realm,
                 ).values_list("entity_id", flat=True)
             )
         recipient_ids = set(
-            Member.objects.filter(realm=realm, role__name__in=("owner", "admin")).values_list(
+            Member.objects.filter(role_tier_filter(["owner", "admin"]), realm=realm).values_list(
                 "entity__id", flat=True
             )
         )
@@ -1087,7 +1087,7 @@ class InviteView(APIView):
             realm=invite.realm,
             defaults={
                 "added_by": actor,
-                "role": get_default_role("member"),
+                "role": get_default_role("member", realm=invite.realm),
                 "date_joined": now(),
             },
         )
@@ -1151,9 +1151,14 @@ class InviteView(APIView):
                 status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
             )
         except Exception as e:
+            from rest_framework.exceptions import APIException
+            from django.http import Http404
+            if isinstance(e, (APIException, Http404)):
+                raise
             logger.exception("InviteView.post failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @transaction.atomic
     def _request_access(self, realm, user, entity):
         """
         A realm participant asking to be let in. The requester is the
@@ -1161,6 +1166,7 @@ class InviteView(APIView):
         be looked up by the email in the body, which crashed (None.entity)
         whenever no account matched it.
         """
+        realm = get_object_or_404(Realm.objects.select_for_update(), pk=realm.pk, is_active=True)
         if Realm.objects.filter(entity=entity, type="community").exists():
             return Response(
                 {
@@ -1218,7 +1224,8 @@ class InviteView(APIView):
             target_email = request.query_params.get("target_email")
 
             if invite_token:
-                invite = get_object_or_404(Invite.objects.select_related("role"), invite_token=invite_token)
+                invite = get_object_or_404(Invite.objects.select_related("role").exclude(
+                    realm__type="community", status__in=["for_approval", "rejected"]), invite_token=invite_token)
                 return Response(
                     {
                         "status": True,
@@ -1247,7 +1254,7 @@ class InviteView(APIView):
                     Invite.objects.filter(
                         realm__realm_id=realm_id,
                         target_email=normalized_email,
-                    )
+                    ).exclude(status__in=["for_approval", "rejected"])
                     .order_by("-created_at")
                     .first()
                 )
@@ -1281,13 +1288,15 @@ class InviteView(APIView):
                     )
 
                 invites = Invite.objects.filter(realm=realm)
+                if realm.type == "community" and not has_permission(request.entity, Permission.REALM_INVITE_REVIEW, realm):
+                    invites = invites.filter(~Q(status__in=["for_approval", "rejected"]) | Q(created_by=request.entity))
 
                 kind = request.query_params.get("kind")
                 if kind in {"invite", "request"}:
                     invites = invites.filter(kind=kind)
 
                 status_filter = request.query_params.get("status")
-                if status_filter in {"pending", "accepted", "declined", "revoked"}:
+                if status_filter in {"pending", "for_approval", "rejected", "accepted", "declined", "revoked"}:
                     invites = invites.filter(status=status_filter)
 
                 invites = invites.select_related("role").order_by("-created_at")
@@ -1312,221 +1321,37 @@ class InviteView(APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            from rest_framework.exceptions import APIException
+            from django.http import Http404
+            if isinstance(e, (APIException, Http404)):
+                raise
             logger.exception("InviteView.get failed")
             return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     def patch(self, request):
-        user = self.request.user
-        entity = self.request.entity
+        from rest_framework.exceptions import APIException, ValidationError
+        from django.http import Http404
+        from community.invite_review import transition_invite, cancel_own_join_requests
 
+        if not isinstance(request.data, dict):
+            raise ValidationError({"body": "Send an invitation action."})
+        token = request.data.get("invite_token")
+        action = request.data.get("status")
+        realm_id = request.data.get("realm_id")
         try:
-            invite_token = request.data.get("invite_token")
-            status_value = request.data.get("status")
-
-            # A requester need not know an invitation token to withdraw their
-            # own server request. Never accept a target entity from the body.
-            realm_id = request.data.get("realm_id")
-            if not invite_token and realm_id and status_value == "revoked":
-                realm = Realm.objects.filter(
-                    realm_id=realm_id, type="server", is_active=True
-                ).first()
-                if realm is None:
-                    return Response(
-                        {"status": False, "message": "Server not found"}, status=404
-                    )
-                with transaction.atomic():
-                    cancelled = Invite.objects.filter(
-                        realm=realm,
-                        target_entity=entity,
-                        kind="request",
-                        status="pending",
-                    ).update(status="revoked", resolved_at=now())
-                    if cancelled:
-                        transaction.on_commit(
-                            lambda: self._notify_requests_changed(realm)
-                        )
-                        transaction.on_commit(
-                            lambda: self._notify_access_changed(str(entity.pk), realm)
-                        )
+            if not token and realm_id and action == "revoked":
+                cancel_own_join_requests(request.entity, realm_id, server_only=True)
                 return Response({"status": True, "request_pending": False})
-
-            if not invite_token or not status_value:
-                return Response(
-                    {
-                        "status": False,
-                        "message": "invite_token and status are required",
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            invite = get_object_or_404(Invite.objects.select_related("role"), invite_token=invite_token)
-            normalized_status = str(status_value).strip().lower()
-
-            if normalized_status not in {"accepted", "declined", "revoked"}:
-                return Response(
-                    {
-                        "status": False,
-                        "message": "Unsupported invite status",
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            # Answered once. An accepted, declined or revoked invite used to
-            # take any answer again - a revoked one could still be accepted.
-            if invite.status != "pending":
-                return Response(
-                    {
-                        "status": False,
-                        "message": f"This invite was already {invite.status}",
-                        "result": self._serialize_invite(invite),
-                    },
-                    status=status.HTTP_409_CONFLICT,
-                )
-
-            # Accepting or declining an INVITE is the invitee's call alone.
-            # Declining had no check at all: anyone holding the token could
-            # turn someone else's invite down.
-            if invite.kind != "request" and normalized_status in {
-                "accepted",
-                "declined",
-            }:
-                # Compared as strings: an id read back is a str, one made in
-                # this request is still a uuid.UUID. The address is the ACTING
-                # entity's - a page switched into answers to its contact email,
-                # not to its admin's personal one.
-                if (
-                    invite.target_email
-                    and invite.target_email.lower() != acting_email(entity, user)
-                    and str(invite.target_entity_id) != str(entity.id)
-                ):
-                    return Response(
-                        {
-                            "status": False,
-                            "message": "This invite is not assigned to your account",
-                        },
-                        status=status.HTTP_401_UNAUTHORIZED,
-                    )
-                if invite.target_entity_id and str(invite.target_entity_id) != str(
-                    entity.id
-                ):
-                    return Response(
-                        {
-                            "status": False,
-                            "message": "This invite was assigned to another account",
-                        },
-                        status=status.HTTP_401_UNAUTHORIZED,
-                    )
-
-            if normalized_status == "accepted":
-                if invite.kind == "request":
-                    # A host/admin approves another member's join request.
-                    if not has_permission(
-                        entity, Permission.REALM_REQUEST_APPROVE, realm=invite.realm
-                    ):
-                        return Response(
-                            {
-                                "status": False,
-                                "message": "You are not allowed to approve this request",
-                            },
-                            status=status.HTTP_401_UNAUTHORIZED,
-                        )
-            if normalized_status == "declined" and invite.kind == "request":
-                # A host/admin can decline an incoming join request, or the
-                # requester can withdraw their own request - the latter is a
-                # resource-identity check, not a grantable permission.
-                if (
-                    not has_permission(
-                        entity, Permission.REALM_REQUEST_DECLINE, realm=invite.realm
-                    )
-                    and invite.created_by_id != entity.id
-                ):
-                    return Response(
-                        {
-                            "status": False,
-                            "message": "You are not allowed to decline this request",
-                        },
-                        status=status.HTTP_401_UNAUTHORIZED,
-                    )
-
-            if normalized_status == "revoked":
-                if (
-                    not has_permission(
-                        entity, Permission.REALM_INVITE_REVOKE, realm=invite.realm
-                    )
-                    and invite.created_by_id != entity.id
-                ):
-                    return Response(
-                        {
-                            "status": False,
-                            "message": "You are not allowed to revoke this invite",
-                        },
-                        status=status.HTTP_401_UNAUTHORIZED,
-                    )
-
-            with transaction.atomic():
-                invite.status = normalized_status
-                invite.resolved_at = now()
-                if normalized_status == "accepted":
-                    invite.accepted_by_entity = entity
-                invite.save()
-
-                if normalized_status == "accepted":
-                    if invite.realm.type == "server":
-                        accept_side_effects(invite, invite.target_entity or entity)
-                    elif invite.kind == "request" or invite.realm.type == "conference":
-                        # Unchanged: a conference member row, as it always was.
-                        self._add_member_if_missing(invite, entity)
-                    else:
-                        # Groups, servers (with their channels) and pages -
-                        # see community/invites.py.
-                        accept_side_effects(invite, entity)
-
-            # The Accept / Decline on the invitee's notification go away now
-            # that it is answered.
-            if invite.kind == "invite":
-                settle_invite_notifications(invite)
-
-            # Accepting into a conference adds a participant.
-            if normalized_status == "accepted":
-                transaction.on_commit(
-                    lambda: self._notify_members_changed(invite.realm)
-                )
-
-            # A resolved join request changes the host's pending list, and the
-            # requester needs to refetch their access/room info either way.
-            if invite.kind == "request" and normalized_status in {
-                "accepted",
-                "declined",
-                "revoked",
-            }:
-                if invite.realm.type == "community":
-                    from community.admin_notifications import settle_join_requests
-
-                    transaction.on_commit(
-                        lambda: settle_join_requests([str(invite.pk)])
-                    )
-                transaction.on_commit(
-                    lambda: self._notify_requests_changed(invite.realm)
-                )
-                transaction.on_commit(
-                    lambda: self._notify_access_changed(
-                        invite.target_entity_id, invite.realm
-                    )
-                )
-
-            return Response(
-                {
-                    "status": True,
-                    "message": f"Invite {normalized_status}",
-                    "result": self._serialize_invite(invite),
-                },
-                status=status.HTTP_200_OK,
-            )
+            if not token or not action:
+                raise ValidationError({"body": "invite_token and status are required"})
+            invite = transition_invite(actor=request.entity, account=request.user,
+                invite_token=token, action=action, expected_status=None if isinstance(action, str) and action.strip().lower() == "revoked" else "pending")
+            return Response({"status": True, "message": f"Invite {invite.status}",
+                             "result": self._serialize_invite(invite)})
         except InviteError as err:
             return Response({"status": False, "message": err.message}, status=err.status_code)
-        except Exception as e:
-            logger.exception("InviteView.patch failed")
-            return Response(str(e), status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except (APIException, Http404):
+            raise
 
     def delete(self, request):
         user = self.request.user
