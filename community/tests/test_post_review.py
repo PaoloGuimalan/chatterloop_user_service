@@ -1,7 +1,7 @@
 from datetime import timedelta
 from unittest.mock import patch
 from types import SimpleNamespace
-from django.test import TestCase, override_settings
+from django.test import TestCase
 from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 from django.utils.timezone import now
 from community.models import Member, Approvals
@@ -82,9 +82,15 @@ class PostReviewTests(RealmRolePolicyFixture, TestCase):
         with self.assertRaises(PermissionDenied):
             self.review()
 
-    def test_new_policy_flags_cannot_disable_review_of_existing_submissions(self):
-        with override_settings(COMMUNITY_APPROVALS_ENABLED=False):
-            self.assertEqual(self.review().new_state["approval"], 1)
+    def test_publication_uses_realm_grants_without_environment_opt_in(self):
+        from community.post_review import submission_approval
+        self.assertEqual(submission_approval(self.author, None), 1)
+        self.assertEqual(submission_approval(self.author, self.realm), 1)
+        self.roles["member"].permissions.remove(self.catalog["realm.post.publish"])
+        self.assertEqual(submission_approval(self.author, self.realm), 0)
+        self.roles["member"].permissions.remove(self.catalog["realm.post.submit"])
+        with self.assertRaises(PermissionDenied):
+            submission_approval(self.author, self.realm)
 
     def test_tags_must_still_be_members_when_publication_is_reviewed(self):
         outsider = Entity.objects.create(type="user")

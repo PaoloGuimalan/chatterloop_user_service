@@ -1,5 +1,4 @@
 """One locked transition path for existing invitations and review approval."""
-from django.conf import settings
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils.timezone import now
@@ -18,8 +17,6 @@ def invitation_status(actor, realm):
     require_realm_actor(actor, realm)
     if has_permission(actor, Permission.REALM_INVITE_PUBLISH, realm, fresh=True):
         return "pending"
-    if not getattr(settings, "COMMUNITY_APPROVALS_ENABLED", False):
-        raise PermissionDenied("Invitations requiring review are not available yet.")
     return "for_approval"
 
 

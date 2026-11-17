@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from importlib import import_module, util
 
-from django.test import TestCase, override_settings
+from django.test import TestCase
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from entity.models import Role
@@ -36,10 +36,20 @@ class PermissionApiTests(RealmRolePolicyFixture, TestCase):
         self.assertFalse(self.roles["member"].permissions.filter(codename="realm.post.publish").exists())
         self.assertTrue(self.other.owned_roles.get(code="member").permissions.filter(codename="realm.post.publish").exists())
 
-    def test_disabled_configuration_rejects_rule_mutations(self):
-        with override_settings(REALM_ROLE_CONFIGURATION_ENABLED=False):
-            response = self.rules({"roles": []})
-        self.assertEqual(response.status_code, 403)
+    def test_owner_can_edit_grants_without_environment_opt_in(self):
+        response = self.rules({"roles": [{"role_id": self.roles["member"].pk,
+                                        "permissions": ["realm.post.submit"]}]})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(self.roles["member"].permissions.values_list("codename", flat=True)),
+                         {"realm.post.submit"})
+
+    def test_member_cannot_edit_grants_without_permission(self):
+        from community.models import Member
+        Member.objects.filter(entity=self.actor, realm=self.realm).update(role=self.roles["member"])
+        before = set(self.roles["member"].permissions.values_list("codename", flat=True))
+        self.assertEqual(self.rules({"roles": [{"role_id": self.roles["member"].pk,
+                                              "permissions": []}]}).status_code, 403)
+        self.assertEqual(set(self.roles["member"].permissions.values_list("codename", flat=True)), before)
 
     def test_admin_cannot_change_rules_for_a_custom_administrative_role(self):
         from community.models import Member

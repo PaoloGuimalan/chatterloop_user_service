@@ -7,6 +7,4 @@ MIGRATION_MODULES = {app.rsplit(".", 1)[-1]: None for app in (
 )}
 ROOT_URLCONF = __name__
 urlpatterns = []
-REALM_ROLE_CONFIGURATION_ENABLED = True
-COMMUNITY_APPROVALS_ENABLED = True
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]

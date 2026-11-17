@@ -1,6 +1,5 @@
 """Shared role authorization; callers serialize writes on the realm row."""
 
-from django.conf import settings
 from django.db import connection
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
@@ -30,8 +29,6 @@ def require_realm_actor(actor, realm):
 
 
 def require_role_configuration(actor, realm, permission=Permission.REALM_ROLES_MANAGE):
-    if not getattr(settings, "REALM_ROLE_CONFIGURATION_ENABLED", False):
-        raise PermissionDenied("Role configuration is not available yet.")
     tier = require_realm_actor(actor, realm)
     if not has_permission(actor, permission, realm, fresh=True):
         raise PermissionDenied("You cannot configure permissions here.")
@@ -104,8 +101,8 @@ def member_preset(realm):
 
 def feature_availability():
     return {
-        "realm_role_configuration": bool(getattr(settings, "REALM_ROLE_CONFIGURATION_ENABLED", False)),
-        "community_approvals": bool(getattr(settings, "COMMUNITY_APPROVALS_ENABLED", False)),
+        "realm_role_configuration": True,
+        "community_approvals": True,
         "submissions_supported": True,
     }
 
@@ -141,8 +138,8 @@ def realm_capabilities(actor, realm):
         "can_publish_invites": allowed(Permission.REALM_INVITE_PUBLISH),
         "can_revoke_invites": allowed(Permission.REALM_INVITE_REVOKE),
         "can_remove_members": allowed(Permission.REALM_MEMBER_REMOVE),
-        "can_manage_roles": feature_availability()["realm_role_configuration"] and allowed(Permission.REALM_ROLES_MANAGE),
-        "can_manage_permissions": feature_availability()["realm_role_configuration"] and allowed(Permission.REALM_PERMISSIONS_MANAGE),
+        "can_manage_roles": allowed(Permission.REALM_ROLES_MANAGE),
+        "can_manage_permissions": allowed(Permission.REALM_PERMISSIONS_MANAGE),
         "can_review_posts": community and allowed(Permission.REALM_POST_REVIEW),
         "can_review_invites": community and allowed(Permission.REALM_INVITE_REVIEW),
         "can_review_join_requests": community and allowed(Permission.REALM_REQUEST_APPROVE),

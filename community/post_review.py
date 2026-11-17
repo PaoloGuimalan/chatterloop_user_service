@@ -1,5 +1,4 @@
 """Community post transitions, serialized with realm policy and membership writes."""
-from django.conf import settings
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils.dateparse import parse_datetime
@@ -42,8 +41,6 @@ def submission_approval(actor, realm):
         raise PermissionDenied("You cannot submit posts in this community.")
     if has_permission(actor, Permission.REALM_POST_PUBLISH, realm, fresh=True):
         return 1
-    if not getattr(settings, "COMMUNITY_APPROVALS_ENABLED", False):
-        raise PermissionDenied("Posts requiring review are not available yet.")
     return 0
 
 

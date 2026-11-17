@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 from unittest.mock import patch
-from django.test import TestCase, override_settings
+from django.test import TestCase
 from rest_framework.exceptions import APIException, PermissionDenied
 from community.invites import create_invite, claim_pending_invites
 from community.models import Invite, Member, Approvals
@@ -194,11 +194,12 @@ class InviteReviewTests(RealmRolePolicyFixture, TestCase):
         with self.assertRaises(PermissionDenied):
             create_invite(self.realm, self.actor, target_email=self.account.email, purpose="manage", role_id=role.pk)
 
-    def test_disabled_approval_gate_does_not_auto_deliver_restricted_invitations(self):
+    def test_restricted_invitation_enters_review_without_environment_opt_in(self):
         self.restrict_delivery()
-        with override_settings(COMMUNITY_APPROVALS_ENABLED=False), self.assertRaises(PermissionDenied):
-            self.create()
-        self.assertFalse(Invite.objects.exists())
+        invite = self.create()
+        self.assertEqual(invite.status, "for_approval")
+        self.notice.assert_not_called()
+        self.email.assert_not_called()
 
     def test_unreviewed_invitation_token_cannot_open_the_recipient_screen(self):
         from community.views import InviteView

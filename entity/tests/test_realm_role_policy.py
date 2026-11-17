@@ -2,7 +2,7 @@ from types import SimpleNamespace
 import json
 from unittest.mock import patch
 
-from django.test import TestCase, override_settings
+from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.db import connection
 from rest_framework.test import APIRequestFactory, force_authenticate
@@ -161,10 +161,11 @@ class RealmRolePolicyTests(RealmRolePolicyFixture, TestCase):
                 denied = self.request("post", {"realm_id": self.realm.pk, "name": "Other", field: value})
                 self.assertEqual(denied.status_code, 400)
 
-    def test_disabled_configuration_cannot_mutate_roles(self):
-        with override_settings(REALM_ROLE_CONFIGURATION_ENABLED=False):
-            response = self.request("post", {"realm_id": self.realm.pk, "name": "Reviewer"})
-        self.assertEqual(response.status_code, 403)
+    def test_owner_can_configure_roles_without_environment_opt_in(self):
+        response = self.request("post", {"realm_id": self.realm.pk, "name": "Reviewer"})
+        self.assertEqual(response.status_code, 201)
+        role = Role.objects.get(pk=response.data["result"]["id"])
+        self.assertEqual(role.realm_id, self.realm.pk)
 
     def test_admin_cannot_create_role_with_delegation_authority(self):
         member = Member.objects.get(entity=self.actor, realm=self.realm)
