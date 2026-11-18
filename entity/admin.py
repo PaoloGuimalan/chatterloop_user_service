@@ -27,8 +27,12 @@ class PermissionCatalogAdmin(admin.ModelAdmin):
 @admin.register(Role)
 class RoleAdmin(admin.ModelAdmin):
     form = RoleForm
-    list_display = ("name", "id", "is_default")
+    fields = ("realm", "name", "code", "permissions")
+    readonly_fields = ("code",)
+    list_display = ("name", "code", "id", "realm", "is_default")
+    list_select_related = ("realm",)
     list_filter = ("name", "is_default")
+    search_fields = ("name", "code", "realm__name")
 
 
 @admin.register(EncryptionPurpose)
