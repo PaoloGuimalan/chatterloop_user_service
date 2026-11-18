@@ -24,18 +24,18 @@ def permitted_members(realm, codes):
     """One bounded SQL query; no role-name authority or per-member lookups."""
     members = Member.objects.filter(realm=realm, role__realm_id=F('realm_id'))
     codes = list(PermissionCatalogEntry.objects.filter(
-        codename__in=codes, scope='realm', is_active=True).values_list('codename', flat=True))
+        code__in=codes, scope='realm', is_active=True).values_list('code', flat=True))
     if not realm.is_active or not codes:
         return members.none()
     eligible = Q(role__code='owner', role__is_default=True)
     for index, code in enumerate(codes):
         overrides = EntityPermission.objects.filter(realm=realm, entity_id=OuterRef('entity_id'),
-            permission__codename=code).filter(Q(expires_at=None) | Q(expires_at__gt=now()))
+            permission__code=code).filter(Q(expires_at=None) | Q(expires_at__gt=now()))
         names = {suffix: f'_notice_{index}_{suffix}' for suffix in ('grant', 'deny', 'role')}
         members = members.annotate(**{
             names['grant']: Exists(overrides.filter(effect='grant')),
             names['deny']: Exists(overrides.filter(effect='deny')),
-            names['role']: Exists(RolePermission.objects.filter(role_id=OuterRef('role_id'), permission__codename=code)),
+            names['role']: Exists(RolePermission.objects.filter(role_id=OuterRef('role_id'), permission__code=code)),
         })
         eligible |= Q(**{names['deny']: False}) & (Q(**{names['grant']: True}) | Q(**{names['role']: True}))
     return members.filter(eligible)

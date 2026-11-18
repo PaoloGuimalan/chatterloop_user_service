@@ -39,7 +39,7 @@ def effective_role_permissions(role, realm):
     if role.realm_id != realm.pk:
         raise PermissionDenied("The role belongs to another realm.")
     entries = PermissionCatalogEntry.objects.filter(scope="realm", is_active=True) if role_tier(role) == "owner" else role.permissions.filter(scope="realm", is_active=True)
-    return set(entries.values_list("codename", flat=True))
+    return set(entries.values_list("code", flat=True))
 
 
 def validate_delegation(actor, realm, codes):
@@ -56,10 +56,10 @@ def validate_delegation(actor, realm, codes):
 def validate_permission_codes(actor, realm, codes):
     if not isinstance(codes, list) or any(not isinstance(code, str) for code in codes):
         raise ValidationError({"permissions": "Send a list of permission codes."})
-    entries = list(PermissionCatalogEntry.objects.filter(codename__in=set(codes), scope="realm", is_active=True))
+    entries = list(PermissionCatalogEntry.objects.filter(code__in=set(codes), scope="realm", is_active=True))
     if len(entries) != len(set(codes)):
         raise ValidationError({"permissions": "Choose active realm permissions only."})
-    validate_delegation(actor, realm, {entry.codename for entry in entries})
+    validate_delegation(actor, realm, {entry.code for entry in entries})
     return entries
 
 

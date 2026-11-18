@@ -19,7 +19,7 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 from community.models import Invite, Member, Realm
 from community.community_views import CommunitiesView
 from community.views import TopRealms
-from entity.models import Entity, Follow
+from entity.models import Entity, Follow, Role
 from entity.search_views import (
     SearchOverviewV2,
     SearchRealmsV2,
@@ -33,7 +33,7 @@ class CommunitySearchTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.models = (Entity, Realm, Member, Follow, Invite)
+        cls.models = (Entity, Realm, Role, Member, Follow, Invite)
         with connection.schema_editor() as editor:
             for model in cls.models:
                 editor.create_model(model)
@@ -46,6 +46,7 @@ class CommunitySearchTests(unittest.TestCase):
         super().tearDownClass()
 
     def setUp(self):
+        self.roles = {}
         self.viewer = Entity.objects.create(id="viewer", type="user")
         self.factory = APIRequestFactory()
         self.add_realm("public", "community")
@@ -79,9 +80,11 @@ class CommunitySearchTests(unittest.TestCase):
             is_verified=True,
         )
         Realm.objects.bulk_create([realm])
+        self.roles[key] = Role.objects.bulk_create([
+            Role(realm=realm, code="member", name="Member", is_default=True)])[0]
         if joined:
             Member.objects.bulk_create(
-                [Member(entity=self.viewer, realm=realm, added_by=self.viewer)]
+                [Member(entity=self.viewer, realm=realm, added_by=self.viewer, role=self.roles[key])]
             )
         return realm
 
@@ -205,8 +208,8 @@ class CommunitySearchTests(unittest.TestCase):
     def test_tag_picker_only_returns_members_of_the_destination(self):
         Member.objects.bulk_create(
             [
-                Member(entity=self.viewer, realm_id="public", added_by=self.viewer),
-                Member(entity_id="page", realm_id="public", added_by=self.viewer),
+                Member(entity=self.viewer, realm_id="public", added_by=self.viewer, role=self.roles["public"]),
+                Member(entity_id="page", realm_id="public", added_by=self.viewer, role=self.roles["public"]),
             ]
         )
         request = self.factory.get(
@@ -227,7 +230,7 @@ class CommunitySearchTests(unittest.TestCase):
 
     def test_destinations_require_all_selected_tags_to_be_members(self):
         Member.objects.bulk_create(
-            [Member(entity_id="page", realm_id="public", added_by=self.viewer)]
+            [Member(entity_id="page", realm_id="public", added_by=self.viewer, role=self.roles["public"])]
         )
         for tags, expected in (("page", {"public"}), ("page,server", set())):
             request = self.factory.get(

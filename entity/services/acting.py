@@ -10,14 +10,14 @@ def acting_memberships(entity):
     Member = apps.get_model("community", "Member")
     entity_id = getattr(entity, "pk", entity)
     overrides = EntityPermission.objects.filter(entity_id=entity_id,
-        realm_id=OuterRef("realm_id"), permission__codename="realm.identity.act",
+        realm_id=OuterRef("realm_id"), permission__code="realm.identity.act",
         permission__scope="realm", permission__is_active=True).filter(
             Q(expires_at__isnull=True) | Q(expires_at__gt=now())).order_by("pk")
     grants = RolePermission.objects.filter(role_id=OuterRef("role_id"),
-        permission__codename="realm.identity.act", permission__scope="realm", permission__is_active=True)
+        permission__code="realm.identity.act", permission__scope="realm", permission__is_active=True)
     return Member.objects.filter(entity_id=entity_id, role__realm_id=F("realm_id"),
         realm__is_active=True, realm__type__in=["page", "server", "group", "conference", "channel", "voice"]
-    ).annotate(_act_active=Exists(PermissionCatalogEntry.objects.filter(codename="realm.identity.act", scope="realm", is_active=True)), _act_override=Subquery(overrides.values("effect")[:1]), _act_grant=Exists(grants)).filter(_act_active=True).filter(
+    ).annotate(_act_active=Exists(PermissionCatalogEntry.objects.filter(code="realm.identity.act", scope="realm", is_active=True)), _act_override=Subquery(overrides.values("effect")[:1]), _act_grant=Exists(grants)).filter(_act_active=True).filter(
         Q(role__is_default=True, role__code="owner") | Q(_act_override="grant") |
         (Q(_act_override__isnull=True) & Q(_act_grant=True)))
 

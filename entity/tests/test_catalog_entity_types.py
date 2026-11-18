@@ -19,7 +19,7 @@ class CatalogEntityTypesTests(TestCase):
             mock = patch(f"entity.services.permission_catalog_cache.{name}", side_effect=effect)
             mock.start()
             self.addCleanup(mock.stop)
-        self.permission = PermissionCatalogEntry.objects.get(codename="module.diary.access")
+        self.permission = PermissionCatalogEntry.objects.get(code="module.diary.access")
 
     def test_catalog_owns_entity_types_m2m_and_old_table_is_absent(self):
         field = PermissionCatalogEntry._meta.get_field("entity_types")
@@ -64,7 +64,7 @@ class CatalogEntityTypesTests(TestCase):
         realm = self.Type.objects.get(name="realm")
         link = self.permission.entity_types.through.objects.get(permission=self.permission, entity_type=user)
         form = PermissionCatalogForm(instance=self.permission, data={
-            "codename": "module.diary.access", "scope": "entity_type", "is_active": True,
+            "code": "module.diary.access", "scope": "entity_type", "is_active": True,
             "description": "Personal diary", "entity_types": [user.pk, realm.pk],
         })
         self.assertTrue(form.is_valid(), form.errors)

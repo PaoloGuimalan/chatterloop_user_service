@@ -33,15 +33,16 @@ class RealmPermissionsView(APIView):
         realm = get_object_or_404(Realm, pk=realm_id, is_active=True)
         require_role_configuration(request.entity, realm, Permission.REALM_PERMISSIONS_MANAGE)
         roles = realm.owned_roles.prefetch_related("permissions").order_by("id")
-        catalog = PermissionCatalogEntry.objects.filter(scope="realm", is_active=True).order_by("codename")
+        catalog = PermissionCatalogEntry.objects.filter(scope="realm", is_active=True).order_by("code")
+        details = {entry.code: {"code": entry.code, "name": entry.name or entry.code, "description": entry.description} for entry in catalog}
         tier = require_realm_actor(request.entity, realm)
         context = {'catalog': get_catalog()}
         return Response({"status": True, "result": {
             "features": feature_availability(), "capabilities": realm_capabilities(request.entity, realm),
-            "roles": [role_payload(role, request.entity, realm) for role in roles],
-            "catalog": [{"permission": entry.codename, "description": entry.description,
-                "grantable": entry.codename not in INTRINSIC and (tier == 'owner' or entry.codename not in ADMINISTRATION)
-                    and has_active_permission(request.entity, entry.codename, realm, context=context)} for entry in catalog],
+            "roles": [role_payload(role, request.entity, realm, permission_details=details) for role in roles],
+            "catalog": [{**details[entry.code], "permission": entry.code,
+                "grantable": entry.code not in INTRINSIC and (tier == 'owner' or entry.code not in ADMINISTRATION)
+                    and has_active_permission(request.entity, entry.code, realm, context=context)} for entry in catalog],
         }})
 
     @transaction.atomic

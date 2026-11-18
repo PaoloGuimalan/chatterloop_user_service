@@ -17,12 +17,12 @@ class PermissionCatalogSyncTests(TestCase):
     """
 
     def test_every_permission_constant_has_an_active_catalog_row(self):
-        active_codenames = set(
+        active_codes = set(
             PermissionCatalogEntry.objects.filter(is_active=True).values_list(
-                "codename", flat=True
+                "code", flat=True
             )
         )
-        missing = Permission.ALL - active_codenames
+        missing = Permission.ALL - active_codes
         self.assertEqual(
             missing,
             set(),
@@ -32,17 +32,17 @@ class PermissionCatalogSyncTests(TestCase):
     def test_catalog_scope_matches_permission_py_scope_sets(self):
         global_rows = set(
             PermissionCatalogEntry.objects.filter(scope="global").values_list(
-                "codename", flat=True
+                "code", flat=True
             )
         )
         realm_rows = set(
             PermissionCatalogEntry.objects.filter(scope="realm").values_list(
-                "codename", flat=True
+                "code", flat=True
             )
         )
         entity_type_rows = set(
             PermissionCatalogEntry.objects.filter(scope="entity_type").values_list(
-                "codename", flat=True
+                "code", flat=True
             )
         )
         self.assertEqual(global_rows & Permission.GLOBAL_SCOPED, Permission.GLOBAL_SCOPED)

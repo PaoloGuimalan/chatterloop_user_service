@@ -33,23 +33,23 @@ class PermissionApiTests(RealmRolePolicyFixture, TestCase):
     def test_permissions_edit_the_local_role_and_leave_other_realms_unchanged(self):
         response = self.rules({"roles": [{"role_id": self.roles["member"].pk, "permissions": ["realm.post.submit"]}]})
         self.assertEqual(response.status_code, 200)
-        self.assertFalse(self.roles["member"].permissions.filter(codename="realm.post.publish").exists())
-        self.assertTrue(self.other.owned_roles.get(code="member").permissions.filter(codename="realm.post.publish").exists())
+        self.assertFalse(self.roles["member"].permissions.filter(code="realm.post.publish").exists())
+        self.assertTrue(self.other.owned_roles.get(code="member").permissions.filter(code="realm.post.publish").exists())
 
     def test_owner_can_edit_grants_without_environment_opt_in(self):
         response = self.rules({"roles": [{"role_id": self.roles["member"].pk,
                                         "permissions": ["realm.post.submit"]}]})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(set(self.roles["member"].permissions.values_list("codename", flat=True)),
+        self.assertEqual(set(self.roles["member"].permissions.values_list("code", flat=True)),
                          {"realm.post.submit"})
 
     def test_member_cannot_edit_grants_without_permission(self):
         from community.models import Member
         Member.objects.filter(entity=self.actor, realm=self.realm).update(role=self.roles["member"])
-        before = set(self.roles["member"].permissions.values_list("codename", flat=True))
+        before = set(self.roles["member"].permissions.values_list("code", flat=True))
         self.assertEqual(self.rules({"roles": [{"role_id": self.roles["member"].pk,
                                               "permissions": []}]}).status_code, 403)
-        self.assertEqual(set(self.roles["member"].permissions.values_list("codename", flat=True)), before)
+        self.assertEqual(set(self.roles["member"].permissions.values_list("code", flat=True)), before)
 
     def test_admin_cannot_change_rules_for_a_custom_administrative_role(self):
         from community.models import Member

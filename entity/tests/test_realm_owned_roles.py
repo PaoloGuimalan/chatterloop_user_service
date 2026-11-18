@@ -20,8 +20,8 @@ class RealmOwnedRoleTests(TestCase):
         for code in ("realm.update", "realm.member.view", "realm.member.role.update", "realm.roles.manage",
                      "realm.permissions.manage", "realm.post.submit", "realm.post.publish", "realm.invite.create",
                      "realm.invite.publish", "realm.notifications.view"):
-            self.catalog[code] = PermissionCatalogEntry.objects.create(codename=code, scope="realm")
-        self.catalog["posts.create"] = PermissionCatalogEntry.objects.create(codename="posts.create", scope="global")
+            self.catalog[code] = PermissionCatalogEntry.objects.create(code=code, scope="realm")
+        self.catalog["posts.create"] = PermissionCatalogEntry.objects.create(code="posts.create", scope="global")
         self.realm = self.make_realm("A")
         self.other = self.make_realm("B")
 
@@ -71,8 +71,8 @@ class RealmOwnedRoleTests(TestCase):
         ensure_default_roles(self.realm)
         member.refresh_from_db()
         self.assertEqual(member.name, "Participants")
-        self.assertFalse(member.permissions.filter(codename="realm.post.publish").exists())
-        self.assertTrue(self.default("member", self.other).permissions.filter(codename="realm.post.publish").exists())
+        self.assertFalse(member.permissions.filter(code="realm.post.publish").exists())
+        self.assertTrue(self.default("member", self.other).permissions.filter(code="realm.post.publish").exists())
 
     def test_owner_permission_relation_is_not_editable(self):
         with self.assertRaises(ValidationError), transaction.atomic():
@@ -107,7 +107,7 @@ class RealmOwnedRoleTests(TestCase):
     def test_acting_as_realm_requires_its_identity_permission_not_a_display_name(self):
         from types import SimpleNamespace
         from entity.services.acting import can_act_as_entity, acting_memberships
-        permission = PermissionCatalogEntry.objects.create(codename="realm.identity.act", scope="realm")
+        permission = PermissionCatalogEntry.objects.create(code="realm.identity.act", scope="realm")
         page = self.make_realm("Page", "page")
         role = Role.objects.create(name="admin", realm=page)
         Member.objects.create(entity=self.actor, realm=page, added_by=self.actor, role=role)
@@ -125,7 +125,7 @@ class RealmOwnedRoleTests(TestCase):
         from types import SimpleNamespace
         from user.backends import AutheticationBackend
         from django.core.exceptions import PermissionDenied
-        permission = PermissionCatalogEntry.objects.create(codename="realm.identity.act", scope="realm")
+        permission = PermissionCatalogEntry.objects.create(code="realm.identity.act", scope="realm")
         page = self.make_realm("Page", "page")
         member_role = self.default("member", page)
         Member.objects.create(entity=self.actor, realm=page, added_by=self.actor, role=member_role)

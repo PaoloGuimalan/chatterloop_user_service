@@ -26,9 +26,9 @@ class PermissionSQLContractTests(TestCase):
             entity=Entity.objects.create(type="realm"), created_by=self.entity,
             name="SQL contracts", type="community",
         )
-        self.catalog = PermissionCatalogEntry.objects.get(codename="messages.read")
+        self.catalog = PermissionCatalogEntry.objects.get(code="messages.read")
 
-    def query(self, backend, codename="messages.read", realm=None):
+    def query(self, backend, code="messages.read", realm=None):
         root = Path(__file__).resolve().parents[4]
         if backend == "node":
             filename = root / "server/reusables/hooks/permissionChecker.js"
@@ -40,7 +40,7 @@ class PermissionSQLContractTests(TestCase):
         # SQLite has the same joins/predicates; adapt only the driver parameters
         # and clock spelling. This exercises the actual checked-in backend SQL.
         sql = re.sub(r"\$[123]", "%s", sql).replace("NOW()", "CURRENT_TIMESTAMP")
-        params = [str(self.entity.pk), codename]
+        params = [str(self.entity.pk), code]
         if backend == "node":
             params.append(realm.pk if realm else None)
         with connection.cursor() as cursor:
@@ -63,7 +63,7 @@ class PermissionSQLContractTests(TestCase):
             entity=self.entity, permission=self.catalog, effect="deny", expires_at=now() - timedelta(days=1),
         )
         EntityPermission.objects.create(
-            entity=self.entity, permission=PermissionCatalogEntry.objects.get(codename="notifications.read"),
+            entity=self.entity, permission=PermissionCatalogEntry.objects.get(code="notifications.read"),
             effect="grant",
         )
         for backend in ("node", "go"):
@@ -71,7 +71,7 @@ class PermissionSQLContractTests(TestCase):
                 self.assertEqual(self.query(backend), [])
 
     def test_node_realm_overrides_do_not_apply_globally_or_to_another_realm(self):
-        permission = PermissionCatalogEntry.objects.get(codename="realm.update")
+        permission = PermissionCatalogEntry.objects.get(code="realm.update")
         EntityPermission.objects.create(
             entity=self.entity, permission=permission, realm=self.realm, effect="deny",
         )
@@ -109,7 +109,7 @@ class PermissionSQLContractTests(TestCase):
         self.realm.save(update_fields=["type"])
         role = get_default_role("admin", realm=self.realm)
         member = Member.objects.create(entity=self.entity, realm=self.realm, role=role, added_by=self.entity)
-        permission = PermissionCatalogEntry.objects.get(codename="realm.identity.act")
+        permission = PermissionCatalogEntry.objects.get(code="realm.identity.act")
         account = SimpleNamespace(entity_id=self.entity.pk)
         def check(expected):
             with connection.cursor() as cursor:

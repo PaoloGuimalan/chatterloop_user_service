@@ -27,8 +27,8 @@ class RoleTests(TestCase):
         self.actor = Entity.objects.create(type="user")
         self.realm = Realm.objects.create(entity=Entity.objects.create(type="realm"),
             created_by=self.actor, name="Roles", type="community")
-        self.permission = PermissionCatalogEntry.objects.get(codename="realm.update")
-        self.other = PermissionCatalogEntry.objects.get(codename="realm.member.view")
+        self.permission = PermissionCatalogEntry.objects.get(code="realm.update")
+        self.other = PermissionCatalogEntry.objects.get(code="realm.member.view")
 
     def test_one_role_has_multiple_permissions_and_duplicate_names_are_allowed(self):
         role = self.Role.objects.create(realm=self.realm, name="reviewer")
@@ -50,7 +50,7 @@ class RoleTests(TestCase):
             self.assertTrue(form.is_valid(), form.errors)
             role = form.save()
             self.assertEqual(role.name, "content reviewer")
-            self.assertEqual(list(role.permissions.values_list("codename", flat=True)), ["realm.update"])
+            self.assertEqual(list(role.permissions.values_list("code", flat=True)), ["realm.update"])
         self.assertEqual(self.Role.objects.filter(name="content reviewer").count(), 2)
 
     def test_admin_role_form_saves_multiple_permissions_and_names_remain_distinguishable(self):
@@ -61,7 +61,7 @@ class RoleTests(TestCase):
         first = form.save()
         second = self.Role.objects.create(realm=self.realm, name="admin")
         self.assertNotEqual(str(first), str(second))
-        self.assertEqual(set(first.permissions.values_list("codename", flat=True)), {"realm.update", "realm.member.view"})
+        self.assertEqual(set(first.permissions.values_list("code", flat=True)), {"realm.update", "realm.member.view"})
         self.assertEqual(second.permissions.count(), 0)
 
     def test_unmarked_role_name_requires_its_exact_id(self):

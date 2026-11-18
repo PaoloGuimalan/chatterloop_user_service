@@ -46,7 +46,7 @@ def ensure_default_roles(realm):
         if not role.is_default:
             raise ValueError("A reserved default code has an invalid definition")
         if created and code != "owner":
-            role.permissions.set(PermissionCatalogEntry.objects.filter(codename__in=template_permissions(code, realm.type),
+            role.permissions.set(PermissionCatalogEntry.objects.filter(code__in=template_permissions(code, realm.type),
                 scope="realm", is_active=True))
         result[code] = role
     return result

@@ -14,11 +14,17 @@ from community.role_policy import (
     feature_availability, require_realm_actor, require_role_configuration, validate_permission_codes, effective_role_permissions,
     notify_role_configuration_changed,
 )
-from entity.models import Role
+from entity.models import PermissionCatalogEntry, Role
 from entity.permissions import Permission
 
 
-def role_payload(role, actor=None, realm=None):
+def permission_metadata():
+    return {entry.code: {"code": entry.code, "name": entry.name or entry.code,
+                         "description": entry.description}
+            for entry in PermissionCatalogEntry.objects.filter(scope="realm", is_active=True)}
+
+
+def role_payload(role, actor=None, realm=None, *, permission_details=None):
     editable = False
     permissions_editable = False
     assignable = False
@@ -39,11 +45,15 @@ def role_payload(role, actor=None, realm=None):
             assignable = True
         except (PermissionDenied, ValueError) as exc:
             disabled_reason = str(exc)
+    codes = sorted(effective_role_permissions(role, realm)) if realm else []
+    if permission_details is None:
+        permission_details = permission_metadata()
     return {
         "id": role.pk, "name": role.name, "code": role.code, "realm_id": role.realm_id,
         "is_default": role.is_default, "editable": editable, "permissions_editable": permissions_editable, "assignable": assignable,
         "disabled_reason": disabled_reason,
-        "permissions": sorted(effective_role_permissions(role, realm)) if realm else [],
+        "permissions": codes,
+        "permission_details": [permission_details[code] for code in codes if code in permission_details],
     }
 
 
@@ -78,7 +88,8 @@ class RolesView(APIView):
     def get(self, request):
         realm = scoped_realm(request) if request.query_params.get("realm_id") else None
         roles = Role.objects.filter(realm=realm).prefetch_related("permissions").order_by("id") if realm else Role.objects.none()
-        return Response({"status": True, "features": feature_availability(), "result": [role_payload(role, getattr(request, "entity", None), realm) for role in roles]})
+        details = permission_metadata() if realm else {}
+        return Response({"status": True, "features": feature_availability(), "result": [role_payload(role, getattr(request, "entity", None), realm, permission_details=details) for role in roles]})
 
     @transaction.atomic
     def post(self, request):

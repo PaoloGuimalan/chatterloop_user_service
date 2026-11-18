@@ -19,7 +19,7 @@ class EntityPermissionCatalogTests(TestCase):
             self.addCleanup(mock.stop)
         self.entity = Entity.objects.create(type="user")
         self.catalog = PermissionCatalogEntry.objects.create(
-            codename="test.explicit", scope="global",
+            code="test.explicit", scope="global",
         )
 
     def test_override_references_catalog_by_numeric_id(self):
@@ -31,7 +31,7 @@ class EntityPermissionCatalogTests(TestCase):
             entity=self.entity, permission=self.catalog, effect="grant",
         )
         self.assertEqual(row.permission_id, self.catalog.pk)
-        self.assertEqual(row.permission.codename, "test.explicit")
+        self.assertEqual(row.permission.code, "test.explicit")
         self.assertTrue(has_permission(self.entity, "test.explicit"))
 
     def test_database_rejects_missing_catalog_id(self):
@@ -64,8 +64,9 @@ class EntityPermissionMigrationTests(TransactionTestCase):
     before = [("entity", "0021_messages_encryption_purpose")]
     after = [("entity", "0024_catalog_entity_types"), ("community", "0011_role_references")]
 
-    def migrate(self, targets):
+    def migrate(self, targets=None):
         executor = MigrationExecutor(connection)
+        targets = targets or executor.loader.graph.leaf_nodes()
         executor.migrate(targets)
         self.current_apps = executor.loader.project_state(targets).apps
         return self.current_apps
@@ -91,7 +92,7 @@ class EntityPermissionMigrationTests(TransactionTestCase):
         current = self.current_apps.get_model("entity", "EntityPermission")
         if not current._meta.get_field("permission").is_relation:
             current.objects.filter(permission="test.ambiguous").delete()
-        self.migrate(self.after)
+        self.migrate()
 
     def test_existing_records_and_inactive_catalog_survive_forward_and_backward(self):
         entry = self.catalog.objects.create(codename="test.existing", scope="realm", is_active=False)
@@ -144,7 +145,7 @@ class EntityPermissionMigrationTests(TransactionTestCase):
                 entity=self.entity, permission=code, effect=effect, realm=realm,
                 expires_at=now() - timedelta(days=1) if expired else None,
             )
-        self.migrate(self.after)
+        self.migrate()  # Runtime resolver requires the current code-column schema.
         entity = Entity.objects.get(pk=self.entity.pk)
         from community.models import Realm
         realm = Realm.objects.get(pk=self.realm.pk)

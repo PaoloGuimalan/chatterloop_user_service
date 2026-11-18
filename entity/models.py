@@ -169,7 +169,8 @@ class PermissionCatalogEntry(models.Model):
     this table is what has_permission() actually validates against.
     """
 
-    codename = models.CharField(max_length=150, unique=True)  # e.g. "posts.create"
+    code = models.CharField(max_length=150, unique=True)  # e.g. "posts.create"
+    name = models.CharField(max_length=150, blank=True, default="")
     description = models.TextField(blank=True, default="")
     scope = models.CharField(max_length=20, choices=PermissionScope.choices)
     is_active = models.BooleanField(default=True)  # soft-disable without deleting
@@ -186,7 +187,7 @@ class PermissionCatalogEntry(models.Model):
         indexes = [models.Index(fields=["scope", "is_active"], name="entity_perm_scope_356fa2_idx")]
 
     def __str__(self):
-        return self.codename
+        return self.name or self.code
 
 
 class Role(models.Model):
@@ -280,7 +281,7 @@ class RolePermission(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.role} -> {self.permission.codename}"
+        return f"{self.role} -> {self.permission.code}"
 
 
 class PermissionEntityType(models.Model):
@@ -304,7 +305,7 @@ class PermissionEntityType(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.entity_type} -> {self.permission.codename}"
+        return f"{self.entity_type} -> {self.permission.code}"
 
 
 class Connection(models.Model):
@@ -647,10 +648,10 @@ class Token(models.Model):
 
     WHAT `scopes` MEANS
     -------------------
-    The permission codenames this token may exercise, from the same catalog
+    The permission codes this token may exercise, from the same catalog
     (`entity_permission_catalog`) that every other permission check in the
     platform reads. It is a CEILING, not a grant. A request is allowed only if
-    the scope is on the token AND `has_permission(entity, codename, realm)`
+    the scope is on the token AND `has_permission(entity, code, realm)`
     passes for the owning entity, so:
 
       * a leaked token can never do more than its entity could;
@@ -659,7 +660,7 @@ class Token(models.Model):
       * a token can be deliberately narrower than its entity - a read-only
         token for a bot that is otherwise allowed to post.
 
-    Token scopes remain JSON codenames as a portable ceiling. EntityPermission
+    Token scopes remain JSON codes as a portable ceiling. EntityPermission
     overrides reference the catalog by numeric foreign key instead.
     """
 
@@ -809,8 +810,8 @@ class Token(models.Model):
         """Live, unrevoked and unexpired. Says nothing about scopes."""
         return self.is_active and self.revoked_at is None and not self.is_expired
 
-    def has_scope(self, codename: str) -> bool:
-        """Whether this token carries `codename`.
+    def has_scope(self, code: str) -> bool:
+        """Whether this token carries `code`.
 
         Only half of an authorization decision - the entity must also hold the
         permission. Both halves are enforced in services/developer_service
@@ -818,4 +819,4 @@ class Token(models.Model):
         this repo owns the table and nothing else about them.
         """
         scopes = self.scopes or []
-        return codename in scopes
+        return code in scopes

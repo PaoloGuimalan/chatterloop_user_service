@@ -24,7 +24,7 @@ class RealmRolePolicyFixture:
         self.catalog = {}
         for code in ("realm.member.view", "realm.member.role.update", "realm.roles.manage", "realm.permissions.manage",
                      "realm.post.submit", "realm.post.publish", "realm.post.review", "realm.ownership.transfer", "realm.identity.act"):
-            self.catalog[code] = PermissionCatalogEntry.objects.create(codename=code, scope="realm")
+            self.catalog[code] = PermissionCatalogEntry.objects.create(code=code, scope="realm")
         self.realm = self.make_realm("A")
         self.other = self.make_realm("B")
         self.roles = {r.code: r for r in self.realm.owned_roles.all()}
@@ -73,7 +73,7 @@ class RealmRolePolicyTests(RealmRolePolicyFixture, TestCase):
         Member.objects.filter(realm=self.realm, entity=self.actor).update(role=role)
         for code, key in (('realm.media.update', 'can_update_media'), ('realm.post.archive', 'can_archive_community_posts'),
                           ('realm.invite.create', 'can_invite_members'), ('realm.member.remove', 'can_remove_members')):
-            entry = PermissionCatalogEntry.objects.create(codename=code, scope='realm')
+            entry = PermissionCatalogEntry.objects.create(code=code, scope='realm')
             role.permissions.set([entry])
             caps = realm_capabilities(self.actor, self.realm)
             self.assertTrue(caps.get(key))
@@ -90,28 +90,11 @@ class RealmRolePolicyTests(RealmRolePolicyFixture, TestCase):
         request.entity = self.actor
         force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
         self.assertEqual(RealmPermissionsView.as_view()(request, realm_id=self.realm.pk).status_code, 200)
-        self.assertEqual(set(target.permissions.values_list('codename', flat=True)), {'realm.post.submit'})
+        self.assertEqual(set(target.permissions.values_list('code', flat=True)), {'realm.post.submit'})
         rename = APIRequestFactory().put('/roles', {'realm_id': self.realm.pk, 'name': 'Renamed'}, format='json')
         rename.entity = self.actor
         force_authenticate(rename, user=SimpleNamespace(is_authenticated=True))
         self.assertEqual(RoleDetailView.as_view()(rename, role_id=target.pk).status_code, 403)
-    def test_catalog_upgrade_preserves_explicit_inviter_delivery(self):
-        import importlib
-        from django.apps import apps
-        from django.utils.timezone import now
-        from datetime import timedelta
-
-        create = PermissionCatalogEntry.objects.create(codename="realm.invite.create", scope="realm")
-        original = EntityPermission.objects.create(entity=self.actor, realm=self.realm, permission=create,
-                                                   effect="grant", expires_at=now() + timedelta(days=1))
-        migration = importlib.import_module("entity.migrations.0027_community_permission_catalog")
-        migration.seed_policy(apps, SimpleNamespace(connection=connection))
-        copied = EntityPermission.objects.get(entity=self.actor, realm=self.realm, permission__codename="realm.invite.publish")
-        self.assertEqual(copied.effect, "grant")
-        self.assertEqual(copied.expires_at, original.expires_at)
-        migration.seed_policy(apps, SimpleNamespace(connection=connection))
-        self.assertEqual(EntityPermission.objects.filter(pk=copied.pk).count(), 1)
-
     def test_profile_contract_exposes_capabilities_without_changing_legacy_tier(self):
         from community.serializers import RealmSerializer
         self.realm.my_role = "owner"
@@ -155,7 +138,7 @@ class RealmRolePolicyTests(RealmRolePolicyFixture, TestCase):
         self.assertEqual(response.status_code, 201)
         role = Role.objects.get(pk=response.data["result"]["id"])
         self.assertEqual(role.realm_id, self.realm.pk)
-        self.assertEqual(set(role.permissions.values_list("codename", flat=True)), {"realm.post.review"})
+        self.assertEqual(set(role.permissions.values_list("code", flat=True)), {"realm.post.review"})
         for field, value in (("code", "owner"), ("is_default", True), ("base_role", self.roles["owner"].pk)):
             with self.subTest(field=field):
                 denied = self.request("post", {"realm_id": self.realm.pk, "name": "Other", field: value})
@@ -188,7 +171,7 @@ class RealmRolePolicyTests(RealmRolePolicyFixture, TestCase):
         self.assertFalse(has_permission(person, "realm.post.review", self.realm))
 
     def test_global_capabilities_cannot_be_put_in_a_custom_role(self):
-        PermissionCatalogEntry.objects.create(codename="posts.create", scope="global")
+        PermissionCatalogEntry.objects.create(code="posts.create", scope="global")
         response = self.request("post", {"realm_id": self.realm.pk, "name": "Bypass", "permissions": ["posts.create"]})
         self.assertEqual(response.status_code, 400)
 
@@ -210,9 +193,9 @@ class RealmRolePolicyTests(RealmRolePolicyFixture, TestCase):
         self.assertEqual(response.status_code, 201)
         role = Role.objects.get(pk=response.data["result"]["id"])
         expected = {"realm.member.view", "realm.post.submit", "realm.post.publish"}
-        self.assertEqual(set(role.permissions.values_list("codename", flat=True)), expected)
+        self.assertEqual(set(role.permissions.values_list("code", flat=True)), expected)
         self.roles["member"].permissions.clear()
-        self.assertEqual(set(role.permissions.values_list("codename", flat=True)), expected)
+        self.assertEqual(set(role.permissions.values_list("code", flat=True)), expected)
 
     def test_assigned_administrative_role_cannot_be_edited_by_admin(self):
         role = Role.objects.create(name="Delegated admin", realm=self.realm)

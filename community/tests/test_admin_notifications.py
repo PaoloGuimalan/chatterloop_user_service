@@ -161,7 +161,7 @@ class AdminNotificationTests(unittest.TestCase):
             _role(name)
         for code in ('realm.notifications.view', 'realm.post.review', 'realm.invite.review',
                      'realm.request.approve', 'realm.request.decline'):
-            entry = PermissionCatalogEntry.objects.create(codename=code, scope='realm')
+            entry = PermissionCatalogEntry.objects.create(code=code, scope='realm')
             for name in ('admin', 'moderator'):
                 _role(name).permissions.add(entry)
         Member.objects.create(
@@ -645,7 +645,7 @@ class AdminNotificationTests(unittest.TestCase):
 
         Realm.objects.filter(pk=self.realm.pk).update(type="page")
         selected = Role.objects.create(name="admin", realm=self.realm)
-        selected.permissions.add(PermissionCatalogEntry.objects.create(codename="realm.identity.act", scope="realm"))
+        selected.permissions.add(PermissionCatalogEntry.objects.create(code="realm.identity.act", scope="realm"))
         Member.objects.filter(realm=self.realm, entity=self.admin).update(role=selected)
         account = SimpleNamespace(entity=self.admin, entity_id=self.admin.pk, is_authenticated=True)
         request = APIRequestFactory().get("/api/user/entity/pages")

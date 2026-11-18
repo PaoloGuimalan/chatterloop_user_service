@@ -14,7 +14,7 @@ class CommunityArchiveTests(RealmRolePolicyFixture, TestCase):
     def setUp(self):
         super().setUp()
         self.enterContext(patch('newsfeed.serializers.get_preview', return_value=None))
-        self.archive = PermissionCatalogEntry.objects.create(codename='realm.post.archive', scope='realm')
+        self.archive = PermissionCatalogEntry.objects.create(code='realm.post.archive', scope='realm')
         self.delegate = Entity.objects.create(type='user')
         self.role = Role.objects.create(realm=self.realm, name='Archivist')
         self.role.permissions.add(self.archive)

@@ -55,7 +55,7 @@ def _redis_delete(key):
 
 
 def get_catalog():
-    """codename -> {"scope": ..., "is_active": ...} for every permission,
+    """code -> {"scope": ..., "is_active": ...} for every permission,
     active and inactive (inactive entries must stay present so an unknown
     permission and a disabled one remain distinguishable to callers)."""
     cached = _redis_get(CATALOG_CACHE_KEY)
@@ -65,7 +65,7 @@ def get_catalog():
     from entity.models import PermissionCatalogEntry
 
     catalog = {
-        entry.codename: {"scope": entry.scope, "is_active": entry.is_active}
+        entry.code: {"scope": entry.scope, "is_active": entry.is_active}
         for entry in PermissionCatalogEntry.objects.all()
     }
     _redis_set(CATALOG_CACHE_KEY, json.dumps(catalog))
@@ -88,16 +88,16 @@ def get_role_matrix(realm_id):
     matrix = {}
     role_permissions = RolePermission.objects.filter(
         role__realm_id=realm_id
-    ).values_list("role_id", "permission__codename")
-    for role_id, codename in role_permissions:
-        matrix.setdefault(str(role_id), []).append(codename)
+    ).values_list("role_id", "permission__code")
+    for role_id, code in role_permissions:
+        matrix.setdefault(str(role_id), []).append(code)
 
     _redis_set(key, json.dumps(matrix))
     return matrix
 
 
 def get_entity_type_matrix():
-    """entity_type -> [codename, ...], joined against active permissions only."""
+    """entity_type -> [code, ...], joined against active permissions only."""
     cached = _redis_get(ENTITY_TYPE_MATRIX_CACHE_KEY)
     if cached is not None:
         return json.loads(cached)
@@ -107,9 +107,9 @@ def get_entity_type_matrix():
     matrix = {}
     entity_type_permissions = PermissionEntityType.objects.filter(
         permission__is_active=True
-    ).values_list("entity_type__name", "permission__codename")
-    for entity_type, codename in entity_type_permissions:
-        matrix.setdefault(entity_type, []).append(codename)
+    ).values_list("entity_type__name", "permission__code")
+    for entity_type, code in entity_type_permissions:
+        matrix.setdefault(entity_type, []).append(code)
 
     _redis_set(ENTITY_TYPE_MATRIX_CACHE_KEY, json.dumps(matrix))
     return matrix

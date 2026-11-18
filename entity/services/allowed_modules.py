@@ -16,9 +16,9 @@ def resolve_allowed_modules_and_context(entity, user):
     adding personal_entity_id (always str(user.entity.id)) themselves.
     """
     allowed_modules = [
-        codename
-        for codename in Permission.ENTITY_TYPE_SCOPED
-        if has_permission(entity, codename)
+        code
+        for code in Permission.ENTITY_TYPE_SCOPED
+        if has_permission(entity, code)
     ]
 
     is_personal = entity.id == user.entity.id

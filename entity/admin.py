@@ -19,9 +19,9 @@ admin.site.register(EntityTypeDefinition)
 @admin.register(PermissionCatalogEntry)
 class PermissionCatalogAdmin(admin.ModelAdmin):
     form = PermissionCatalogForm
-    list_display = ("codename", "scope", "is_active")
+    list_display = ("name", "code", "scope", "is_active")
     list_filter = ("scope", "is_active")
-    search_fields = ("codename",)
+    search_fields = ("name", "code", "description")
 
 
 @admin.register(Role)

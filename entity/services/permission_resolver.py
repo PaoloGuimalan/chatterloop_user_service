@@ -18,7 +18,7 @@ def has_active_permission(entity, permission, realm=None, **kwargs):
     except ValueError:
         from entity.models import PermissionCatalogEntry
 
-        if PermissionCatalogEntry.objects.filter(codename=permission, is_active=False).exists():
+        if PermissionCatalogEntry.objects.filter(code=permission, is_active=False).exists():
             return False
         raise
 
@@ -41,12 +41,12 @@ def _active_override(entity, permission, realm=None, context=None):
         .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now()))
     )
     if context is None:
-        return rows.filter(permission__codename=permission).first()
+        return rows.filter(permission__code=permission).first()
 
     def load():
         overrides = {}
         for row in rows.select_related("permission").order_by("pk"):
-            overrides.setdefault(row.permission.codename, row)
+            overrides.setdefault(row.permission.code, row)
         return overrides
 
     return _request_value(context, ("overrides", entity.pk, getattr(realm, "pk", None)), load).get(permission)
@@ -74,8 +74,8 @@ def has_permission(entity, permission, realm=None, *, fresh=False, context=None)
         context = None
         from entity.models import PermissionCatalogEntry
 
-        catalog = {entry.codename: {"scope": entry.scope, "is_active": entry.is_active}
-                   for entry in PermissionCatalogEntry.objects.filter(codename=permission)}
+        catalog = {entry.code: {"scope": entry.scope, "is_active": entry.is_active}
+                   for entry in PermissionCatalogEntry.objects.filter(code=permission)}
     else:
         catalog = _request_value(context, "catalog", get_catalog)
     entry = catalog.get(permission)
@@ -118,7 +118,7 @@ def has_permission(entity, permission, realm=None, *, fresh=False, context=None)
         if fresh:
             from entity.models import RolePermission
 
-            return RolePermission.objects.filter(role_id=role_id, permission__codename=permission, permission__is_active=True).exists()
+            return RolePermission.objects.filter(role_id=role_id, permission__code=permission, permission__is_active=True).exists()
         return permission in _request_value(
             context, ("roles", realm.pk), lambda: get_role_matrix(realm.pk),
         ).get(str(role_id), [])

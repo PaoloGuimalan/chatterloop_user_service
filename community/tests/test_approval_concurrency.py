@@ -48,7 +48,7 @@ class RealmPolicyConcurrencyTests(RealmRolePolicyFixture, TransactionTestCase):
             response = future.result(timeout=10)
         self.assertEqual(response.status_code, 201)
         role = Role.objects.get(pk=response.data["result"]["id"])
-        self.assertFalse(role.permissions.filter(codename="realm.post.publish").exists())
+        self.assertFalse(role.permissions.filter(code="realm.post.publish").exists())
 
     def test_waiting_role_creation_rechecks_actor_authority_after_demotion(self):
         pids = Queue()
@@ -68,7 +68,7 @@ class RealmPolicyConcurrencyTests(RealmRolePolicyFixture, TransactionTestCase):
         from newsfeed.models import Post, PostTag
         author = Entity.objects.create(type="user")
         Member.objects.create(entity=author, realm=self.realm, added_by=self.actor, role=self.roles["member"])
-        PermissionCatalogEntry.objects.create(codename="posts.create", scope="global")
+        PermissionCatalogEntry.objects.create(code="posts.create", scope="global")
         post = Post.objects.create(entity=author, approval=0, file_type="text", content_type="text")
         PostTag.objects.create(post=post, entity=self.realm.entity)
         return post
@@ -123,7 +123,7 @@ class RealmPolicyConcurrencyTests(RealmRolePolicyFixture, TransactionTestCase):
         from community.invites import create_invite
         from user.models import Account
         for code in ("realm.invite.create", "realm.invite.publish", "realm.invite.review", "realm.invite.revoke", "realm.request.approve", "realm.request.decline"):
-            self.catalog[code] = PermissionCatalogEntry.objects.create(codename=code, scope="realm")
+            self.catalog[code] = PermissionCatalogEntry.objects.create(code=code, scope="realm")
         for path in ("community.invites.notify_invitee", "community.invites.email_invite", "community.invites.settle_invite_notifications",
                      "community.admin_notifications.notify_member_joined", "community.admin_notifications.settle_join_requests",
                      "community.invite_review.notify_invite_review_activity", "community.views.InviteView._notify_members_changed",

@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 class MyAllowedModules(APIView):
     """
-    Returns which entity-type-scoped module codenames the current active
+    Returns which entity-type-scoped module codes the current active
     entity (request.entity) is allowed to see - the frontend's source of
     truth for which UI modules to show, since only the resolver knows about
     per-entity EntityPermission overrides (e.g. a suspended page individually

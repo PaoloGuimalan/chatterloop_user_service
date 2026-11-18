@@ -68,7 +68,7 @@ class CommunityDiscoveryGuestTests(unittest.TestCase):
             ),
             patch("community.community_views.Member.objects.select_related") as members,
         ):
-            members.return_value.filter.return_value.first.return_value = SimpleNamespace(role=SimpleNamespace(name="owner"))
+            members.return_value.filter.return_value.first.return_value = SimpleNamespace(role=SimpleNamespace(name="Owner", code="owner", is_default=True))
             response = CommunityLeaveView.as_view()(request, realm_id="club")
         self.assertEqual(response.status_code, 400)
         self.assertIsInstance(response.data, list)
