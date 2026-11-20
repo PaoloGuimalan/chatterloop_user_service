@@ -1,5 +1,5 @@
 """Current, realm-scoped audiences for management inbox activity."""
-from django.db.models import Exists, F, OuterRef, Q
+from django.db.models import Exists, F, OuterRef, Q, Case, When, Value, CharField
 from django.utils.timezone import now
 
 from community.models import Member
@@ -22,22 +22,23 @@ def permissions_for_notice(kind):
 
 def permitted_members(realm, codes):
     """One bounded SQL query; no role-name authority or per-member lookups."""
-    members = Member.objects.filter(realm=realm, role__realm_id=F('realm_id'))
-    codes = list(PermissionCatalogEntry.objects.filter(
-        code__in=codes, scope='realm', is_active=True).values_list('code', flat=True))
-    if not realm.is_active or not codes:
-        return members.none()
-    eligible = Q(role__code='owner', role__is_default=True)
-    for index, code in enumerate(codes):
+    members = Member.objects.filter(realm=realm, realm__is_active=True, role__realm_id=F('realm_id')).annotate(
+        _notice_kind=Case(When(realm__type='group', realm__parent_id__isnull=False, then=Value('channel')),
+            default=F('realm__type'), output_field=CharField()))
+    eligible = Q(pk__in=[])
+    for index, code in enumerate(dict.fromkeys(codes)):
         overrides = EntityPermission.objects.filter(realm=realm, entity_id=OuterRef('entity_id'),
             permission__code=code).filter(Q(expires_at=None) | Q(expires_at__gt=now()))
-        names = {suffix: f'_notice_{index}_{suffix}' for suffix in ('grant', 'deny', 'role')}
+        names = {suffix: f'_notice_{index}_{suffix}' for suffix in ('active', 'grant', 'deny', 'role')}
         members = members.annotate(**{
+            names['active']: Exists(PermissionCatalogEntry.objects.filter(code=code, scope='realm',
+                is_active=True, realm_types__code=OuterRef('_notice_kind'))),
             names['grant']: Exists(overrides.filter(effect='grant')),
             names['deny']: Exists(overrides.filter(effect='deny')),
             names['role']: Exists(RolePermission.objects.filter(role_id=OuterRef('role_id'), permission__code=code)),
         })
-        eligible |= Q(**{names['deny']: False}) & (Q(**{names['grant']: True}) | Q(**{names['role']: True}))
+        eligible |= Q(**{names['active']: True}) & (Q(role__code='owner', role__is_default=True) |
+            (Q(**{names['deny']: False}) & (Q(**{names['grant']: True}) | Q(**{names['role']: True}))))
     return members.filter(eligible)
 
 

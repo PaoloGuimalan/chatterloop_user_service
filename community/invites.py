@@ -276,6 +276,9 @@ def create_invite(
     )
     existing = pending.order_by("-created_at").first()
     if existing:
+        if (existing.purpose == 'manage' and realm.type == 'page'
+                and str(existing.created_by_id) == str(realm.entity_id)):
+            raise InviteError('Revoke and reissue this invitation from an authorized personal account.', 409)
         if existing.role_id != (selected_role.pk if selected_role else None):
             raise InviteError(
                 "A pending invite already assigns a different role; revoke it first", 409,

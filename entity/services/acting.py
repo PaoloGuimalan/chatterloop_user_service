@@ -16,8 +16,8 @@ def acting_memberships(entity):
     grants = RolePermission.objects.filter(role_id=OuterRef("role_id"),
         permission__code="realm.identity.act", permission__scope="realm", permission__is_active=True)
     return Member.objects.filter(entity_id=entity_id, role__realm_id=F("realm_id"),
-        realm__is_active=True, realm__type__in=["page", "server", "group", "conference", "channel", "voice"]
-    ).annotate(_act_active=Exists(PermissionCatalogEntry.objects.filter(code="realm.identity.act", scope="realm", is_active=True)), _act_override=Subquery(overrides.values("effect")[:1]), _act_grant=Exists(grants)).filter(_act_active=True).filter(
+        realm__is_active=True, realm__type='page'
+    ).annotate(_act_active=Exists(PermissionCatalogEntry.objects.filter(code="realm.identity.act", scope="realm", is_active=True, realm_types__code='page')), _act_override=Subquery(overrides.values("effect")[:1]), _act_grant=Exists(grants)).filter(_act_active=True).filter(
         Q(role__is_default=True, role__code="owner") | Q(_act_override="grant") |
         (Q(_act_override__isnull=True) & Q(_act_grant=True)))
 
@@ -33,4 +33,4 @@ def can_act_as_entity(account, entity) -> bool:
 
 
 def is_switchable_realm(realm) -> bool:
-    return bool(realm.is_active and realm.type in {"page", "server", "group", "conference", "channel", "voice"})
+    return bool(realm.is_active and realm.type == 'page')

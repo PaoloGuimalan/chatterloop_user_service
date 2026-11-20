@@ -11,6 +11,7 @@ from user.models import Account
 from entity.models import Entity, Follow  # noqa: F401
 from django.utils.timezone import now
 from core.profile_paths import clean_model_profile_path, validate_model_profile_path
+from community.realm_types import REALM_TYPE_CHOICES
 
 
 def generate_random_digit(digit):
@@ -33,16 +34,24 @@ def generate_realm_uid():
     return generate_random_digit(15)
 
 
+class Type(models.Model):
+    """Fixed realm-kind references used by permission applicability."""
+    code = models.CharField(max_length=150, unique=True, choices=REALM_TYPE_CHOICES)
+
+    class Meta:
+        db_table = 'community_type'
+        verbose_name = 'realm type'
+        verbose_name_plural = 'realm types'
+        ordering = ['code']
+        constraints = [models.CheckConstraint(condition=models.Q(code__in=[
+            code for code, _ in REALM_TYPE_CHOICES]), name='community_type_known_code')]
+
+    def __str__(self):
+        return self.get_code_display()
+
+
 class Realm(models.Model):
-    REALM_TYPE_CHOICES = [
-        ("community", "Community"),
-        ("page", "Page"),
-        ("server", "Server"),
-        ("group", "Group"),
-        ("conference", "Conference"),
-        ("channel", "Channel"),
-        ("voice", "Voice"),
-    ]
+    REALM_TYPE_CHOICES = REALM_TYPE_CHOICES
 
     id = models.CharField(
         max_length=150,

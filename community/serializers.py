@@ -129,7 +129,7 @@ class RealmSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        from community.role_policy import feature_availability, realm_capabilities
+        from community.role_policy import feature_availability, realm_capabilities, role_management_actor
         from entity.models import Role
 
         role = Role.objects.filter(pk=data.get("my_role_id")).values("name", "code").first()
@@ -137,8 +137,13 @@ class RealmSerializer(serializers.ModelSerializer):
                     my_role_code=role["code"] if role else None,
                     features=feature_availability())
         request = self.context.get("request")
-        if request is not None:
-            data["capabilities"] = realm_capabilities(getattr(request, "entity", None), instance)
+        if hasattr(instance, '_can_manage_roles'):
+            data['capabilities'] = {'can_manage_roles': instance._can_manage_roles,
+                'can_manage_permissions': instance._can_manage_permissions,
+                'can_manage': instance._can_manage_roles or instance._can_manage_permissions}
+        elif request is not None:
+            data["capabilities"] = realm_capabilities(getattr(request, "entity", None), instance,
+                management_actor=role_management_actor(request, instance))
         return data
 
     class Meta:

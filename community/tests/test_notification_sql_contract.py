@@ -2,9 +2,10 @@
 import json
 from pathlib import Path
 import subprocess
+from unittest import skipUnless
 from django.db import connection
 from django.test import TestCase
-from community.models import Approvals, Member
+from community.models import Approvals, Member, Type
 from community.notification_permissions import permitted_members
 from entity.models import Entity, EntityPermission, Role
 from entity.tests.test_realm_role_policy import RealmRolePolicyFixture
@@ -38,6 +39,7 @@ decision}));})();
         self.assertEqual(node, django)
         return node
 
+    @skipUnless(connection.vendor == 'postgresql', 'Relational audience guard runs on the disposable PostgreSQL suite')
     def test_current_local_grants_overrides_activity_and_owner_match_between_runtimes(self):
         role = Role.objects.create(realm=self.realm, name='Reviewer')
         role.permissions.add(self.catalog['realm.post.review'])
@@ -70,3 +72,12 @@ decision}));})();
         self.assertEqual(recipients(self.other.entity), [])
         post.delete()
         self.assertEqual(recipients(self.actor), [])
+
+    @skipUnless(connection.vendor == 'postgresql', 'Relational audience guard runs on the disposable PostgreSQL suite')
+    def test_inapplicable_or_malformed_metadata_denies_even_owner_audiences(self):
+        entry = self.catalog['realm.post.review']
+        for kinds in ([], ['page']):
+            entry.realm_types.set(Type.objects.filter(code__in=kinds))
+            self.assertEqual(self.reviewers(), set())
+        entry.realm_types.set(Type.objects.filter(code__in=['community', 'page']))
+        self.assertEqual(self.reviewers(), {str(self.actor.pk)})

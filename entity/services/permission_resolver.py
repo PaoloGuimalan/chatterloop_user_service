@@ -4,6 +4,7 @@ from django.utils.timezone import now
 from entity.models import EntityPermission
 from entity.permissions import GLOBAL_PLATFORM_DEFAULT, PermissionEffect
 from entity.roles import realm_owner_role_id
+from entity.services.permission_applicability import permission_applies, permission_realm_types
 from entity.services.permission_catalog_cache import (
     get_catalog,
     get_entity_type_matrix,
@@ -16,6 +17,11 @@ def has_active_permission(entity, permission, realm=None, **kwargs):
     try:
         return has_permission(entity, permission, realm, **kwargs)
     except ValueError:
+        context = kwargs.get('context')
+        if not kwargs.get('fresh') and context is not None:
+            entry = context.get('catalog', {}).get(permission)
+            if entry is not None and not entry['is_active']:
+                return False
         from entity.models import PermissionCatalogEntry
 
         if PermissionCatalogEntry.objects.filter(code=permission, is_active=False).exists():
@@ -74,8 +80,8 @@ def has_permission(entity, permission, realm=None, *, fresh=False, context=None)
         context = None
         from entity.models import PermissionCatalogEntry
 
-        catalog = {entry.code: {"scope": entry.scope, "is_active": entry.is_active}
-                   for entry in PermissionCatalogEntry.objects.filter(code=permission)}
+        catalog = {entry.code: {"scope": entry.scope, "is_active": entry.is_active, "realm_types": permission_realm_types(entry)}
+                   for entry in PermissionCatalogEntry.objects.filter(code=permission).prefetch_related('realm_types')}
     else:
         catalog = _request_value(context, "catalog", get_catalog)
     entry = catalog.get(permission)
@@ -88,13 +94,20 @@ def has_permission(entity, permission, realm=None, *, fresh=False, context=None)
     if scope == "realm" and realm is None:
         raise ValueError(f"{permission!r} is realm-scoped and requires a realm")
 
+    if scope == 'realm':
+        if fresh:
+            from community.models import Realm
+            realm = Realm.objects.filter(pk=realm.pk, is_active=True).first()
+        if realm is None or not permission_applies(entry, realm):
+            return False
+
     role_id = None
     if realm is not None:
         from community.models import Member
         from entity.models import Role
 
         def realm_role():
-            if getattr(realm, "entity_id", None) == entity.id and realm.type != "community":
+            if str(getattr(realm, "entity_id", None)) == str(entity.id) and realm.type != "community":
                 return Role.objects.get(pk=realm_owner_role_id(realm), realm=realm)
             member = Member.objects.select_related("role").filter(entity=entity, realm=realm).first()
             return member.role if member and member.role.realm_id == realm.pk else None

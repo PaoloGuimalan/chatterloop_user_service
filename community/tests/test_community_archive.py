@@ -1,3 +1,4 @@
+from entity.tests.permission_fixtures import create_permission
 from importlib import import_module
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -14,7 +15,7 @@ class CommunityArchiveTests(RealmRolePolicyFixture, TestCase):
     def setUp(self):
         super().setUp()
         self.enterContext(patch('newsfeed.serializers.get_preview', return_value=None))
-        self.archive = PermissionCatalogEntry.objects.create(code='realm.post.archive', scope='realm')
+        self.archive = create_permission(code='realm.post.archive', scope='realm')
         self.delegate = Entity.objects.create(type='user')
         self.role = Role.objects.create(realm=self.realm, name='Archivist')
         self.role.permissions.add(self.archive)

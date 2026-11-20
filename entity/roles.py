@@ -39,14 +39,16 @@ def ensure_default_roles(realm):
     from community.models import Realm
     from entity.models import PermissionCatalogEntry, Role
     from entity.role_templates import DEFAULT_ROLE_NAMES, template_permissions
+    from entity.services.permission_applicability import applicable_permission_codes
     realm = Realm.objects.select_for_update().get(pk=getattr(realm, "pk", realm))
+    applicable = applicable_permission_codes(realm)
     result = {}
     for code, name in DEFAULT_ROLE_NAMES.items():
         role, created = Role.objects.get_or_create(realm=realm, code=code, defaults={"name": name, "is_default": True})
         if not role.is_default:
             raise ValueError("A reserved default code has an invalid definition")
         if created and code != "owner":
-            role.permissions.set(PermissionCatalogEntry.objects.filter(code__in=template_permissions(code, realm.type),
+            role.permissions.set(PermissionCatalogEntry.objects.filter(code__in=template_permissions(code, realm.type) & applicable,
                 scope="realm", is_active=True))
         result[code] = role
     return result

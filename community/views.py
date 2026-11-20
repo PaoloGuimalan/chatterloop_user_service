@@ -28,7 +28,7 @@ from datetime import datetime
 from user.models import Account
 from user.utils.external_requests import emailer
 from user_service.services.redis import RedisPubSubClient
-from community.annotations import my_role_annotation, my_role_id_annotation
+from community.annotations import my_role_annotation, my_role_id_annotation, with_configuration_hints
 from entity.permissions import Permission
 from entity.roles import get_default_role, role_tier_filter
 from entity.services.permission_resolver import has_permission
@@ -136,12 +136,13 @@ class TopRealms(APIView):
                     Q(slug__icontains=search) | Q(name__icontains=search)
                 )
 
+            top_realm_queryset = with_configuration_hints(top_realm_queryset, request)
             paginator = self.pagination_class()
             paginated_queryset = paginator.paginate_queryset(
                 top_realm_queryset, request, view=self
             )
 
-            serialized_result = RealmSerializer(paginated_queryset, many=True)
+            serialized_result = RealmSerializer(paginated_queryset, many=True, context={"request": request})
             data = paginator.get_paginated_response(serialized_result.data)
 
             return data
@@ -213,12 +214,13 @@ class MyRealms(APIView):
                     Q(slug__icontains=search) | Q(name__icontains=search)
                 )
 
+            my_realm_queryset = with_configuration_hints(my_realm_queryset, request)
             paginator = self.pagination_class()
             paginated_queryset = paginator.paginate_queryset(
                 my_realm_queryset, request, view=self
             )
 
-            serialized_result = RealmSerializer(paginated_queryset, many=True)
+            serialized_result = RealmSerializer(paginated_queryset, many=True, context={"request": request})
             data = paginator.get_paginated_response(serialized_result.data)
 
             return data
@@ -236,7 +238,7 @@ class MyRealms(APIView):
 
             realm = get_object_or_404(Realm, realm_id=realm_id)
 
-            if not has_permission(entity, Permission.REALM_UPDATE, realm=realm):
+            if not has_permission(entity, Permission.REALM_UPDATE, realm=realm, fresh=True):
                 return Response(
                     {
                         "status": False,
@@ -245,51 +247,20 @@ class MyRealms(APIView):
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
 
-            if fields:
-                if realm.type == "community":
-                    if (
-                        isinstance(fields, dict)
-                        and {"profile", "cover_photo"} & fields.keys()
-                    ):
-                        return Response(
-                            {
-                                "status": False,
-                                "message": "Use media upload to update community photos",
-                            },
-                            status=400,
-                        )
-                    allowed = {
-                        "name",
-                        "description",
-                        "slug",
-                        "is_private",
-                        "is_active",
-                    }
-                    if not isinstance(fields, dict) or set(fields) - allowed:
-                        return Response(
-                            {
-                                "status": False,
-                                "message": "Unsupported community fields",
-                            },
-                            status=400,
-                        )
-                    for key in ("is_private", "is_active"):
-                        if key in fields and type(fields[key]) is not bool:
-                            return Response(
-                                {
-                                    "status": False,
-                                    "message": f"{key} must be true or false",
-                                },
-                                status=400,
-                            )
-                elif isinstance(fields, dict) and fields.get("type") == "community":
-                    return Response(
-                        {
-                            "status": False,
-                            "message": "Create a community using the community endpoint",
-                        },
-                        status=400,
-                    )
+            if fields is not None:
+                from entity.services.permission_applicability import effective_realm_kind
+                editable = {
+                    'community': {'name', 'description', 'slug', 'is_private', 'is_active'},
+                    'page': {'name', 'description', 'email', 'slug'},
+                    'server': {'name', 'description', 'is_private'},
+                    'group': {'name', 'is_private'},
+                    'conference': {'name'}, 'channel': {'name'}, 'voice': {'name'},
+                }
+                if not isinstance(fields, dict) or set(fields) - editable.get(effective_realm_kind(realm), set()):
+                    return Response({'status': False, 'message': 'Unsupported realm details. Use media upload to update photos.'}, status=400)
+                for key in ('is_private', 'is_active'):
+                    if key in fields and type(fields[key]) is not bool:
+                        return Response({'status': False, 'message': f'{key} must be true or false'}, status=400)
                 if "slug" in fields and fields["slug"] != realm.slug:
                     validate_profile_path(fields["slug"], "slug")
                 Realm.objects.filter(realm_id=realm_id).update(**fields)
@@ -376,12 +347,13 @@ class FollowRealmView(APIView):
                     Q(slug__icontains=search) | Q(name__icontains=search)
                 )
 
+            followed_realm_queryset = with_configuration_hints(followed_realm_queryset, request)
             paginator = self.pagination_class()
             paginated_queryset = paginator.paginate_queryset(
                 followed_realm_queryset, request, view=self
             )
 
-            serialized_result = RealmSerializer(paginated_queryset, many=True)
+            serialized_result = RealmSerializer(paginated_queryset, many=True, context={"request": request})
             data = paginator.get_paginated_response(serialized_result.data)
 
             return data
@@ -942,7 +914,7 @@ class FollowersView(APIView):
             realm = get_object_or_404(Realm, id=realm_id)
 
             if not has_permission(
-                entity, Permission.REALM_FOLLOWER_REMOVE, realm=realm
+                entity, Permission.REALM_FOLLOWER_REMOVE, realm=realm, fresh=True
             ):
                 return Response(
                     {
@@ -1125,9 +1097,13 @@ class InviteView(APIView):
                 return self._request_access(realm, user, entity)
 
             try:
+                inviter = entity
+                if str(request.data.get('purpose', '')).strip().lower() == 'manage':
+                    from community.role_policy import role_management_actor
+                    inviter = role_management_actor(request, realm)
                 invite, created = create_invite(
                     realm,
-                    entity,
+                    inviter,
                     raw_target=request.data.get("target"),
                     target_email=request.data.get("target_email"),
                     target_entity_id=request.data.get("target_entity_id"),
@@ -1276,9 +1252,20 @@ class InviteView(APIView):
             if realm_id:
                 realm = get_object_or_404(Realm, realm_id=realm_id)
 
-                if not has_permission(
-                    request.entity, Permission.REALM_MEMBER_VIEW, realm=realm
-                ):
+                can_view = has_permission(request.entity, Permission.REALM_MEMBER_VIEW, realm=realm)
+                narrow_queue = (realm.type in ('server', 'conference') and
+                    request.query_params.get('kind') == 'request' and request.query_params.get('status') == 'pending')
+                if not can_view and narrow_queue:
+                    from community.role_policy import require_realm_actor
+                    from entity.services.permission_resolver import has_active_permission
+                    from rest_framework.exceptions import PermissionDenied
+                    try:
+                        require_realm_actor(request.entity, realm)
+                        can_view = any(has_active_permission(request.entity, code, realm, fresh=True) for code in (
+                            Permission.REALM_REQUEST_APPROVE, Permission.REALM_REQUEST_DECLINE))
+                    except PermissionDenied:
+                        can_view = False
+                if not can_view:
                     return Response(
                         {
                             "status": False,
@@ -1364,7 +1351,7 @@ class InviteView(APIView):
             realm = get_object_or_404(Realm, id=realm_id)
 
             if not has_permission(
-                entity, Permission.REALM_FOLLOWER_REMOVE, realm=realm
+                entity, Permission.REALM_FOLLOWER_REMOVE, realm=realm, fresh=True
             ):
                 return Response(
                     {
@@ -1374,7 +1361,9 @@ class InviteView(APIView):
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
 
-            delete_query = Follow.objects.get(follow_id=follow_id)
+            delete_query = Follow.objects.filter(follow_id=follow_id, followee=realm.entity).first()
+            if delete_query is None:
+                return Response({'status': False, 'message': 'Follower not found in this realm.'}, status=404)
             delete_query.delete()
 
             return Response(

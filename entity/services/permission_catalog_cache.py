@@ -14,7 +14,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-CATALOG_CACHE_KEY = "permcache:catalog:v3"
+CATALOG_CACHE_KEY = "permcache:catalog:v4"
 ROLE_MATRIX_CACHE_KEY = "permcache:role_matrix:v3"
 ENTITY_TYPE_MATRIX_CACHE_KEY = "permcache:entity_type_matrix:v1"
 CACHE_TTL_SECONDS = 60 * 60  # safety-net only; invalidation is signal-driven
@@ -55,7 +55,7 @@ def _redis_delete(key):
 
 
 def get_catalog():
-    """code -> {"scope": ..., "is_active": ...} for every permission,
+    """code -> {scope, is_active, realm_types} for every permission,
     active and inactive (inactive entries must stay present so an unknown
     permission and a disabled one remain distinguishable to callers)."""
     cached = _redis_get(CATALOG_CACHE_KEY)
@@ -63,10 +63,11 @@ def get_catalog():
         return json.loads(cached)
 
     from entity.models import PermissionCatalogEntry
+    from entity.services.permission_applicability import permission_realm_types
 
     catalog = {
-        entry.code: {"scope": entry.scope, "is_active": entry.is_active}
-        for entry in PermissionCatalogEntry.objects.all()
+        entry.code: {"scope": entry.scope, "is_active": entry.is_active, "realm_types": permission_realm_types(entry)}
+        for entry in PermissionCatalogEntry.objects.prefetch_related('realm_types').all()
     }
     _redis_set(CATALOG_CACHE_KEY, json.dumps(catalog))
     return catalog

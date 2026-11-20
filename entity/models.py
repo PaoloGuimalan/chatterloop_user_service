@@ -174,6 +174,7 @@ class PermissionCatalogEntry(models.Model):
     description = models.TextField(blank=True, default="")
     scope = models.CharField(max_length=20, choices=PermissionScope.choices)
     is_active = models.BooleanField(default=True)  # soft-disable without deleting
+    realm_types = models.ManyToManyField('community.Type', related_name='permissions', blank=True)
     entity_types = models.ManyToManyField(
         EntityTypeDefinition, through="PermissionEntityType", related_name="permissions", blank=True,
     )
@@ -188,7 +189,6 @@ class PermissionCatalogEntry(models.Model):
 
     def __str__(self):
         return self.name or self.code
-
 
 class Role(models.Model):
     """A role definition with multiple permissions; duplicate names are allowed."""

@@ -51,3 +51,20 @@ def my_role_id_annotation(entity):
             Member.objects.filter(realm=OuterRef("pk"), role__realm_id=OuterRef("pk"), entity=entity).values("role_id")[:1]
         ), output_field=BigIntegerField(),
     )
+
+
+def with_configuration_hints(queryset, request):
+    """Two bounded permission EXISTS hints for directory cards, not a per-card resolver loop."""
+    from entity.models import Entity
+    from community.notification_permissions import permitted_members
+    actor_id = getattr(getattr(request, 'entity', None), 'pk', None)
+    personal_id = getattr(getattr(request, 'user', None), 'entity_id', None)
+    queryset = queryset.annotate(_configuration_actor=Case(
+        When(entity_id=actor_id, then=Value(str(personal_id) if personal_id else None)),
+        default=Value(str(actor_id) if actor_id else None), output_field=Entity._meta.pk))
+    return queryset.annotate(**{
+        '_' + flag: Exists(permitted_members(OuterRef('pk'), [code]).filter(
+            entity_id=OuterRef('_configuration_actor')))
+        for flag, code in [('can_manage_roles', 'realm.roles.manage'),
+                           ('can_manage_permissions', 'realm.permissions.manage')]
+    })

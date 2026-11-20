@@ -1,3 +1,4 @@
+from entity.tests.permission_fixtures import create_permission
 from datetime import timedelta
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -16,8 +17,8 @@ class PostReviewTests(RealmRolePolicyFixture, TestCase):
         self.author = Entity.objects.create(type="user")
         self.author.refresh_from_db()
         Member.objects.create(entity=self.author, realm=self.realm, added_by=self.actor, role=self.roles["member"])
-        self.catalog["posts.create"] = PermissionCatalogEntry.objects.create(code="posts.create", scope="global")
-        self.catalog["realm.post.takedown"] = PermissionCatalogEntry.objects.create(code="realm.post.takedown", scope="realm")
+        self.catalog["posts.create"] = create_permission(code="posts.create", scope="global")
+        self.catalog["realm.post.takedown"] = create_permission(code="realm.post.takedown", scope="realm")
         self.post = Post.objects.create(entity=self.author, approval=0, caption="Pending", file_type="text", content_type="text")
         PostTag.objects.create(post=self.post, entity=self.realm.entity)
         self.delivery = self.enterContext(patch("community.review_delivery.publish_review_effects"))

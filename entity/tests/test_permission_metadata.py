@@ -1,3 +1,4 @@
+from entity.tests.permission_fixtures import create_permission
 from types import SimpleNamespace
 
 from django.db import connection
@@ -25,10 +26,10 @@ class PermissionMetadataSchemaTests(SimpleTestCase):
 
 class PermissionMetadataApiTests(RealmRolePolicyFixture, TestCase):
     def test_new_active_realm_permissions_are_selectable_without_changing_client_definitions(self):
-        PermissionCatalogEntry.objects.create(code='realm.poll.manage', name='Manage polls',
+        create_permission(code='realm.poll.manage', name='Manage polls',
                                               description='Manage community polls.', scope='realm')
-        PermissionCatalogEntry.objects.create(code='realm.poll.disabled', scope='realm', is_active=False)
-        PermissionCatalogEntry.objects.create(code='polls.global', scope='global')
+        create_permission(code='realm.poll.disabled', scope='realm', is_active=False)
+        create_permission(code='polls.global', scope='global')
         request = APIRequestFactory().get('/permissions')
         force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
         request.entity = self.actor

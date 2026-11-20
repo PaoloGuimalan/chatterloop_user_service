@@ -20,14 +20,13 @@ admin.site.register(EntityTypeDefinition)
 class PermissionCatalogAdmin(admin.ModelAdmin):
     form = PermissionCatalogForm
     list_display = ("name", "code", "scope", "is_active")
-    list_filter = ("scope", "is_active")
+    list_filter = ("scope", "is_active", "realm_types")
     search_fields = ("name", "code", "description")
 
 
 @admin.register(Role)
 class RoleAdmin(admin.ModelAdmin):
     form = RoleForm
-    fields = ("realm", "name", "code", "permissions")
     readonly_fields = ("code",)
     list_display = ("name", "code", "id", "realm", "is_default")
     list_select_related = ("realm",)

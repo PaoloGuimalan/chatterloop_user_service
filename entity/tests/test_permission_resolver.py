@@ -28,7 +28,7 @@ def _make_realm(created_by):
 class HasPermissionTests(TestCase):
     def test_old_warm_catalog_does_not_hide_the_new_permission_catalog_after_cutover(self):
         from entity.services.permission_catalog_cache import get_catalog
-        with patch('entity.services.permission_catalog_cache._redis_get', side_effect=lambda key: '{}' if key == 'permcache:catalog:v2' else None):
+        with patch('entity.services.permission_catalog_cache._redis_get', side_effect=lambda key: '{}' if key in {'permcache:catalog:v2', 'permcache:catalog:v3'} else None):
             self.assertIn('realm.post.review', get_catalog())
 
     def setUp(self):

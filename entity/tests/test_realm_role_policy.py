@@ -1,3 +1,4 @@
+from entity.tests.permission_fixtures import create_permission
 from types import SimpleNamespace
 import json
 from unittest.mock import patch
@@ -24,7 +25,7 @@ class RealmRolePolicyFixture:
         self.catalog = {}
         for code in ("realm.member.view", "realm.member.role.update", "realm.roles.manage", "realm.permissions.manage",
                      "realm.post.submit", "realm.post.publish", "realm.post.review", "realm.ownership.transfer", "realm.identity.act"):
-            self.catalog[code] = PermissionCatalogEntry.objects.create(code=code, scope="realm")
+            self.catalog[code] = create_permission(code=code, scope="realm")
         self.realm = self.make_realm("A")
         self.other = self.make_realm("B")
         self.roles = {r.code: r for r in self.realm.owned_roles.all()}
@@ -73,7 +74,7 @@ class RealmRolePolicyTests(RealmRolePolicyFixture, TestCase):
         Member.objects.filter(realm=self.realm, entity=self.actor).update(role=role)
         for code, key in (('realm.media.update', 'can_update_media'), ('realm.post.archive', 'can_archive_community_posts'),
                           ('realm.invite.create', 'can_invite_members'), ('realm.member.remove', 'can_remove_members')):
-            entry = PermissionCatalogEntry.objects.create(code=code, scope='realm')
+            entry = create_permission(code=code, scope='realm')
             role.permissions.set([entry])
             caps = realm_capabilities(self.actor, self.realm)
             self.assertTrue(caps.get(key))
@@ -171,7 +172,7 @@ class RealmRolePolicyTests(RealmRolePolicyFixture, TestCase):
         self.assertFalse(has_permission(person, "realm.post.review", self.realm))
 
     def test_global_capabilities_cannot_be_put_in_a_custom_role(self):
-        PermissionCatalogEntry.objects.create(code="posts.create", scope="global")
+        create_permission(code="posts.create", scope="global")
         response = self.request("post", {"realm_id": self.realm.pk, "name": "Bypass", "permissions": ["posts.create"]})
         self.assertEqual(response.status_code, 400)
 

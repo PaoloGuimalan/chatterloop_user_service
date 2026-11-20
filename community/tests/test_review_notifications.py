@@ -1,3 +1,4 @@
+from entity.tests.permission_fixtures import create_permission
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -19,7 +20,7 @@ class ReviewNotificationTests(RealmRolePolicyFixture, TestCase):
     def setUp(self):
         super().setUp()
         for code in ('realm.invite.review', 'realm.notifications.view', 'realm.request.approve', 'realm.request.decline'):
-            self.catalog[code] = PermissionCatalogEntry.objects.create(code=code, scope='realm')
+            self.catalog[code] = create_permission(code=code, scope='realm')
         self.memory = NotificationMemory()
         self.enterContext(patch.object(Notification, 'objects', self.memory))
         self.enterContext(patch.object(Notification, 'save', self.memory.save_document))

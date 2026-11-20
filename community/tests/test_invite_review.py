@@ -1,3 +1,4 @@
+from entity.tests.permission_fixtures import create_permission
 from types import SimpleNamespace
 from unittest.mock import patch
 from django.test import TestCase
@@ -14,7 +15,7 @@ class InviteReviewTests(RealmRolePolicyFixture, TestCase):
         super().setUp()
         for code in ("realm.invite.create", "realm.invite.publish", "realm.invite.review", "realm.invite.revoke",
                      "realm.request.approve", "realm.request.decline"):
-            self.catalog[code] = PermissionCatalogEntry.objects.create(code=code, scope="realm")
+            self.catalog[code] = create_permission(code=code, scope="realm")
 
         self.target = Entity.objects.create(type="user")
         self.target.refresh_from_db()

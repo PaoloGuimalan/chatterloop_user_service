@@ -1,3 +1,4 @@
+from entity.tests.permission_fixtures import create_permission
 """Real PostgreSQL row-lock contracts; never substitute SQLite for this suite."""
 
 from concurrent.futures import ThreadPoolExecutor
@@ -68,7 +69,7 @@ class RealmPolicyConcurrencyTests(RealmRolePolicyFixture, TransactionTestCase):
         from newsfeed.models import Post, PostTag
         author = Entity.objects.create(type="user")
         Member.objects.create(entity=author, realm=self.realm, added_by=self.actor, role=self.roles["member"])
-        PermissionCatalogEntry.objects.create(code="posts.create", scope="global")
+        create_permission(code="posts.create", scope="global")
         post = Post.objects.create(entity=author, approval=0, file_type="text", content_type="text")
         PostTag.objects.create(post=post, entity=self.realm.entity)
         return post
@@ -123,7 +124,7 @@ class RealmPolicyConcurrencyTests(RealmRolePolicyFixture, TransactionTestCase):
         from community.invites import create_invite
         from user.models import Account
         for code in ("realm.invite.create", "realm.invite.publish", "realm.invite.review", "realm.invite.revoke", "realm.request.approve", "realm.request.decline"):
-            self.catalog[code] = PermissionCatalogEntry.objects.create(code=code, scope="realm")
+            self.catalog[code] = create_permission(code=code, scope="realm")
         for path in ("community.invites.notify_invitee", "community.invites.email_invite", "community.invites.settle_invite_notifications",
                      "community.admin_notifications.notify_member_joined", "community.admin_notifications.settle_join_requests",
                      "community.invite_review.notify_invite_review_activity", "community.views.InviteView._notify_members_changed",

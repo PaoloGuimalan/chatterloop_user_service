@@ -16,10 +16,10 @@ django.setup()
 from django.db import connection
 from rest_framework.test import APIRequestFactory, force_authenticate
 
-from community.models import Invite, Member, Realm
+from community.models import Invite, Member, Realm, Type
 from community.community_views import CommunitiesView
 from community.views import TopRealms
-from entity.models import Entity, Follow, Role
+from entity.models import Entity, EntityPermission, Follow, PermissionCatalogEntry, Role, RolePermission
 from entity.search_views import (
     SearchOverviewV2,
     SearchRealmsV2,
@@ -33,7 +33,8 @@ class CommunitySearchTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.models = (Entity, Realm, Role, Member, Follow, Invite)
+        cls.models = (Entity, Type, PermissionCatalogEntry,
+                      Realm, Role, RolePermission, EntityPermission, Member, Follow, Invite)
         with connection.schema_editor() as editor:
             for model in cls.models:
                 editor.create_model(model)
@@ -197,7 +198,7 @@ class CommunitySearchTests(unittest.TestCase):
             force_authenticate(request, user=SimpleNamespace(is_authenticated=True))
             with patch(
                 "community.views.RealmSerializer",
-                side_effect=lambda rows, many: SimpleNamespace(
+                side_effect=lambda rows, many, **kwargs: SimpleNamespace(
                     data=[{"id": row.id} for row in rows]
                 ),
             ):

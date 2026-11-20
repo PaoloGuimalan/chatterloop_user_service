@@ -25,6 +25,9 @@ def validate_inviter(invite):
     from user.models import Account
     if not invite.realm.is_active:
         raise NotFound("Invite not available")
+    if (invite.purpose == 'manage' and invite.realm.type == 'page'
+            and str(invite.created_by_id) == str(invite.realm.entity_id)):
+        raise PermissionDenied('Revoke and reissue this invitation from an authorized personal account.')
     if Account.objects.filter(entity=invite.created_by, is_active=False).exists():
         raise PermissionDenied("The inviter is no longer eligible.")
     if invite.realm.type == "community":
@@ -152,6 +155,11 @@ def transition_invite(*, actor, account=None, invite_id=None, invite_token=None,
         raise NotFound("Invite not available")
     realm = get_object_or_404(Realm.objects.select_for_update(), pk=reference.realm_id, is_active=True)
     invite = Invite.objects.select_for_update(of=("self",)).select_related("role", "created_by", "target_entity").get(pk=reference.pk)
+    if (action == 'revoked' and invite.kind == 'invite' and invite.purpose == 'manage'
+            and realm.type == 'page' and str(actor.pk) == str(realm.entity_id)):
+        actor = getattr(account, 'entity', None)
+        if actor is None:
+            raise PermissionDenied('Your personal authority is required to revoke this invitation.')
     invite.realm = realm
     review = action in ("approve", "reject") and invite.kind == "invite"
     if not review and invite.kind == "invite" and action in ("accepted", "declined") and invite.status in ("for_approval", "rejected"):

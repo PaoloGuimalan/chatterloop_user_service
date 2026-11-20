@@ -1,3 +1,4 @@
+from entity.tests.permission_fixtures import create_permission
 """Community management notices with real SQL and inert Mongo/event boundaries."""
 
 # ruff: noqa: E402
@@ -15,7 +16,7 @@ from django.db import connection
 from django.test import override_settings
 from rest_framework.test import APIRequestFactory, force_authenticate
 from bot.models import Bot
-from community.models import Invite, Member, Realm, Approvals
+from community.models import Invite, Member, Realm, Approvals, Type
 from community.community_views import CommunityLeaveView
 from community.views import InviteView
 from community.admin_notifications import (
@@ -73,6 +74,7 @@ class AdminNotificationTests(unittest.TestCase):
         cls.enterClassContext(patch("entity.services.permission_catalog_cache._redis_delete"))
         cls.models = (
             Entity,
+            Type,
             PermissionCatalogEntry,
             EntityPermission,
             Role,
@@ -161,7 +163,7 @@ class AdminNotificationTests(unittest.TestCase):
             _role(name)
         for code in ('realm.notifications.view', 'realm.post.review', 'realm.invite.review',
                      'realm.request.approve', 'realm.request.decline'):
-            entry = PermissionCatalogEntry.objects.create(code=code, scope='realm')
+            entry = create_permission(code=code, scope='realm')
             for name in ('admin', 'moderator'):
                 _role(name).permissions.add(entry)
         Member.objects.create(
@@ -645,7 +647,7 @@ class AdminNotificationTests(unittest.TestCase):
 
         Realm.objects.filter(pk=self.realm.pk).update(type="page")
         selected = Role.objects.create(name="admin", realm=self.realm)
-        selected.permissions.add(PermissionCatalogEntry.objects.create(code="realm.identity.act", scope="realm"))
+        selected.permissions.add(create_permission(code="realm.identity.act", scope="realm"))
         Member.objects.filter(realm=self.realm, entity=self.admin).update(role=selected)
         account = SimpleNamespace(entity=self.admin, entity_id=self.admin.pk, is_authenticated=True)
         request = APIRequestFactory().get("/api/user/entity/pages")

@@ -27,6 +27,13 @@ def _on_permission_catalog_entry_changed(sender, **kwargs):
     transaction.on_commit(invalidate_entity_type_matrix_cache)
 
 
+@receiver(m2m_changed, sender=PermissionCatalogEntry.realm_types.through)
+def _on_catalog_realm_types_changed(sender, action, **kwargs):
+    if action in ('post_add', 'post_remove', 'post_clear'):
+        invalidate_catalog_cache()
+        transaction.on_commit(invalidate_catalog_cache)
+
+
 @receiver(post_save, sender=RolePermission)
 @receiver(post_delete, sender=RolePermission)
 @receiver(post_save, sender=Role)
