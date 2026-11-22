@@ -6,6 +6,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
+from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from bson import ObjectId
@@ -397,8 +398,14 @@ def settle_withdrawn_review_notices(post_ids):
             logger.exception('Failed to settle withdrawn submission notices for %s', row['target_id'])
 
 
+@transaction.atomic
 def record_admin_activity(realm, notice, *, actor_id=None):
     """Store immediate inbox rows and refresh personal unread previews."""
+    from community.access import lock_active_realm_scopes
+    try:
+        lock_active_realm_scopes([realm])
+    except (PermissionDenied, Realm.DoesNotExist):
+        return False
     canonical_id = _notice_id(notice["referenceID"], notice["toUserID"], notice["type"])
     managers = [
         recipient for recipient in _managers(realm, notice['type']) if str(recipient) != str(actor_id)

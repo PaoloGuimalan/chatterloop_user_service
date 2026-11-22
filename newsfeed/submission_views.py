@@ -10,10 +10,14 @@ from community.review_serializers import submission_payload
 from community.views import Pagination
 from newsfeed.models import Post
 from newsfeed.services.post_cards import read_only_post_cards
+from newsfeed.services.post_visibility import available_post_author_filter
+from community.access import active_realms
+from community.models import Realm
 
 
 def author_submissions(entity):
-    return Post.objects.filter(entity=entity, on_feed="feed", approval__in=[0, 2], deleted_at=None).annotate(
+    return Post.objects.filter(available_post_author_filter(), entity=entity, on_feed="feed", approval__in=[0, 2], deleted_at=None,
+        tagging__entity__realms__pk__in=active_realms(Realm.objects.all()).values('pk')).annotate(
         community_count=Count("tagging__entity_id", distinct=True,
             filter=Q(tagging__entity__realms__type="community")),
     ).filter(community_count=1).order_by("-date_posted", "-pk")

@@ -14,7 +14,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-CATALOG_CACHE_KEY = "permcache:catalog:v4"
+CATALOG_CACHE_KEY = "permcache:catalog:v5"
 ROLE_MATRIX_CACHE_KEY = "permcache:role_matrix:v3"
 ENTITY_TYPE_MATRIX_CACHE_KEY = "permcache:entity_type_matrix:v1"
 CACHE_TTL_SECONDS = 60 * 60  # safety-net only; invalidation is signal-driven

@@ -169,6 +169,12 @@ class EntitySerializer(serializers.ModelSerializer):
         elif obj.type == "realm":
             if hasattr(obj, "realms"):
                 return EmbeddedRealmSerializer(obj.realms, context=self.context).data
+            return {
+                'id': None, 'realm_id': None, 'name': 'Deleted realm', 'type': None,
+                'first_name': 'Deleted realm', 'middle_name': 'N/A', 'last_name': '',
+                'profile': 'none', 'is_active': False, 'is_verified': False,
+                'is_badged': False, 'username': None, 'slug': None,
+            }
 
         elif obj.type == "bot":
             if hasattr(obj, "bots"):

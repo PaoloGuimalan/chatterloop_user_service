@@ -26,7 +26,8 @@ def role_management_actor(request, realm):
 
 
 def require_realm_actor(actor, realm, *, context=None):
-    if actor is None or not realm.is_active:
+    from community.access import effective_realm_access
+    if actor is None or not effective_realm_access(realm, context=context).allowed:
         raise PermissionDenied("You cannot manage this realm.")
     if realm.type != "community" and str(actor.pk) == str(realm.entity_id):
         return "owner"
@@ -202,8 +203,11 @@ def realm_capabilities(actor, realm, *, management_actor=_DEFAULT_MANAGEMENT_ACT
     }
     caps['can_view_notifications'] = community and any(caps[key] for key in (
         'can_view_notifications', 'can_review_posts', 'can_review_invites', 'can_review_join_requests', 'can_decline_join_requests'))
+    from community.lifecycle_policy import lifecycle_capabilities
+    caps.update(lifecycle_capabilities(None, management_principal, realm))
     caps["can_manage"] = any(caps[key] for key in (
         "can_invite_members", "can_remove_members", "can_remove_followers", "can_transfer_ownership", "can_update_realm", "can_update_media", "can_archive_community_posts", "can_assign_roles", "can_manage_roles", "can_manage_permissions",
         "can_review_posts", "can_review_invites", "can_review_join_requests", "can_decline_join_requests", "can_view_notifications",
+        "can_deactivate_realm", "can_delete_realm",
     ))
     return caps

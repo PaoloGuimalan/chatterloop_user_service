@@ -162,7 +162,7 @@ class CommunityScopeTests(unittest.TestCase):
         from newsfeed import views
         from rest_framework.test import APIRequestFactory, force_authenticate
 
-        post = Post(post_id="private-post", entity_id="former", on_feed="feed")
+        post = Post(post_id="private-post", entity=Entity(id="former", type='user'), on_feed="feed")
         post._community_destination = Realm(
             id="realm", entity_id="community", type="community", is_private=True
         )
@@ -259,6 +259,9 @@ class CommunityScopeTests(unittest.TestCase):
                     ('community-public', 'public'),
                     ('community-private', 'private'), ('community-private', 'tagged-user'),
                     ('multiple-destinations', 'public'), ('multiple-destinations', 'private');
+                ALTER TABLE entity_entity ADD COLUMN type TEXT DEFAULT 'user';
+                ALTER TABLE community_realm ADD COLUMN parent_id TEXT;
+                ALTER TABLE community_realm ADD COLUMN deletion_requested_at TEXT;
             """)
 
             def visible(viewer):
@@ -399,7 +402,7 @@ class CommunityScopeTests(unittest.TestCase):
         ):
             with self.assertRaises(Exception) as error:
                 assert_post_access(
-                    Post(), SimpleNamespace(entity=Entity(id="viewer")), contribute=True
+                    Post(entity=Entity(id='author', type='user')), SimpleNamespace(entity=Entity(id="viewer")), contribute=True
                 )
             self.assertEqual(error.exception.status_code, 404)
 
@@ -413,7 +416,7 @@ class CommunityScopeTests(unittest.TestCase):
         ):
             self.assertIs(
                 assert_post_access(
-                    Post(), SimpleNamespace(entity=Entity(id="viewer")), contribute=True
+                    Post(entity=Entity(id='author', type='user')), SimpleNamespace(entity=Entity(id="viewer")), contribute=True
                 ),
                 realm,
             )
@@ -435,7 +438,7 @@ class CommunityScopeTests(unittest.TestCase):
                 self.assertEqual(instance.entity_id, "owner")
 
     def test_former_private_member_does_not_keep_author_access(self):
-        post = Post(entity_id="author", privacy_status="public")
+        post = Post(entity=Entity(id='author', type='user'), privacy_status="public")
         realm = Realm(id="realm", type="community", is_private=True)
         with (
             patch("community.posts.community_for_post", return_value=realm),
@@ -444,7 +447,7 @@ class CommunityScopeTests(unittest.TestCase):
             self.assertFalse(can_view_post(post, Entity(id="author")))
 
     def test_public_community_ignores_author_private_profile_audience(self):
-        post = Post(entity_id="author", privacy_status="private")
+        post = Post(entity=Entity(id='author', type='user'), privacy_status="private")
         realm = Realm(id="realm", type="community", is_private=False)
         with (
             patch("community.posts.community_for_post", return_value=realm),

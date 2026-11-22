@@ -6,6 +6,8 @@ from datetime import datetime
 from django.db import transaction
 
 from community.models import Member
+from community.access import lock_active_realm_scopes
+from rest_framework.exceptions import PermissionDenied
 from community.posts import community_for_post
 from entity.utils import get_entity_display_username
 
@@ -70,19 +72,28 @@ def notify_community_activity(
         str(item) for item in recipients if item and str(item) != str(actor.pk)
     }
 
+    @transaction.atomic
     def deliver():
         from newsfeed.models import CommentReaction, Post, Reaction
         from user.services.mongohelpers import NotificationService
         from user_service.services.push import activity_payload
         from user_service.services.rabbitmq import Queues, RabbitMQClient
         from user_service.services.redis import RedisPubSubClient
+        from newsfeed.services.post_visibility import available_post_author_filter
 
         try:
-            current = Post.objects.filter(
+            current = Post.objects.filter(available_post_author_filter()).filter(
                 pk=post_id, deleted_at=None, is_archived=False, approval=1
             ).first()
             realm = community_for_post(current) if current is not None else None
             if realm is None or not realm.is_active:
+                return
+            lock_active_realm_scopes([realm])
+            current = Post.objects.select_for_update(of=('self',)).filter(available_post_author_filter()).filter(
+                pk=post_id, deleted_at=None, is_archived=False, approval=1
+            ).first()
+            fresh_realm = community_for_post(current) if current is not None else None
+            if fresh_realm is None or fresh_realm.pk != realm.pk:
                 return
             reaction_model = {
                 "post_reaction": Reaction,
@@ -198,6 +209,8 @@ def notify_community_activity(
                     is_anonymous=str(bool(anonymous)).lower(),
                 )
                 RabbitMQClient.publish(Queues.SEND_PUSH, payload)
+        except PermissionDenied:
+            return
         except Exception:
             logger.exception("Community activity delivery failed for post %s", post_id)
 

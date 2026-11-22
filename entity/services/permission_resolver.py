@@ -98,7 +98,8 @@ def has_permission(entity, permission, realm=None, *, fresh=False, context=None)
         if fresh:
             from community.models import Realm
             realm = Realm.objects.filter(pk=realm.pk, is_active=True).first()
-        if realm is None or not permission_applies(entry, realm):
+        from community.access import effective_realm_access
+        if realm is None or not permission_applies(entry, realm) or not effective_realm_access(realm, context=context).allowed:
             return False
 
     role_id = None

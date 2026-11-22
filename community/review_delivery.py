@@ -5,8 +5,10 @@ import uuid
 from django.db import transaction
 from django.db.models import F
 from community.models import Realm, Approvals
+from community.access import effective_realm_access
 from community.review_notifications import deliver_review_notices
 from newsfeed.models import Post, PostScore
+from newsfeed.services.post_visibility import available_post_author_filter
 from user_service.services.rabbitmq import Queues, RabbitMQClient
 
 logger = logging.getLogger(__name__)
@@ -27,12 +29,12 @@ def publish_review_effects(decision_id):
         if reference is None:
             return False
         realm = Realm.objects.select_for_update().get(pk=reference["realm_id"])
-        post = Post.objects.select_for_update(of=("self",)).select_related("entity").filter(pk=reference["target_id"]).first()
+        post = Post.objects.select_for_update(of=("self",)).select_related("entity").filter(available_post_author_filter()).filter(pk=reference["target_id"]).first()
         decision = Approvals.objects.select_for_update().get(pk=decision_id)
         state = dict(decision.delivery_state)
-        if state.get("status") == "complete":
-            return True
-        if (post is None or not realm.is_active or post.deleted_at is not None or (post.is_archived and post.approval == 1) or
+        if state.get("status") in ('complete', 'obsolete'):
+            return state['status'] == 'complete'
+        if (post is None or not effective_realm_access(realm).allowed or post.deleted_at is not None or (post.is_archived and post.approval == 1) or
             (post.updated_at or post.date_posted) != decision.content_version or
             post.approval != decision.new_state.get("approval")):
             state["status"] = "obsolete"

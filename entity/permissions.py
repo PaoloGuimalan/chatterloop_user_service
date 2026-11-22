@@ -83,6 +83,8 @@ class Permission:
     # gate it (unlike REALM_SERVER_CREATE above).
     REALM_MEDIA_UPDATE = "realm.media.update"
     REALM_DELETE = "realm.delete"
+    REALM_DEACTIVATE = "realm.deactivate"
+    REALM_REACTIVATE = "realm.reactivate"
     REALM_OWNERSHIP_TRANSFER = "realm.ownership.transfer"
     REALM_POST_SUBMIT = "realm.post.submit"
     REALM_POST_PUBLISH = "realm.post.publish"
@@ -137,6 +139,8 @@ class Permission:
         REALM_CHANNEL_CREATE,
         REALM_MEDIA_UPDATE,
         REALM_DELETE,
+        REALM_DEACTIVATE,
+        REALM_REACTIVATE,
         REALM_OWNERSHIP_TRANSFER,
         REALM_POST_SUBMIT, REALM_POST_PUBLISH, REALM_POST_REVIEW,
         REALM_POST_TAKEDOWN, REALM_POST_ARCHIVE, REALM_INVITE_PUBLISH,

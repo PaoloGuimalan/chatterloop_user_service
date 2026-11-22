@@ -42,6 +42,9 @@ class ApprovalVisibilityTests(unittest.TestCase):
                 INSERT INTO entity_entity VALUES ('author'), ('member'), ('community');
                 INSERT INTO community_realm VALUES ('realm', 'community', 'community', 1, 0);
                 INSERT INTO community_member VALUES ('realm', 'member');
+                ALTER TABLE entity_entity ADD COLUMN type TEXT DEFAULT 'user';
+                ALTER TABLE community_realm ADD COLUMN parent_id TEXT;
+                ALTER TABLE community_realm ADD COLUMN deletion_requested_at TEXT;
             """)
             for state in (0, 1, 2):
                 for prefix in ("community", "ordinary"):

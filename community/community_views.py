@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 
 from community.api_serializers import CommunityCreateSerializer
 from community.models import Invite, Member, Realm
+from community.access import lock_realm_mutation
 from community.posts import community_metadata
 from core.profile_paths import ProfilePathError, validate_profile_path
 from entity.models import Entity
@@ -42,7 +43,8 @@ def _community_card(realm, viewer, *, include_capabilities=False):
 
 
 def _communities_for(viewer):
-    return Realm.objects.filter(type="community", is_active=True).annotate(
+    from community.access import active_realms
+    return active_realms(Realm.objects.filter(type="community", is_active=True)).annotate(
         joined=Exists(Member.objects.filter(realm=OuterRef("pk"), entity=viewer)),
         member_count=Count("member", distinct=True),
         my_role=Subquery(
@@ -128,6 +130,13 @@ class CommunitiesView(APIView):
         except ProfilePathError as exc:
             return Response(exc.payload, status=400)
         with transaction.atomic():
+            if viewer.type == 'realm':
+                from community.access import effective_realm_access, lock_realm_scope
+                from entity.services.acting import can_act_as_entity
+                source = get_object_or_404(Realm, entity=viewer, type='page')
+                locked_source = lock_realm_scope(source.pk, exclusive=False)[-1]
+                if not effective_realm_access(locked_source).allowed or not can_act_as_entity(request.user, viewer):
+                    raise PermissionDenied('You cannot create a community using this identity.')
             destination = Entity.objects.create(type="realm")
             realm = Realm.objects.create(
                 entity=destination,
@@ -182,11 +191,12 @@ class CommunityJoinView(APIView):
             raise PermissionDenied("Communities cannot become members of any realm")
         with transaction.atomic():
             realm = get_object_or_404(
-                Realm.objects.select_for_update(),
+                Realm.objects.all(),
                 pk=realm_id,
                 type="community",
                 is_active=True,
             )
+            realm = lock_realm_mutation(realm, viewer)
             if Member.objects.filter(realm=realm, entity=viewer).exists():
                 return Response({"status": True, "is_member": True})
             if realm.is_private:
@@ -209,8 +219,9 @@ class CommunityLeaveView(APIView):
     def post(self, request, realm_id):
         with transaction.atomic():
             realm = get_object_or_404(
-                Realm.objects.select_for_update(), pk=realm_id, type="community"
+                Realm.objects.all(), pk=realm_id, type="community"
             )
+            realm = lock_realm_mutation(realm, request.entity)
             member = (
                 Member.objects.select_related("role")
                 .filter(realm=realm, entity=request.entity).first()

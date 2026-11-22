@@ -387,6 +387,7 @@ class UserAuthentication(APIView):
                 # uses the realm ID. Other realm kinds keep their slug route.
                 query_filter = Q(slug=username) | Q(type="community", realm_id=username)
 
+            from community.access import active_realms
             realm_queryset = get_object_or_404(
                 Realm.objects.annotate(
                     followers_count=Count("entity__followers"),
@@ -438,6 +439,7 @@ class UserAuthentication(APIView):
                     ),
                 ),
                 query_filter,
+                pk__in=active_realms(Realm.objects.all()).values('pk'),
             )
 
             if entity:

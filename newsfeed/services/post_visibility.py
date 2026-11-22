@@ -64,6 +64,13 @@ def _has_accepted_connection(viewer_entity, author_id):
     ).exists()
 
 
+def available_post_author_filter():
+    """Inactive realm authors are hidden even from their own ordinary reads."""
+    from community.access import active_realms
+    from community.models import Realm
+    return ~Q(entity__type='realm') | Q(entity__realms__pk__in=active_realms(Realm.objects.all()).values('pk'))
+
+
 def visible_posts_filter(viewer_entity):
     """
     Q() selecting the posts `viewer_entity` may read.
@@ -80,9 +87,9 @@ def visible_posts_filter(viewer_entity):
 
     is_community, community_visible = community_audience(viewer_entity)
     if viewer_entity is None:
-        return (~is_community & Q(privacy_status="public")) | (
+        return available_post_author_filter() & ((~is_community & Q(privacy_status="public")) | (
             is_community & community_visible
-        )
+        ))
 
     ordinary = (
         Q(privacy_status="public")
@@ -94,7 +101,7 @@ def visible_posts_filter(viewer_entity):
         )
         | Q(Q(privacy_status="custom") & Q(privacy_users__allowed_entity=viewer_entity))
     )
-    return (~is_community & ordinary) | (is_community & community_visible)
+    return available_post_author_filter() & ((~is_community & ordinary) | (is_community & community_visible))
 
 
 def can_view_post(post, viewer_entity, *, membership_cache=None):
@@ -109,6 +116,12 @@ def can_view_post(post, viewer_entity, *, membership_cache=None):
         return False
 
     from community.posts import community_for_post, can_read_community
+
+    if post.entity.type == 'realm':
+        from community.access import effective_realm_access
+        author = getattr(post.entity, 'realms', None)
+        if author is None or not effective_realm_access(author).allowed:
+            return False
 
     community = community_for_post(post)
     if community is not None:

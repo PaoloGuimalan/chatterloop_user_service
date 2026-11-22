@@ -3,6 +3,8 @@ from django.urls import re_path, path
 from rest_framework import routers
 
 from community import views
+from community.lifecycle_views import (DeactivatedRealmsView, RealmLifecycleView, RealmDeactivateView,
+                                       RealmDeleteView, RealmReactivateView)
 from community.permission_views import RealmPermissionsView
 from community.approval_views import CommunityApprovalsView, CommunityPostReviewView, CommunityInviteReviewView
 from community.admin_notifications import CommunityNotificationsView
@@ -19,6 +21,11 @@ router = routers.DefaultRouter()
 app_name = "community"
 
 urlpatterns = [
+    path('realms/deactivated', DeactivatedRealmsView.as_view(), name='realm-deactivated'),
+    path('realms/<str:realm_id>/lifecycle', RealmLifecycleView.as_view(), name='realm-lifecycle'),
+    path('realms/<str:realm_id>/deactivate', RealmDeactivateView.as_view(), name='realm-deactivate'),
+    path('realms/<str:realm_id>/delete', RealmDeleteView.as_view(), name='realm-delete'),
+    path('realms/<str:realm_id>/reactivate', RealmReactivateView.as_view(), name='realm-reactivate'),
     path('communities/<str:realm_id>/archive', CommunityArchiveView.as_view(), name='community-archive'),
     path('communities/<str:realm_id>/archive/<str:post_id>', CommunityArchivePostView.as_view(), name='community-archive-post'),
     path("communities/<str:realm_id>/approvals", CommunityApprovalsView.as_view(), name="community-approvals"),

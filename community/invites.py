@@ -46,6 +46,7 @@ from community.invite_rules import (
     resolve_purpose,
 )
 from community.models import Invite, Member, Realm
+from community.access import active_realms, lock_realm_mutation
 from entity.models import Entity
 from entity.permissions import Permission
 from entity.roles import get_default_role, resolve_role, role_tier
@@ -113,7 +114,7 @@ def assert_can_invite(entity, realm, purpose, role, *, fresh=False):
 def _page_entity(**lookup):
     """The entity of the active page matching `lookup`, or None."""
     realm = (
-        Realm.objects.select_related("entity")
+        active_realms(Realm.objects.select_related("entity"))
         .filter(type="page", is_active=True, **lookup)
         .first()
     )
@@ -234,7 +235,8 @@ def create_invite(
     from community.invite_review import invitation_status, deliver_invitation, notify_invite_review_activity
     from community.models import Approvals
     from community.role_policy import assert_can_delegate_role
-    realm = Realm.objects.select_for_update().get(pk=realm.pk)
+    target_entity, email = resolve_target(raw_target, target_email, target_entity_id)
+    realm = lock_realm_mutation(realm, inviter, target_entity)
     if not realm.is_active:
         raise InviteError("This realm is not available", 404)
     selected_role = None
@@ -254,8 +256,6 @@ def create_invite(
     if selected_role is not None:
         assert_can_delegate_role(inviter, realm, None, selected_role)
     initial_status = invitation_status(inviter, realm)
-
-    target_entity, email = resolve_target(raw_target, target_email, target_entity_id)
 
     if target_entity is not None:
         if Realm.objects.filter(entity=target_entity, type="community").exists():

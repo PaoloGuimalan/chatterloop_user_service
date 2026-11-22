@@ -1,7 +1,22 @@
 from django.contrib import admin
 from .models import Realm, Member, Invite, Type
+from .lifecycle_forms import RealmLifecycleForm
 
-admin.site.register(Realm)
+
+@admin.register(Realm)
+class RealmAdmin(admin.ModelAdmin):
+    form = RealmLifecycleForm
+    list_display = ('name', 'type', 'is_active', 'deactivated_at', 'deletion_requested_at')
+    readonly_fields = ('deactivated_at', 'deletion_requested_at')
+
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
+        # ModelAdmin wraps POST change forms in a transaction. Lock before
+        # loading/validating the instance so its later full save cannot erase
+        # a lifecycle transition accepted by another connection.
+        return queryset.select_for_update() if request.method == 'POST' else queryset
+
+
 admin.site.register(Member)
 admin.site.register(Invite)
 

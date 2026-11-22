@@ -873,7 +873,8 @@ class PostReactionsView(CommunityPostAccessMixin, APIView):
                 # pre-change state.
                 RabbitMQClient.publish_on_commit(
                     Queues.UPDATE_RANKING_SCORE,
-                    {"post_id": post_id, "update_type": "react", "is_decrease": False},
+                    {"post_id": post_id, "update_type": "react", "is_decrease": False,
+                     **({'source_activity_id': new_reaction_id} if entity.type == 'realm' else {})},
                 )
                 RabbitMQClient.publish_on_commit(
                     Queues.INTERACTION_SCORE_BUMP,
@@ -1687,6 +1688,7 @@ class CommentsView(CommunityPostAccessMixin, APIView):
                         "post_id": post_id,
                         "update_type": "comment",
                         "is_decrease": False,
+                        **({'source_activity_id': new_comment_id} if entity.type == 'realm' else {}),
                     },
                 )
                 RabbitMQClient.publish_on_commit(

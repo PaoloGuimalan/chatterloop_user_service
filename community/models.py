@@ -100,6 +100,8 @@ class Realm(models.Model):
         related_name="children",
     )
     is_active = models.BooleanField(default=True)
+    deactivated_at = models.DateTimeField(null=True, blank=True, default=None)
+    deletion_requested_at = models.DateTimeField(null=True, blank=True, default=None)
     is_private = models.BooleanField(default=False)
     is_verified = models.BooleanField(default=False)
     is_temporary = models.BooleanField(default=False)

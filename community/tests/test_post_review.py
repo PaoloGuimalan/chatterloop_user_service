@@ -108,11 +108,14 @@ class PostReviewTests(RealmRolePolicyFixture, TestCase):
         self.review()
         EntityPermission.objects.create(entity=self.author, realm=self.realm,
             permission=self.catalog["realm.post.publish"], effect="deny")
+        previous_decisions = list(Approvals.objects.values_list('pk',flat=True))
         post, changed = self.edit({"caption": "A materially edited post"})
         self.assertTrue(changed)
         self.assertEqual(post.approval, 0)
         self.assertEqual(post.caption, "A materially edited post")
-        decision = Approvals.objects.first()
+        # Verify the newly written audit row even when the host clock gives
+        # consecutive decisions the same timestamp (UUID order is arbitrary).
+        decision = Approvals.objects.exclude(pk__in=previous_decisions).get()
         self.assertEqual(decision.action, "edit")
         self.assertEqual(decision.previous_state["approval"], 1)
         self.assertTrue(decision.new_state["published"])

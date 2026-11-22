@@ -23,6 +23,8 @@ def get_entity_display_username(entity):
     bot = getattr(entity, "bots", None)
     if bot is not None:
         return f"@{bot.handle}"
+    if getattr(entity, 'type', None) == 'realm':
+        return 'Deleted realm'
     return str(entity.id)
 
 
@@ -44,6 +46,8 @@ def get_entity_name(entity):
     bot = getattr(entity, "bots", None)
     if bot is not None:
         return bot.name
+    if getattr(entity, 'type', None) == 'realm':
+        return 'Deleted realm'
     return str(entity.id)
 
 
@@ -95,6 +99,8 @@ def get_entity_profile_path(entity):
     realm = getattr(entity, "realms", None)
     if realm is not None:
         return realm.slug or realm.realm_id
+    if getattr(entity, 'type', None) == 'realm':
+        return None
     return str(entity.id)
 
 
@@ -161,6 +167,8 @@ def entity_side_is_visible(field):
         )
     """
     from django.db.models import Q
+    from community.access import active_realms
+    from community.models import Realm
 
     return (
         Q(
@@ -169,7 +177,7 @@ def entity_side_is_visible(field):
                 f"{field}__users__is_verified": True,
             }
         )
-        | Q(**{f"{field}__realms__is_active": True})
+        | Q(**{f"{field}__realms__pk__in": active_realms(Realm.objects.all()).values('pk')})
         | Q(**{f"{field}__bots__is_active": True})
     )
 

@@ -43,6 +43,7 @@ from entity.services.realtime import publish_profile_relationship_update
 from user.services.mongohelpers import NotificationService
 from user.utils.blocking import is_blocked
 from community.invite_rules import InviteError
+from community.access import active_realms
 from community.invites import (
     accept_side_effects,
     acting_email,
@@ -136,7 +137,7 @@ class TopRealms(APIView):
                     Q(slug__icontains=search) | Q(name__icontains=search)
                 )
 
-            top_realm_queryset = with_configuration_hints(top_realm_queryset, request)
+            top_realm_queryset = with_configuration_hints(active_realms(top_realm_queryset), request)
             paginator = self.pagination_class()
             paginated_queryset = paginator.paginate_queryset(
                 top_realm_queryset, request, view=self
@@ -214,7 +215,7 @@ class MyRealms(APIView):
                     Q(slug__icontains=search) | Q(name__icontains=search)
                 )
 
-            my_realm_queryset = with_configuration_hints(my_realm_queryset, request)
+            my_realm_queryset = with_configuration_hints(active_realms(my_realm_queryset), request)
             paginator = self.pagination_class()
             paginated_queryset = paginator.paginate_queryset(
                 my_realm_queryset, request, view=self
@@ -250,7 +251,7 @@ class MyRealms(APIView):
             if fields is not None:
                 from entity.services.permission_applicability import effective_realm_kind
                 editable = {
-                    'community': {'name', 'description', 'slug', 'is_private', 'is_active'},
+                    'community': {'name', 'description', 'slug', 'is_private'},
                     'page': {'name', 'description', 'email', 'slug'},
                     'server': {'name', 'description', 'is_private'},
                     'group': {'name', 'is_private'},
@@ -258,7 +259,7 @@ class MyRealms(APIView):
                 }
                 if not isinstance(fields, dict) or set(fields) - editable.get(effective_realm_kind(realm), set()):
                     return Response({'status': False, 'message': 'Unsupported realm details. Use media upload to update photos.'}, status=400)
-                for key in ('is_private', 'is_active'):
+                for key in ('is_private',):
                     if key in fields and type(fields[key]) is not bool:
                         return Response({'status': False, 'message': f'{key} must be true or false'}, status=400)
                 if "slug" in fields and fields["slug"] != realm.slug:
@@ -347,7 +348,7 @@ class FollowRealmView(APIView):
                     Q(slug__icontains=search) | Q(name__icontains=search)
                 )
 
-            followed_realm_queryset = with_configuration_hints(followed_realm_queryset, request)
+            followed_realm_queryset = with_configuration_hints(active_realms(followed_realm_queryset), request)
             paginator = self.pagination_class()
             paginated_queryset = paginator.paginate_queryset(
                 followed_realm_queryset, request, view=self
@@ -441,6 +442,12 @@ class FollowRealmView(APIView):
         try:
             raw_target = self._target_id(request)
             followee = resolve_entity_target(raw_target)
+
+            if followee is not None and followee.type == 'realm':
+                from community.access import effective_realm_access
+                target_realm = getattr(followee, 'realms', None)
+                if target_realm is None or not effective_realm_access(target_realm).allowed:
+                    followee = None
 
             if followee is None:
                 return Response(
@@ -1142,7 +1149,8 @@ class InviteView(APIView):
         be looked up by the email in the body, which crashed (None.entity)
         whenever no account matched it.
         """
-        realm = get_object_or_404(Realm.objects.select_for_update(), pk=realm.pk, is_active=True)
+        from community.access import lock_realm_mutation
+        realm = lock_realm_mutation(realm, entity)
         if Realm.objects.filter(entity=entity, type="community").exists():
             return Response(
                 {

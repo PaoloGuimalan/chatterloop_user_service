@@ -72,6 +72,7 @@ class Queues:
     # (internal/services/media) decides and deletes. Publish through
     # newsfeed.services.media_release, which owns the payload shape.
     MEDIA_RELEASE = "media_release"
+    REALM_DELETION = "realm_deletion"
     # A notice line in a conversation ("maya joined"), written by the worker
     # exactly as Node writes its own "X added Y" - the message, the
     # conversation's participants and preview, the live frames and the push.

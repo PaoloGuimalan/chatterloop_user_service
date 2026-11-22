@@ -99,6 +99,8 @@ def community_audience(viewer):
     private community post must never make it count as a noncommunity post.
     """
     from newsfeed.models import PostTag
+    from community.access import active_realms
+    from community.models import Realm
 
     tags = PostTag.objects.filter(
         post_id=OuterRef("pk"), entity__realms__type="community"
@@ -108,6 +110,7 @@ def community_audience(viewer):
         allowed |= Q(
             entity__realms__is_active=True, entity__realms__member__entity=viewer
         )
+    allowed &= Q(entity__realms__pk__in=active_realms(Realm.objects.all()).values('pk'))
     inaccessible = tags.exclude(allowed)
     multiple_destinations = (
         tags.values("post_id")
@@ -139,7 +142,8 @@ def prime_community_memberships(posts, viewer, cache):
 
 
 def can_read_community(realm, viewer, *, membership_cache=None):
-    return can_read(is_private=realm.is_private, is_active=realm.is_active,
+    from community.access import effective_realm_access
+    return can_read(is_private=realm.is_private, is_active=effective_realm_access(realm).allowed,
                     is_member=membership_status(realm, viewer, membership_cache))
 
 

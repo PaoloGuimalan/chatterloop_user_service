@@ -16,8 +16,9 @@ from django.test import override_settings
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from bot.models import Bot
-from community.models import Member, Realm
-from entity.models import Block, Connection, Entity, Follow
+from community.models import Member, Realm, Type
+from entity.models import Block, Connection, Entity, Follow, PermissionCatalogEntry, EntityPermission, Role, RolePermission
+from entity.tests.permission_fixtures import create_permission
 from interests.models import Interest, PostInterestLink
 from newsfeed.models import (
     Emoji, MapView, Post, PostPrivacy, PostReference, PostSave, PostScore,
@@ -31,8 +32,9 @@ class GuestProfileFeedTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
+        cls.enterClassContext(patch('entity.services.permission_catalog_cache._redis_delete'))
         cls.models = (
-            Entity, Account, Realm, Bot, Member, Connection, Follow, Block,
+            Entity, Type, PermissionCatalogEntry, Role, RolePermission, EntityPermission, Account, Realm, Bot, Member, Connection, Follow, Block,
             Post, PostTag, PostPrivacy, PostReference, MapView, Emoji,
             PreviewCount, PostScore, Interest, PostInterestLink, PostSave, Reaction,
         )
@@ -48,6 +50,7 @@ class GuestProfileFeedTests(unittest.TestCase):
         super().tearDownClass()
 
     def setUp(self):
+        create_permission(code='realm.identity.act', scope='realm', realm_types=['page'])
         self.owner = Entity.objects.create(id="owner", type="user")
         Account.objects.bulk_create([Account(
             id="account", entity=self.owner, username="person",
@@ -59,6 +62,9 @@ class GuestProfileFeedTests(unittest.TestCase):
                 id=kind, realm_id=kind, entity=entity, created_by=self.owner,
                 name=kind, type=kind, slug=f"{kind}-slug",
             )])
+        page = Realm.objects.get(pk='page')
+        Member.objects.create(entity=self.owner, realm=page, added_by=self.owner,
+                              role=Role.objects.create(name='Owner', code='owner', is_default=True, realm=page))
         Post.objects.bulk_create([
             Post(post_id="public", entity=self.owner, caption="Public post"),
             Post(post_id="restricted", entity=self.owner, privacy_status="connections"),

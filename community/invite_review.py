@@ -4,6 +4,7 @@ from django.shortcuts import get_object_or_404
 from django.utils.timezone import now
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from community.models import Invite, Member, Realm, Approvals
+from community.access import effective_realm_access, lock_realm_mutation
 from community.post_review import ReviewConflict
 from community.role_policy import require_realm_actor, assert_can_delegate_role
 from entity.permissions import Permission
@@ -23,7 +24,7 @@ def invitation_status(actor, realm):
 def validate_inviter(invite):
     from community.invites import assert_can_invite
     from user.models import Account
-    if not invite.realm.is_active:
+    if not effective_realm_access(invite.realm).allowed:
         raise NotFound("Invite not available")
     if (invite.purpose == 'manage' and invite.realm.type == 'page'
             and str(invite.created_by_id) == str(invite.realm.entity_id)):
@@ -153,7 +154,10 @@ def transition_invite(*, actor, account=None, invite_id=None, invite_token=None,
     reference = get_object_or_404(Invite, **({"pk": invite_id} if invite_id else {"invite_token": invite_token}))
     if realm_id is not None and str(reference.realm_id) != str(realm_id):
         raise NotFound("Invite not available")
-    realm = get_object_or_404(Realm.objects.select_for_update(), pk=reference.realm_id, is_active=True)
+    accepting = action in ('accepted', 'approve')
+    realm = lock_realm_mutation(reference.realm, actor,
+        reference.target_entity if accepting else None,
+        reference.created_by if accepting and reference.kind == 'invite' else None)
     invite = Invite.objects.select_for_update(of=("self",)).select_related("role", "created_by", "target_entity").get(pk=reference.pk)
     if (action == 'revoked' and invite.kind == 'invite' and invite.purpose == 'manage'
             and realm.type == 'page' and str(actor.pk) == str(realm.entity_id)):

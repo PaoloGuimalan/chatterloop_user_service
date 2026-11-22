@@ -245,12 +245,13 @@ def build_realms_queryset(entity, query, blocked_ids, realm_types):
     else:
         effective_types = [t for t in realm_types if t in DISCOVERABLE_REALM_TYPES]
 
-    qs = Realm.objects.filter(
+    from community.access import active_realms
+    qs = active_realms(Realm.objects.filter(
         realm_filter,
         Q(is_private=False) | Q(type__in=("community", "server")),
         is_active=True,
         type__in=effective_types,
-    )
+    ))
 
     return (
         qs.exclude(entity_id=entity.id)
