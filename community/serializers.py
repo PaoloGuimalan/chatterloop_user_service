@@ -144,6 +144,8 @@ class RealmSerializer(serializers.ModelSerializer):
         elif request is not None:
             data["capabilities"] = realm_capabilities(getattr(request, "entity", None), instance,
                 management_actor=role_management_actor(request, instance))
+        if hasattr(instance, '_can_delete_realm'):
+            data['capabilities']['can_delete_realm'] = instance._can_delete_realm
         return data
 
     class Meta:

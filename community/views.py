@@ -44,6 +44,7 @@ from user.services.mongohelpers import NotificationService
 from user.utils.blocking import is_blocked
 from community.invite_rules import InviteError
 from community.access import active_realms
+from community.lifecycle_policy import eligible_memberships
 from community.invites import (
     accept_side_effects,
     acting_email,
@@ -216,6 +217,13 @@ class MyRealms(APIView):
                 )
 
             my_realm_queryset = with_configuration_hints(active_realms(my_realm_queryset), request)
+            if type == 'conference':
+                delete_memberships = eligible_memberships([entity.pk, user.entity_id], 'realm.delete').filter(
+                    realm_id=OuterRef('pk'), entity_id=OuterRef('_configuration_actor'),
+                )
+                my_realm_queryset = my_realm_queryset.annotate(
+                    _can_delete_realm=Exists(delete_memberships),
+                ).order_by('-created_at', '-pk')
             paginator = self.pagination_class()
             paginated_queryset = paginator.paginate_queryset(
                 my_realm_queryset, request, view=self
